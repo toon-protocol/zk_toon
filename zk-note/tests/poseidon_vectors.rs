@@ -1,6 +1,6 @@
 use o1_utils::FieldHelpers;
 use serde::Deserialize;
-use zk_note::{poseidon_hash, Field};
+use zk_note::{poseidon, Field};
 
 #[derive(Deserialize)]
 struct VectorFile {
@@ -24,7 +24,7 @@ fn reproduces_every_shared_vector() {
     assert!(!file.test_vectors.is_empty(), "zero vector cases ran");
     for (i, v) in file.test_vectors.iter().enumerate() {
         let input: Vec<Field> = v.input.iter().map(|h| field(h)).collect();
-        assert_eq!(poseidon_hash(&input), field(&v.output), "vector {i}");
+        assert_eq!(poseidon(&input), field(&v.output), "vector {i}");
     }
     println!("vector cases run: {}", file.test_vectors.len());
 }
