@@ -1,7 +1,9 @@
 // Builds test-vectors/zk-note.json, the one file the Rust primitives and the o1js code both reproduce.
-import { Bool, Field, Poseidon } from 'o1js';
+import { Bool, Field, Group, Poseidon, PrivateKey, Scalar, Signature } from 'o1js';
 import * as p from './primitives.js';
 import * as policy from './policy.js';
+import * as bal from './balance.js';
+import { stateFields, type StateMessage } from './state.js';
 
 const s = (f: Field) => f.toString();
 const F = (n: bigint | number | string) => Field(n);
@@ -10,6 +12,21 @@ const SECRET = 123456789012345678901234567890n;
 const SECRET_B = 987654321n;
 const DAY = policy.MS_PER_DAY;
 const WEEK = policy.SUBSIDY_PERIOD_MS;
+const Q = Scalar.ORDER;
+
+const pointJson = (g: Group) => ({ x: s(g.x), y: s(g.y) });
+const sc = (n: bigint) => Scalar.from(((n % Q) + Q) % Q);
+
+/** Mina Schnorr under the mainnet network ID, which o1js 3.1.0 cannot produce itself. The nonce is
+ * a fixed scalar: any nonce gives a valid signature, only the devnet ID decides acceptance. */
+function signMainnet(secret: bigint, fields: Field[]): { r: Field; s: bigint } {
+  const pub = Group.generator.scale(sc(secret));
+  let k = 1234567890123456789n;
+  const R = Group.generator.scale(sc(k));
+  if (R.y.isOdd().toBoolean()) k = Q - k;
+  const e = Poseidon.hashWithPrefix('MinaSignatureMainnet', [...fields, pub.x, pub.y, R.x]).toBigInt() % Q;
+  return { r: R.x, s: (k + e * secret) % Q };
+}
 
 export function buildVectors() {
   const tags = Object.fromEntries(
@@ -132,11 +149,69 @@ export function buildVectors() {
     depositSizes: policy.DEPOSIT_SIZES.map(String),
   };
 
+  const generators = {
+    seed: { text: bal.GENERATOR_SEED, field: p.tagToBigint(bal.GENERATOR_SEED).toString() },
+    curveGenerator: pointJson(Group.generator),
+    g: { index: '0', counter: bal.deriveGenerator(0).counter.toString(), ...pointJson(bal.G) },
+    h: { index: '1', counter: bal.deriveGenerator(1).counter.toString(), ...pointJson(bal.H) },
+  };
+
+  const BALANCES: [bigint, bigint][] = [
+    [0n, 5n], [10_000_000n, 123456789n], [1_000_000_000n, 987654321987654321n], [7n, Q - 1n],
+  ];
+  const commitments = BALANCES.map(([balance, blinding]) => ({
+    balance: balance.toString(), blinding: blinding.toString(),
+    commitment: pointJson(bal.commit(sc(balance), sc(blinding))),
+  }));
+  const rerandomised = [
+    [10_000_000n, 123456789n, 42n], [10_000_000n, 123456789n, Q - 123456789n], [0n, 5n, 1n],
+  ].map(([balance, blinding, extra]) => ({
+    balance: balance.toString(), blinding: blinding.toString(), extra: extra.toString(),
+    rerandomised: pointJson(bal.rerandomise(bal.commit(sc(balance), sc(blinding)), sc(extra))),
+    // The same balance committed with blinding r + r'.
+    recommitted: pointJson(bal.commit(sc(balance), sc(blinding + extra))),
+  }));
+  const charged = [
+    [10_000_000n, 123456789n, 1n], [10_000_000n, 123456789n, 10_000_000n], [1_000_000_000n, 5n, 250_000_000n],
+  ].map(([balance, blinding, delta]) => ({
+    balance: balance.toString(), blinding: blinding.toString(), delta: delta.toString(),
+    charged: pointJson(bal.charge(bal.commit(sc(balance), sc(blinding)), sc(delta))),
+    // The charged balance committed afresh with the same blinding.
+    recommitted: pointJson(bal.commit(sc(balance - delta), sc(blinding))),
+  }));
+
+  const VAULT_SECRETS = [1n, 987654321098765432109876543210n];
+  const stateCases = [
+    { secret: VAULT_SECRETS[0], balance: 10_000_000n, blinding: 123456789n, anchor: genesis },
+    { secret: VAULT_SECRETS[1], balance: 1_000_000_000n, blinding: 5n, anchor: F(chain[1].anchor) },
+    { secret: VAULT_SECRETS[1], balance: 0n, blinding: 7n, anchor: F(0) },
+  ].map((c) => {
+    const key = PrivateKey.fromBigInt(c.secret);
+    const vault = key.toPublicKey();
+    const commitment = bal.commit(sc(c.balance), sc(c.blinding));
+    const msg: StateMessage = { vault, commitment, anchor: c.anchor };
+    const fields = stateFields(msg);
+    const sig = Signature.create(key, fields);
+    return {
+      secret: c.secret.toString(), vault: { x: s(vault.x), isOdd: s(vault.isOdd.toField()) },
+      balance: c.balance.toString(), blinding: c.blinding.toString(),
+      commitment: pointJson(commitment), anchor: s(c.anchor),
+      fields: fields.map(s), signature: { r: s(sig.r), s: sig.s.toBigInt().toString() },
+    };
+  });
+  const mainnetState = (() => {
+    const base = stateCases[0];
+    const sig = signMainnet(BigInt(base.secret), base.fields.map(F));
+    return { ...base, signature: { r: s(sig.r), s: sig.s.toString() }, networkId: 'mainnet' };
+  })();
+  const stateSignatures = { networkId: 'devnet', cases: stateCases, mainnetState };
+
   return {
     description:
       'Shared zk-note test vectors. Field elements are decimal strings; times are milliseconds. ' +
       'Regenerate with `npm run vectors` in o1js/; the Rust crate and the o1js tests both reproduce every entry.',
     tags, policy: policyJson, poseidon, domainSeparation, commitment, leaves, nullifiers,
     authTags, periodNullifiers, periods, ages, membership,
+    generators, balanceCommitments: commitments, rerandomised, charged, stateSignatures,
   };
 }

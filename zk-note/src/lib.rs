@@ -1,7 +1,9 @@
 //! Every derived value of a zk note. Mirrors `o1js/src/primitives.ts` byte for byte and is pinned
 //! by `test-vectors/zk-note.json`. No I/O, no clock.
 
+pub mod balance;
 pub mod policy;
+pub mod state;
 
 use ark_ff::PrimeField;
 use mina_curves::pasta::Fp;
