@@ -139,7 +139,10 @@ export async function runGate(sandbox: Sandbox, steps: readonly GateStep[]): Pro
   for (const step of steps) {
     console.log(`  [gate] ${step.name}: ${step.command}`);
     const lines: string[] = [];
-    const result = await sandbox.exec(`set -eo pipefail\n${step.command}`, {
+    // Run under bash: the sandbox's `sh` (dash) rejects `set -o pipefail`, and
+    // CI steps run under bash, so the gate must too. The script goes over stdin.
+    const result = await sandbox.exec('bash -s', {
+      stdin: `set -eo pipefail\n${step.command}\n`,
       onLine: (line) => {
         lines.push(line);
         // Stream sparingly: full build output would bury the runner log.
