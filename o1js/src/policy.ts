@@ -7,6 +7,8 @@ export const MS_PER_DAY = 86_400_000n;
 export const NOTE_LIFETIME_MS = 180n * MS_PER_DAY;
 export const MIN_SUBSIDY_AGE_MS = 7n * MS_PER_DAY;
 export const SUBSIDY_PERIOD_MS = 7n * MS_PER_DAY;
+/** How long a challenger has to answer a close or an escape. */
+export const CHALLENGE_WINDOW_MS = 2n * MS_PER_DAY;
 
 const MINA = 1_000_000_000n;
 /** Request tiers `b`, ascending. The first is the smallest, the only one a subsidised allowance may use. */

@@ -7,6 +7,8 @@ pub const MS_PER_DAY: u64 = 86_400_000;
 pub const NOTE_LIFETIME_MS: u64 = 180 * MS_PER_DAY;
 pub const MIN_SUBSIDY_AGE_MS: u64 = 7 * MS_PER_DAY;
 pub const SUBSIDY_PERIOD_MS: u64 = 7 * MS_PER_DAY;
+/// How long a challenger has to answer a close or an escape.
+pub const CHALLENGE_WINDOW_MS: u64 = 2 * MS_PER_DAY;
 
 const MINA: u64 = 1_000_000_000;
 /// Request tiers `b`, ascending. The first is the smallest, the only one a subsidised allowance may use.
