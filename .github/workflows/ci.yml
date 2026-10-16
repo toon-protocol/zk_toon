@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Rust vectors
+        run: |
+          cargo test --workspace -- --nocapture 2>&1 | tee rust.log
+          grep -E 'vector cases run: [1-9][0-9]*' rust.log
+      - name: o1js vectors
+        run: |
+          cd o1js
+          npm ci
+          npm test 2>&1 | tee ../o1js.log
+          grep -E 'vector cases run: [1-9][0-9]*' ../o1js.log
