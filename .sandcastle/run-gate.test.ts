@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { gateFromCi } from './run-gate.ts';
+import { gateFromCi, runGate } from './run-gate.ts';
 
 const CI = `
 name: CI
@@ -99,4 +100,44 @@ test('a GitHub expression in env or working-directory skips the step too', () =>
 test('the expression note names the expression syntax literally', () => {
   const { notes } = gateFromCi('jobs:\n  gate:\n    steps:\n      - run: echo ${{ x }}\n');
   assert.match(notes.join('\n'), /a \$\{\{ \}\} expression/);
+});
+
+// A sandbox that really runs each command through `sh -c`, the way the sandbox image does.
+// It records the commands so a test can see what reached the sandbox's shell.
+const shellSandbox = () => {
+  const commands: string[] = [];
+  const sandbox = {
+    exec: async (command: string, options?: { stdin?: string }) => {
+      commands.push(command);
+      const run = spawnSync('sh', ['-c', command], { input: options?.stdin, encoding: 'utf8' });
+      return { exitCode: run.status ?? 1, stdout: run.stdout, stderr: run.stderr };
+    },
+  };
+  return { sandbox: sandbox as unknown as Parameters<typeof runGate>[0], commands };
+};
+
+const quietly = async <T>(fn: () => Promise<T>): Promise<T> => {
+  const log = console.log;
+  console.log = () => {};
+  try {
+    return await fn();
+  } finally {
+    console.log = log;
+  }
+};
+
+test('a step runs under bash, never the sandbox sh, because dash rejects pipefail', async () => {
+  const { sandbox, commands } = shellSandbox();
+  const result = await quietly(() => runGate(sandbox, [{ name: 'Pipe', command: 'true | cat' }]));
+  assert.equal(result.passed, true);
+  assert.deepEqual(commands, ['bash -s']);
+});
+
+test('a failure on the left of a pipe fails the gate, as it does in CI', async () => {
+  const { sandbox } = shellSandbox();
+  const result = await quietly(() =>
+    runGate(sandbox, [{ name: 'Masked', command: 'false | tee /dev/null' }])
+  );
+  assert.equal(result.passed, false);
+  assert.equal(result.failure?.step, 'Masked');
 });
