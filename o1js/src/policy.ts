@@ -1,4 +1,4 @@
-// Policy arithmetic shared with crates/zk-note/src/policy.rs. Times are milliseconds
+// Policy arithmetic shared with zk-note/src/policy.rs. Times are milliseconds
 // (Mina block timestamps); amounts are nanomina.
 //
 // The deposit sizes and tiers are open values in the spec (#2); these are provisional.

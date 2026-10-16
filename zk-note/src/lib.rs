@@ -6,7 +6,7 @@ pub mod policy;
 use ark_ff::PrimeField;
 use mina_curves::pasta::Fp;
 use mina_poseidon::constants::PlonkSpongeConstantsKimchi;
-use mina_poseidon::pasta::fp_kimchi;
+use mina_poseidon::pasta::{fp_kimchi, FULL_ROUNDS};
 use mina_poseidon::poseidon::{ArithmeticSponge, Sponge};
 
 /// An element of the Pallas base field, the field o1js hashes in.
@@ -31,7 +31,7 @@ pub fn tag_to_field(tag: &str) -> Field {
 
 /// Plain Poseidon (kimchi parameters, zero initial state), as o1js `Poseidon.hash`.
 pub fn poseidon(inputs: &[Field]) -> Field {
-    let mut sponge = ArithmeticSponge::<Field, PlonkSpongeConstantsKimchi, 55>::new(fp_kimchi::static_params());
+    let mut sponge = ArithmeticSponge::<Field, PlonkSpongeConstantsKimchi, FULL_ROUNDS>::new(fp_kimchi::static_params());
     sponge.absorb(inputs);
     sponge.squeeze()
 }

@@ -1,4 +1,4 @@
-// Every derived value of a zk note. Mirrored byte for byte by crates/zk-note/src/lib.rs and
+// Every derived value of a zk note. Mirrored byte for byte by zk-note/src/lib.rs and
 // pinned by test-vectors/zk-note.json.
 import { Bool, Field, Poseidon } from 'o1js';
 
