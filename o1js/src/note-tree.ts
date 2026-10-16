@@ -1,7 +1,7 @@
 // The note tree: a Merkle tree of leaves, mirrored off chain so tests and later issues can build witnesses.
 import { Field, MerkleTree, MerkleWitness } from 'o1js';
 import { leaf } from './primitives.js';
-import { NOTE_LIFETIME_MS } from './policy.js';
+import { expiryOfField } from './policy.js';
 
 export const NOTE_TREE_HEIGHT = 20;
 export class NoteWitness extends MerkleWitness(NOTE_TREE_HEIGHT) {}
@@ -15,7 +15,7 @@ export interface DepositLike {
 
 /** The leaf a deposit becomes at `index`; the expiry is `expiryOf(depositTime)` of the policy. */
 export const depositLeaf = (index: Field, d: DepositLike) =>
-  leaf(index, d.commitment, d.size, d.depositTime, d.depositTime.add(Field(NOTE_LIFETIME_MS)));
+  leaf(index, d.commitment, d.size, d.depositTime, expiryOfField(d.depositTime));
 
 export const emptyNoteRoot = () => new MerkleTree(NOTE_TREE_HEIGHT).getRoot();
 
@@ -45,7 +45,8 @@ export class NoteTree {
 
 /**
  * The witnesses one reduce batch needs: for each deposit, the empty slot it fills, in order. Appends the
- * deposits to `tree` as the reduce will, and pads to `batchSize` (dummy slots are never checked).
+ * deposits to `tree` as the reduce will, and pads to `batchSize` with the next empty slot's witness: the
+ * reduce checks every slot, dummies included, against an empty slot at the next index.
  */
 export function reduceWitnesses(tree: NoteTree, deposits: DepositLike[], batchSize: number): NoteWitness[] {
   const out = deposits.map((d) => {

@@ -5,9 +5,8 @@ import {
   UInt64, Unconstrained, declareMethods, declareState,
 } from 'o1js';
 import * as policy from './policy.js';
-import { NOTE_TREE_HEIGHT, NoteWitness, depositLeaf, emptyNoteRoot } from './note-tree.js';
+import { NoteWitness, depositLeaf, emptyNoteRoot } from './note-tree.js';
 
-export { NOTE_TREE_HEIGHT };
 /** How many recent note-tree roots the vault remembers. */
 export const ROOT_RING_LENGTH = 8;
 /** Mesa slots are 90 s. */

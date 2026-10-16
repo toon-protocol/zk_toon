@@ -125,6 +125,10 @@ describe('vault deposit path', () => {
     expect(held).not.toContain(roots[0]);
     for (const r of roots.slice(1)) expect(held).toContain(r);
     expect(held.filter((r) => r !== 0n)).toHaveLength(ROOT_RING_LENGTH);
+    const ringState = vault.rootRing.get();
+    expect(ringState.contains(Field(roots[0])).toBoolean()).toBe(false);
+    for (const r of roots.slice(1)) expect(ringState.contains(Field(r)).toBoolean()).toBe(true);
+    expect(ringState.contains(Field(0)).toBoolean()).toBe(false);
   });
 
   // Last: LocalBlockchain records the actions of a rejected transaction, so these leave actions behind

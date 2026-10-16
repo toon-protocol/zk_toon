@@ -2,6 +2,7 @@
 // (Mina block timestamps); amounts are nanomina.
 //
 // The deposit sizes and tiers are open values in the spec (#2); these are provisional.
+import { Field } from 'o1js';
 
 export const MS_PER_DAY = 86_400_000n;
 export const NOTE_LIFETIME_MS = 180n * MS_PER_DAY;
@@ -21,6 +22,8 @@ export const isDepositSize = (size: bigint) => DEPOSIT_SIZES.includes(size);
 export const isSmallestTier = (b: bigint) => b === TIERS[0];
 
 export const expiryOf = (depositTime: bigint) => depositTime + NOTE_LIFETIME_MS;
+/** `expiryOf` in a circuit. */
+export const expiryOfField = (depositTime: Field) => depositTime.add(Field(NOTE_LIFETIME_MS));
 
 /** Whole weeks since the vault's creation; undefined before it. */
 export function subsidyPeriod(vaultCreation: bigint, now: bigint): bigint | undefined {
