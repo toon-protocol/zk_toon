@@ -26,8 +26,9 @@ or charge without opening it.
 _Avoid_: Encrypted balance, hidden balance
 
 **State message**:
-What the vault signs for a zk note's state: the vault key, the balance commitment and the anchor,
-signed under the devnet network ID for every vault.
+What the zk edge signs for a zk note's state: the vault key (the Mina public key the vault accepts
+state signatures from), the balance commitment and the anchor, signed under the devnet network ID
+for every vault.
 _Avoid_: Receipt, checkpoint
 
 **State advance**:

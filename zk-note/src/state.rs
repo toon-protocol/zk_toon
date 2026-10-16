@@ -1,4 +1,4 @@
-//! The state message a vault signs, and its signature.
+//! The state message the zk edge signs under the vault key, and its signature.
 //!
 //! # Message layout
 //!
@@ -8,7 +8,7 @@
 //! [vault.x, vault.isOdd, commitment.x, commitment.y, anchor]
 //! ```
 //!
-//! The vault is a Mina public key `(x, isOdd)`; `isOdd` is 1 when its y coordinate is odd and 0
+//! The vault key is a Mina public key `(x, isOdd)`; `isOdd` is 1 when its y coordinate is odd and 0
 //! otherwise, the same convention as the session key in [`crate::RequestContext`].
 //!
 //! # Signing
@@ -24,7 +24,7 @@ use mina_signer::{CompressedPubKey, Keypair, NetworkId, NonceMode, PubKey, Signa
 use crate::balance::Commitment;
 use crate::Field;
 
-/// What a vault signs: the note's balance commitment and the anchor of its current state.
+/// What the zk edge signs under the vault key: the note's balance commitment and the anchor of its current state.
 #[derive(Clone, Copy, Debug)]
 pub struct StateMessage {
     pub vault_x: Field,
@@ -69,7 +69,7 @@ pub fn sign_state(keypair: &Keypair, msg: &StateMessage) -> Signature {
     )
 }
 
-/// Verify a state signature under the devnet network ID.
+/// Verify a state signature under the devnet network ID. `vault` must be the key the message names.
 pub fn verify_state(sig: &Signature, vault: &PubKey, msg: &StateMessage) -> bool {
     verify_state_on(NetworkId::TESTNET, sig, vault, msg)
 }
@@ -77,5 +77,9 @@ pub fn verify_state(sig: &Signature, vault: &PubKey, msg: &StateMessage) -> bool
 /// Verify under an explicit network ID. Only tests and diagnostics need this: a vault's states
 /// are always devnet-signed.
 pub fn verify_state_on(network: NetworkId, sig: &Signature, vault: &PubKey, msg: &StateMessage) -> bool {
+    let named = vault.into_compressed();
+    if (named.x, named.is_odd) != (msg.vault_x, msg.vault_is_odd) {
+        return false;
+    }
     mina_signer::create_kimchi::<Fields>(network).verify(sig, vault, &Fields(msg.to_fields()))
 }

@@ -1,4 +1,4 @@
-// The state message a vault signs. Mirrored by zk-note/src/state.rs, which documents the layout.
+// The state message the zk edge signs under the vault key. Mirrored by zk-note/src/state.rs, which documents the layout.
 import { Bool, Field, Group, PublicKey, Signature } from 'o1js';
 
 export interface StateMessage {

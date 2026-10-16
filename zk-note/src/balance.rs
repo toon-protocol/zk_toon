@@ -18,6 +18,8 @@
 //! `index` is 0 for `G` and 1 for `H`. The seed tag is [`GENERATOR_SEED`], read as a little-endian
 //! field element like every other domain tag. Pallas has cofactor 1, so every curve point is in the
 //! prime-order group. The shared vector file pins the resulting points and counters.
+use std::sync::OnceLock;
+
 use ark_ec::CurveGroup;
 use ark_ff::{BigInteger, Field as _, PrimeField};
 use mina_curves::pasta::{Fq, Pallas};
@@ -52,12 +54,14 @@ pub fn derive_generator(index: u64) -> (Pallas, u64) {
 
 /// The generator for balances.
 pub fn generator_g() -> Pallas {
-    derive_generator(0).0
+    static G: OnceLock<Pallas> = OnceLock::new();
+    *G.get_or_init(|| derive_generator(0).0)
 }
 
 /// The generator for blinding factors.
 pub fn generator_h() -> Pallas {
-    derive_generator(1).0
+    static H: OnceLock<Pallas> = OnceLock::new();
+    *H.get_or_init(|| derive_generator(1).0)
 }
 
 /// `commit(B, r) = B·G + r·H`.

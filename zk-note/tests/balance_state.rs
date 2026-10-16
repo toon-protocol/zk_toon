@@ -62,7 +62,9 @@ fn commitments_match() {
 
 #[test]
 fn rerandomise_matches() {
-    for e in vectors()["rerandomised"].as_array().unwrap() {
+    let entries = vectors()["rerandomised"].as_array().unwrap().clone();
+    assert!(!entries.is_empty());
+    for e in &entries {
         let c = commit(sc(&e["balance"]), sc(&e["blinding"]));
         let out = rerandomise(c, sc(&e["extra"]));
         same(out, &e["rerandomised"]);
@@ -72,7 +74,9 @@ fn rerandomise_matches() {
 
 #[test]
 fn charge_matches() {
-    for e in vectors()["charged"].as_array().unwrap() {
+    let entries = vectors()["charged"].as_array().unwrap().clone();
+    assert!(!entries.is_empty());
+    for e in &entries {
         let c = commit(sc(&e["balance"]), sc(&e["blinding"]));
         let out = charge(c, sc(&e["delta"]));
         same(out, &e["charged"]);
@@ -116,6 +120,16 @@ fn message(e: &Value, vault: &PubKey) -> StateMessage {
 fn signature(e: &Value) -> Signature {
     Signature::new(f(&e["signature"]["r"]), sc(&e["signature"]["s"]))
 }
+/// Checks every pinned part of a state entry except its signature.
+fn check_message(e: &Value, msg: &StateMessage) {
+    assert_eq!(field_to_string(msg.vault_x), s(&e["vault"]["x"]));
+    assert_eq!(msg.vault_is_odd as u8, s(&e["vault"]["isOdd"]).parse::<u8>().unwrap());
+    let fields: Vec<String> = msg.to_fields().into_iter().map(field_to_string).collect();
+    let expected: Vec<&str> = e["fields"].as_array().unwrap().iter().map(s).collect();
+    assert_eq!(fields, expected);
+    // The commitment in the message is the one `balance` and `blinding` produce.
+    assert_eq!(msg.commitment, commit(sc(&e["balance"]), sc(&e["blinding"])));
+}
 
 #[test]
 fn state_signatures_match() {
@@ -126,13 +140,7 @@ fn state_signatures_match() {
     for e in cases {
         let kp = keypair(&e["secret"]);
         let msg = message(e, &kp.public);
-        assert_eq!(field_to_string(msg.vault_x), s(&e["vault"]["x"]));
-        assert_eq!(msg.vault_is_odd as u8, s(&e["vault"]["isOdd"]).parse::<u8>().unwrap());
-        let fields: Vec<String> = msg.to_fields().into_iter().map(field_to_string).collect();
-        let expected: Vec<&str> = e["fields"].as_array().unwrap().iter().map(s).collect();
-        assert_eq!(fields, expected);
-        // The commitment in the message is the one `balance` and `blinding` produce.
-        assert_eq!(msg.commitment, commit(sc(&e["balance"]), sc(&e["blinding"])));
+        check_message(e, &msg);
         // Rust signs exactly what o1js signed, and verifies o1js's signature.
         let sig = sign_state(&kp, &msg);
         assert_eq!(sig, signature(e));
@@ -154,9 +162,13 @@ fn a_changed_state_is_refused() {
     msg = message(a, &kp.public);
     msg.commitment = pt(&b["commitment"]);
     assert!(!verify_state(&sig, &kp.public, &msg));
-    // Another vault's key does not verify it either.
+    // Another vault key does not verify it either, whether or not the message names that key.
     let other = keypair(&b["secret"]);
     assert!(!verify_state(&sig, &other.public, &message(a, &kp.public)));
+    assert!(!verify_state(&sig, &other.public, &message(a, &other.public)));
+    // A key other than the one the message names is refused even over its own signature.
+    let theirs = sign_state(&other, &message(a, &kp.public));
+    assert!(!verify_state(&theirs, &other.public, &message(a, &kp.public)));
 }
 
 #[test]
@@ -166,6 +178,7 @@ fn a_mainnet_signed_state_is_refused() {
     assert_eq!(s(&e["networkId"]), "mainnet");
     let kp = keypair(&e["secret"]);
     let msg = message(e, &kp.public);
+    check_message(e, &msg);
     let sig = signature(e);
     // Valid under the mainnet ID, which is what makes the refusal under devnet meaningful.
     assert!(verify_state_on(NetworkId::MAINNET, &sig, &kp.public, &msg));

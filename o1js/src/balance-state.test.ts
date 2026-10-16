@@ -52,6 +52,19 @@ describe('balance commitments', () => {
       same(pt(v.charged), pt(v.recommitted));
     }
   });
+
+  it('commit, re-randomise and charge inside a circuit', async () => {
+    const out: Group[] = [];
+    await Provable.runAndCheck(() => {
+      const w = (n: string) => Provable.witness(Scalar, () => sc(n));
+      const keep = (g: Group) => Provable.asProver(() => { out.push(Group.fromJSON(g.toJSON())); });
+      for (const v of file.rerandomised) keep(bal.rerandomise(bal.commit(w(v.balance), w(v.blinding)), w(v.extra)));
+      for (const v of file.charged) keep(bal.charge(bal.commit(w(v.balance), w(v.blinding)), w(v.delta)));
+    });
+    const expected = [...file.rerandomised.map((v: any) => v.rerandomised), ...file.charged.map((v: any) => v.charged)];
+    expect(out.length).toBe(expected.length);
+    out.forEach((g, i) => same(g, pt(expected[i])));
+  });
 });
 
 describe('state signatures', () => {
