@@ -1,0 +1,143 @@
+//! Reproduces every entry of the shared vector file `test-vectors/zk-note.json`.
+use serde_json::Value;
+use std::str::FromStr;
+use zk_note::{policy, *};
+
+fn vectors() -> Value {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-vectors/zk-note.json");
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+fn s(v: &Value) -> &str {
+    v.as_str().unwrap_or_else(|| panic!("not a string: {v}"))
+}
+fn f(v: &Value) -> Field {
+    Field::from_str(s(v)).unwrap_or_else(|_| panic!("bad field {v}"))
+}
+fn u(v: &Value) -> u64 {
+    s(v).parse().unwrap()
+}
+fn eq(actual: Field, expected: &Value) {
+    assert_eq!(field_to_string(actual), s(expected));
+}
+
+#[test]
+fn tags_match() {
+    let v = vectors();
+    for (_, t) in v["tags"].as_object().unwrap() {
+        eq(tag_to_field(s(&t["text"])), &t["field"]);
+    }
+}
+
+#[test]
+fn poseidon_matches() {
+    for e in vectors()["poseidon"].as_array().unwrap() {
+        let inputs: Vec<Field> = e["inputs"].as_array().unwrap().iter().map(f).collect();
+        eq(poseidon(&inputs), &e["output"]);
+    }
+}
+
+#[test]
+fn same_inputs_under_different_tags_differ() {
+    let v = vectors();
+    let d = &v["domainSeparation"];
+    let inputs: Vec<Field> = d["inputs"].as_array().unwrap().iter().map(f).collect();
+    let outs = d["outputs"].as_object().unwrap();
+    for (tag, out) in outs {
+        eq(hash_with_tag(tag, &inputs), out);
+    }
+    let mut distinct: Vec<_> = outs.values().map(|o| s(o).to_string()).collect();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(distinct.len(), outs.len());
+    assert_eq!(outs.len(), 7);
+}
+
+#[test]
+fn commitments_match() {
+    for e in vectors()["commitment"].as_array().unwrap() {
+        eq(commit_secret(f(&e["secret"])), &e["commitment"]);
+    }
+}
+
+#[test]
+fn leaves_match() {
+    for e in vectors()["leaves"].as_array().unwrap() {
+        assert_eq!(policy::expiry_of(u(&e["depositTime"])), u(&e["expiry"]));
+        eq(
+            leaf(u(&e["index"]), f(&e["commitment"]), u(&e["size"]), u(&e["depositTime"]), u(&e["expiry"])),
+            &e["leaf"],
+        );
+    }
+}
+
+#[test]
+fn nullifier_chain_matches() {
+    let v = vectors();
+    let n = &v["nullifiers"];
+    let secret = f(&n["secret"]);
+    let genesis = genesis_anchor(commit_secret(secret));
+    eq(genesis, &n["genesisAnchor"]);
+    let mut anchor = genesis;
+    for (i, step) in n["chain"].as_array().unwrap().iter().enumerate() {
+        eq(anchor, &step["anchor"]);
+        let nul = nullifier(secret, anchor);
+        eq(nul, &step["nullifier"]);
+        anchor = next_anchor(nul);
+        eq(anchor, &n["nextAnchors"][i]);
+    }
+    let other = Field::from(987654321u64);
+    eq(nullifier(other, f(&n["chain"][0]["anchor"])), &n["otherSecretNullifier"]);
+}
+
+#[test]
+fn auth_tags_match() {
+    for e in vectors()["authTags"].as_array().unwrap() {
+        let c = &e["context"];
+        let ctx = RequestContext {
+            edge: f(&c["edge"]),
+            session_key_x: f(&c["sessionKeyX"]),
+            session_key_is_odd: u(&c["sessionKeyIsOdd"]) == 1,
+            tier: u(&c["tier"]),
+            expiry: u(&c["expiry"]),
+        };
+        eq(auth_tag(f(&e["nullifier"]), &ctx), &e["tag"]);
+    }
+}
+
+#[test]
+fn period_nullifiers_match() {
+    for e in vectors()["periodNullifiers"].as_array().unwrap() {
+        eq(period_nullifier(f(&e["secret"]), u(&e["index"]), u(&e["period"])), &e["periodNullifier"]);
+    }
+}
+
+#[test]
+fn periods_agree_at_week_boundaries() {
+    for e in vectors()["periods"].as_array().unwrap() {
+        let expected = e["period"].as_str().map(|p| p.parse::<u64>().unwrap());
+        assert_eq!(policy::subsidy_period(u(&e["vaultCreation"]), u(&e["now"])), expected);
+    }
+}
+
+#[test]
+fn note_age_agrees() {
+    for e in vectors()["ages"].as_array().unwrap() {
+        let now = s(&e["now"]).parse::<i128>().unwrap();
+        let ok = now >= 0 && policy::is_old_enough_for_subsidy(u(&e["depositTime"]), now as u64);
+        assert_eq!(ok, e["oldEnough"].as_bool().unwrap());
+    }
+}
+
+#[test]
+fn policy_constants_match() {
+    let v = vectors();
+    let p = &v["policy"];
+    assert_eq!(policy::NOTE_LIFETIME_MS, u(&p["noteLifetimeMs"]));
+    assert_eq!(policy::MIN_SUBSIDY_AGE_MS, u(&p["minSubsidyAgeMs"]));
+    assert_eq!(policy::SUBSIDY_PERIOD_MS, u(&p["subsidyPeriodMs"]));
+    let tiers: Vec<u64> = p["tiers"].as_array().unwrap().iter().map(u).collect();
+    assert_eq!(tiers, policy::TIERS);
+    let sizes: Vec<u64> = p["depositSizes"].as_array().unwrap().iter().map(u).collect();
+    assert_eq!(sizes, policy::DEPOSIT_SIZES);
+}
