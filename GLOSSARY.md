@@ -20,6 +20,17 @@ _Avoid_: Channel, account, coin
 The time since a zk note was deposited. It doesn't reset when the note spends.
 _Avoid_: Holding time, idle time, time since last spend
 
+**Balance commitment**:
+A hiding commitment to a zk note's balance, `B·G + r·H` on Pallas, that its holder can re-randomise
+or charge without opening it.
+_Avoid_: Encrypted balance, hidden balance
+
+**State message**:
+What the zk edge signs for a zk note's state: the vault key (the Mina public key the vault accepts
+state signatures from), the balance commitment and the anchor, signed under the devnet network ID
+for every vault.
+_Avoid_: Receipt, checkpoint
+
 **State advance**:
 The zk edge signing a zk note's next state after charging it, without learning its balance.
 _Avoid_: Settlement, landing
