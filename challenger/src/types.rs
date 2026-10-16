@@ -1,3 +1,5 @@
+use crate::ports::PortError;
+
 /// A nullifier, 32 bytes.
 pub type Nullifier = [u8; 32];
 
@@ -64,6 +66,8 @@ pub enum Action {
 pub enum Report {
     Seen { escape: EscapeId },
     Submitted { escape: EscapeId, action: Action },
-    SubmitFailed { escape: EscapeId, action: Action },
+    SubmitFailed { escape: EscapeId, action: Action, error: PortError },
+    /// The evidence port could not be read for this escape. Nothing was decided; retried next tick.
+    EvidenceUnavailable { escape: EscapeId },
     Alarm { escape: EscapeId, reason: AlarmReason },
 }

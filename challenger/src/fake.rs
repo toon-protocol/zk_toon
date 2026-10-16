@@ -90,6 +90,7 @@ impl VaultChainPort for FakeChain {
 #[derive(Clone, Default)]
 pub struct FakeEvidence {
     by_nullifier: HashMap<Nullifier, Vec<Evidence>>,
+    unavailable: bool,
 }
 
 impl FakeEvidence {
@@ -97,10 +98,17 @@ impl FakeEvidence {
         self.by_nullifier.entry(e.nullifier).or_default().push(e);
         self
     }
+    pub fn unavailable(mut self) -> Self {
+        self.unavailable = true;
+        self
+    }
 }
 
 impl EvidencePort for FakeEvidence {
     fn at_nullifier(&self, n: &Nullifier) -> Result<Vec<Evidence>, PortError> {
+        if self.unavailable {
+            return Err(PortError::Unavailable("fake evidence down".into()));
+        }
         Ok(self.by_nullifier.get(n).cloned().unwrap_or_default())
     }
 }

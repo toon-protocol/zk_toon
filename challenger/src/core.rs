@@ -16,30 +16,38 @@ pub struct Config {
 /// A subsidised proof can defeat but never raise (ADR 0001). A proof that does not verify yields
 /// an alarm and no submission.
 pub fn decide(escape: &Escape, evidence: &dyn EvidencePort, now: Millis, cfg: &Config) -> Result<Decision, PortError> {
+    Ok(within_deadline(escape, from_evidence(escape, evidence)?, now, cfg))
+}
+
+/// What the evidence calls for, before the deadline is considered.
+fn from_evidence(escape: &Escape, evidence: &dyn EvidencePort) -> Result<Decision, PortError> {
     let next = evidence.at_nullifier(&escape.next_nullifier)?;
     let current = evidence.at_nullifier(&escape.id)?;
     if next.iter().chain(current.iter()).any(|e| !e.verifies) {
         return Ok(Decision::Alarm(AlarmReason::EvidenceInvalid));
     }
-    let defeat = !next.is_empty();
+    if !next.is_empty() {
+        return Ok(Decision::Defeat);
+    }
     let raise_to = current
         .iter()
         .filter(|e| !e.subsidised)
         .map(|e| e.charge.min(e.tier).min(escape.balance))
         .filter(|to| *to > escape.conceded)
         .max();
-    if !defeat && raise_to.is_none() {
-        return Ok(Decision::NoOp);
+    Ok(raise_to.map_or(Decision::NoOp, |to| Decision::Raise { to }))
+}
+
+/// Turn a submission into an alarm when the deadline is too close to act on safely.
+fn within_deadline(escape: &Escape, decision: Decision, now: Millis, cfg: &Config) -> Decision {
+    if !matches!(decision, Decision::Defeat | Decision::Raise { .. }) {
+        return decision;
     }
     let remaining = escape.deadline.saturating_sub(now);
     if now >= escape.deadline || remaining < cfg.min_lead {
-        return Ok(Decision::Alarm(AlarmReason::DeadlineTooClose { remaining }));
+        return Decision::Alarm(AlarmReason::DeadlineTooClose { remaining });
     }
-    Ok(match (defeat, raise_to) {
-        (true, _) => Decision::Defeat,
-        (false, Some(to)) => Decision::Raise { to },
-        (false, None) => Decision::NoOp,
-    })
+    decision
 }
 
 pub struct Challenger<C, E, J> {
@@ -67,12 +75,21 @@ impl<C: VaultChainPort, E: EvidencePort, J: Journal> Challenger<C, E, J> {
                 self.journal.record_seen(&escape.id)?;
                 reports.push(Report::Seen { escape: escape.id });
             }
-            let decision = match decide(&escape, &self.evidence, now, &self.config) {
+            // An action already submitted is not repeated, nor alarmed on as its deadline nears.
+            let decision = match from_evidence(&escape, &self.evidence) {
                 Ok(d) => d,
-                Err(PortError::Unavailable(_)) => continue,
+                Err(PortError::Unavailable(_)) => {
+                    reports.push(Report::EvidenceUnavailable { escape: escape.id });
+                    continue;
+                }
                 Err(e) => return Err(e),
             };
-            let action = match decision {
+            if let Some(action) = as_action(&decision) {
+                if done.iter().any(|(id, a)| *id == escape.id && *a == action) {
+                    continue;
+                }
+            }
+            let action = match within_deadline(&escape, decision, now, &self.config) {
                 Decision::NoOp => continue,
                 Decision::Alarm(reason) => {
                     reports.push(Report::Alarm { escape: escape.id, reason });
@@ -81,9 +98,6 @@ impl<C: VaultChainPort, E: EvidencePort, J: Journal> Challenger<C, E, J> {
                 Decision::Defeat => Action::Defeat,
                 Decision::Raise { to } => Action::Raise { to },
             };
-            if done.iter().any(|(id, a)| *id == escape.id && *a == action) {
-                continue;
-            }
             let sent = match action {
                 Action::Defeat => self.chain.submit_defeat(&escape.id),
                 Action::Raise { to } => self.chain.submit_raise(&escape.id, to),
@@ -94,9 +108,17 @@ impl<C: VaultChainPort, E: EvidencePort, J: Journal> Challenger<C, E, J> {
                     done.push((escape.id, action.clone()));
                     reports.push(Report::Submitted { escape: escape.id, action });
                 }
-                Err(_) => reports.push(Report::SubmitFailed { escape: escape.id, action }),
+                Err(error) => reports.push(Report::SubmitFailed { escape: escape.id, action, error }),
             }
         }
         Ok(reports)
+    }
+}
+
+fn as_action(decision: &Decision) -> Option<Action> {
+    match decision {
+        Decision::Defeat => Some(Action::Defeat),
+        Decision::Raise { to } => Some(Action::Raise { to: *to }),
+        Decision::NoOp | Decision::Alarm(_) => None,
     }
 }

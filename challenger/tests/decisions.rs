@@ -107,10 +107,10 @@ fn deadline_too_close_is_reported_not_skipped() {
 fn restart_neither_repeats_nor_misses() {
     let chain = FakeChain::new(0, vec![escape(0, 100)]);
     let evidence = FakeEvidence::default().with(ev(ID, 10, 7, false, true));
-    let dir = std::env::temp_dir().join(format!("challenger-journal-{}", std::process::id()));
-    let _ = std::fs::remove_file(&dir);
+    let path = std::env::temp_dir().join(format!("challenger-journal-{}", std::process::id()));
+    let _ = std::fs::remove_file(&path);
 
-    let mut c = Challenger::new(chain.clone(), evidence.clone(), FileJournal::open(&dir).unwrap(), CFG);
+    let mut c = Challenger::new(chain.clone(), evidence.clone(), FileJournal::open(&path).unwrap(), CFG);
     c.tick(0).unwrap();
     assert_eq!(chain.submissions(), vec![(ID, Action::Raise { to: 7 })]);
     drop(c);
@@ -118,7 +118,7 @@ fn restart_neither_repeats_nor_misses() {
     // Restart: a fresh challenger over the same journal file. The chain still shows the escape
     // (the raise is not yet reflected), so only the journal stops a repeat.
     let stale = FakeChain::new(0, vec![escape(0, 100)]);
-    let mut c = Challenger::new(stale.clone(), evidence.clone(), FileJournal::open(&dir).unwrap(), CFG);
+    let mut c = Challenger::new(stale.clone(), evidence.clone(), FileJournal::open(&path).unwrap(), CFG);
     let reports = c.tick(0).unwrap();
     assert!(stale.submissions().is_empty());
     assert!(!reports.iter().any(|r| matches!(r, Report::Seen { .. })));
@@ -127,10 +127,10 @@ fn restart_neither_repeats_nor_misses() {
     let other = Escape { id: [3; 32], next_nullifier: [4; 32], ..escape(0, 100) };
     stale.add_escape(other);
     let evidence = evidence.with(ev([4; 32], 10, 0, false, true));
-    let mut c = Challenger::new(stale.clone(), evidence, FileJournal::open(&dir).unwrap(), CFG);
+    let mut c = Challenger::new(stale.clone(), evidence, FileJournal::open(&path).unwrap(), CFG);
     c.tick(0).unwrap();
     assert_eq!(stale.submissions(), vec![([3; 32], Action::Defeat)]);
-    let _ = std::fs::remove_file(&dir);
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
@@ -154,4 +154,51 @@ fn chain_outage_is_an_error_not_a_silent_skip() {
     chain.set_unavailable(true);
     let mut c = Challenger::new(chain, FakeEvidence::default(), MemoryJournal::default(), CFG);
     assert!(matches!(c.tick(0), Err(PortError::Unavailable(_))));
+}
+
+#[test]
+fn evidence_outage_is_reported_not_skipped() {
+    let chain = FakeChain::new(0, vec![escape(0, 100)]);
+    let mut c = Challenger::new(chain.clone(), FakeEvidence::default().unavailable(), MemoryJournal::default(), CFG);
+    let reports = c.tick(0).unwrap();
+    assert!(reports.contains(&Report::EvidenceUnavailable { escape: ID }));
+    assert!(chain.submissions().is_empty());
+}
+
+#[test]
+fn a_submitted_action_is_not_alarmed_on_as_its_deadline_nears() {
+    // The raise is submitted but not yet reflected on chain, so the evidence still calls for it.
+    let chain = FakeChain::new(0, vec![escape(0, 100)]);
+    let evidence = FakeEvidence::default().with(ev(ID, 10, 7, false, true));
+    let mut c = Challenger::new(chain.clone(), evidence, MemoryJournal::default(), CFG);
+    c.tick(0).unwrap();
+    let stale = FakeChain::new(DEADLINE - 5_000, vec![escape(0, 100)]);
+    c.chain = stale.clone();
+    assert!(c.tick(DEADLINE - 5_000).unwrap().is_empty());
+    assert!(stale.submissions().is_empty());
+}
+
+/// Lists its escapes but refuses every submission.
+struct Refusing(Vec<Escape>);
+impl VaultChainPort for Refusing {
+    fn escapes(&self) -> Result<Vec<Escape>, PortError> {
+        Ok(self.0.clone())
+    }
+    fn submit_defeat(&mut self, _: &EscapeId) -> Result<(), PortError> {
+        Err(PortError::Refused("already defeated".into()))
+    }
+    fn submit_raise(&mut self, _: &EscapeId, _: u64) -> Result<(), PortError> {
+        Err(PortError::Refused("already raised".into()))
+    }
+}
+
+#[test]
+fn a_failed_submission_reports_why() {
+    let evidence = FakeEvidence::default().with(ev(NEXT, 10, 3, false, true));
+    let mut c = Challenger::new(Refusing(vec![escape(0, 100)]), evidence, MemoryJournal::default(), CFG);
+    assert!(c.tick(0).unwrap().contains(&Report::SubmitFailed {
+        escape: ID,
+        action: Action::Defeat,
+        error: PortError::Refused("already defeated".into()),
+    }));
 }
