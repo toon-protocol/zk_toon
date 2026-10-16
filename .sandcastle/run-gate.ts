@@ -128,6 +128,13 @@ export async function loadGate(sandbox: Sandbox, base: string): Promise<Gate> {
 }
 
 /**
+ * The shell command that runs one gate step. The sandbox runs commands under `sh`, which is
+ * dash on Ubuntu and has no `pipefail`, so the step runs under bash, as `shell: bash` does in CI.
+ */
+export const stepCommand = (command: string): string =>
+  `bash -c ${shellQuote(`set -eo pipefail\n${command}`)}`;
+
+/**
  * Run `steps` in order, stopping at the first failure.
  *
  * Failure is returned, not thrown, so the caller can decide between a fix
@@ -139,7 +146,7 @@ export async function runGate(sandbox: Sandbox, steps: readonly GateStep[]): Pro
   for (const step of steps) {
     console.log(`  [gate] ${step.name}: ${step.command}`);
     const lines: string[] = [];
-    const result = await sandbox.exec(`set -eo pipefail\n${step.command}`, {
+    const result = await sandbox.exec(stepCommand(step.command), {
       onLine: (line) => {
         lines.push(line);
         // Stream sparingly: full build output would bury the runner log.

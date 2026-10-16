@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { gateFromCi } from './run-gate.ts';
+import { gateFromCi, stepCommand } from './run-gate.ts';
 
 const CI = `
 name: CI
@@ -99,4 +100,17 @@ test('a GitHub expression in env or working-directory skips the step too', () =>
 test('the expression note names the expression syntax literally', () => {
   const { notes } = gateFromCi('jobs:\n  gate:\n    steps:\n      - run: echo ${{ x }}\n');
   assert.match(notes.join('\n'), /a \$\{\{ \}\} expression/);
+});
+
+const underSh = (command: string): number | null =>
+  spawnSync('sh', ['-c', stepCommand(command)], { stdio: 'ignore' }).status;
+
+test('a step runs under sh with pipefail, so a pipe into tee cannot mask a failure', () => {
+  assert.equal(underSh('false | tee /dev/null'), 1);
+  assert.equal(underSh('true | tee /dev/null'), 0);
+});
+
+test('a step stops at its first failing line, and quotes in it survive', () => {
+  assert.equal(underSh("false\necho 'not reached'"), 1);
+  assert.equal(underSh(`[ "it's" = "it's" ]`), 0);
 });
