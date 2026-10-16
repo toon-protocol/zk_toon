@@ -35,6 +35,7 @@
     "noteLifetimeMs": "15552000000",
     "minSubsidyAgeMs": "604800000",
     "subsidyPeriodMs": "604800000",
+    "challengeWindowMs": "172800000",
     "tiers": [
       "10000000",
       "100000000",

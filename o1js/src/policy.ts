@@ -2,11 +2,14 @@
 // (Mina block timestamps); amounts are nanomina.
 //
 // The deposit sizes and tiers are open values in the spec (#2); these are provisional.
+import { Field } from 'o1js';
 
 export const MS_PER_DAY = 86_400_000n;
 export const NOTE_LIFETIME_MS = 180n * MS_PER_DAY;
 export const MIN_SUBSIDY_AGE_MS = 7n * MS_PER_DAY;
 export const SUBSIDY_PERIOD_MS = 7n * MS_PER_DAY;
+/** How long a challenger has to answer a close or an escape. */
+export const CHALLENGE_WINDOW_MS = 2n * MS_PER_DAY;
 
 const MINA = 1_000_000_000n;
 /** Request tiers `b`, ascending. The first is the smallest, the only one a subsidised allowance may use. */
@@ -19,6 +22,8 @@ export const isDepositSize = (size: bigint) => DEPOSIT_SIZES.includes(size);
 export const isSmallestTier = (b: bigint) => b === TIERS[0];
 
 export const expiryOf = (depositTime: bigint) => depositTime + NOTE_LIFETIME_MS;
+/** `expiryOf` in a circuit. */
+export const expiryOfField = (depositTime: Field) => depositTime.add(Field(NOTE_LIFETIME_MS));
 
 /** Whole weeks since the vault's creation; undefined before it. */
 export function subsidyPeriod(vaultCreation: bigint, now: bigint): bigint | undefined {
