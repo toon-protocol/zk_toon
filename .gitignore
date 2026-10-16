@@ -1,0 +1,4 @@
+target/
+node_modules/
+rust.log
+o1js.log
