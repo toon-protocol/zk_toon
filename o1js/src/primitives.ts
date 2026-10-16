@@ -1,6 +1,6 @@
 // Every derived value of a zk note. Mirrored byte for byte by crates/zk-note/src/lib.rs and
 // pinned by test-vectors/zk-note.json.
-import { Field, Poseidon } from 'o1js';
+import { Bool, Field, Poseidon } from 'o1js';
 
 /** Domain tags: ASCII, at most 31 bytes, read as a little-endian field element. */
 export const TAGS = {
@@ -46,15 +46,17 @@ export const nextAnchor = (nullifierValue: Field) => hashWithTag(TAGS.anchor, [n
 export interface RequestContext {
   /** The zk edge's identity. */
   edge: Field;
-  /** The session key's x coordinate and the parity of y (0 or 1). */
+  /** The session key's x coordinate and whether y is odd (hashed as 0 or 1). */
   sessionKeyX: Field;
-  sessionKeyIsOdd: Field;
+  sessionKeyIsOdd: Bool;
   tier: Field;
   expiry: Field;
 }
 
-export const authTag = (nullifierValue: Field, c: RequestContext) =>
-  hashWithTag(TAGS.authTag, [nullifierValue, c.edge, c.sessionKeyX, c.sessionKeyIsOdd, c.tier, c.expiry]);
+export const authTag = (nullifierValue: Field, ctx: RequestContext) =>
+  hashWithTag(TAGS.authTag, [
+    nullifierValue, ctx.edge, ctx.sessionKeyX, ctx.sessionKeyIsOdd.toField(), ctx.tier, ctx.expiry,
+  ]);
 
 /** Unlinkable across periods without the secret. */
 export const periodNullifier = (secret: Field, index: Field, period: Field) =>

@@ -76,23 +76,23 @@ pub fn next_anchor(nullifier: Field) -> Field {
 pub struct RequestContext {
     /// The zk edge's identity.
     pub edge: Field,
-    /// The session key's x coordinate and the parity of y (0 or 1).
+    /// The session key's x coordinate and whether y is odd (hashed as 0 or 1).
     pub session_key_x: Field,
     pub session_key_is_odd: bool,
     pub tier: u64,
     pub expiry: u64,
 }
 
-pub fn auth_tag(nullifier: Field, c: &RequestContext) -> Field {
+pub fn auth_tag(nullifier: Field, ctx: &RequestContext) -> Field {
     hash_with_tag(
         tags::AUTH_TAG,
         &[
             nullifier,
-            c.edge,
-            c.session_key_x,
-            Field::from(c.session_key_is_odd as u64),
-            c.tier.into(),
-            c.expiry.into(),
+            ctx.edge,
+            ctx.session_key_x,
+            Field::from(ctx.session_key_is_odd as u64),
+            ctx.tier.into(),
+            ctx.expiry.into(),
         ],
     )
 }

@@ -326,5 +326,61 @@
       "now": "1699999999999",
       "oldEnough": false
     }
+  ],
+  "membership": [
+    {
+      "amount": "0",
+      "isTier": false,
+      "isDepositSize": false,
+      "isSmallestTier": false
+    },
+    {
+      "amount": "10000000",
+      "isTier": true,
+      "isDepositSize": false,
+      "isSmallestTier": true
+    },
+    {
+      "amount": "100000000",
+      "isTier": true,
+      "isDepositSize": false,
+      "isSmallestTier": false
+    },
+    {
+      "amount": "1000000000",
+      "isTier": true,
+      "isDepositSize": false,
+      "isSmallestTier": false
+    },
+    {
+      "amount": "10000000000",
+      "isTier": false,
+      "isDepositSize": true,
+      "isSmallestTier": false
+    },
+    {
+      "amount": "100000000000",
+      "isTier": false,
+      "isDepositSize": true,
+      "isSmallestTier": false
+    },
+    {
+      "amount": "1000000000000",
+      "isTier": false,
+      "isDepositSize": true,
+      "isSmallestTier": false
+    },
+    {
+      "amount": "10000001",
+      "isTier": false,
+      "isDepositSize": false,
+      "isSmallestTier": false
+    },
+    {
+      "amount": "9999999999",
+      "isTier": false,
+      "isDepositSize": false,
+      "isSmallestTier": false
+    }
   ]
 }

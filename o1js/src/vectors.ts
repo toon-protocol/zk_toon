@@ -1,5 +1,5 @@
 // Builds test-vectors/zk-note.json, the one file the Rust primitives and the o1js code both reproduce.
-import { Field, Poseidon } from 'o1js';
+import { Bool, Field, Poseidon } from 'o1js';
 import * as p from './primitives.js';
 import * as policy from './policy.js';
 
@@ -51,7 +51,8 @@ export function buildVectors() {
   // A note's chain of states: each anchor follows from the nullifier spent before it.
   const chainSecret = F(SECRET);
   const chain: { anchor: string; nullifier: string }[] = [];
-  let anchor = p.genesisAnchor(p.commitSecret(chainSecret));
+  const genesis = p.genesisAnchor(p.commitSecret(chainSecret));
+  let anchor = genesis;
   for (let i = 0; i < 3; i++) {
     const n = p.nullifier(chainSecret, anchor);
     chain.push({ anchor: s(anchor), nullifier: s(n) });
@@ -59,7 +60,7 @@ export function buildVectors() {
   }
   const nullifiers = {
     secret: SECRET.toString(),
-    genesisAnchor: s(p.genesisAnchor(p.commitSecret(chainSecret))),
+    genesisAnchor: s(genesis),
     chain,
     nextAnchors: chain.map((c) => s(p.nextAnchor(F(c.nullifier)))),
     // Another secret at the same anchor gives another nullifier.
@@ -67,18 +68,18 @@ export function buildVectors() {
   };
 
   const ctx = {
-    edge: F(424242), sessionKeyX: F(31337), sessionKeyIsOdd: F(1), tier: F(policy.TIERS[1]),
+    edge: F(424242), sessionKeyX: F(31337), sessionKeyIsOdd: Bool(true), tier: F(policy.TIERS[1]),
     expiry: F(depositTime + 600_000n),
   };
   const ctxJson = (c: p.RequestContext) => ({
-    edge: s(c.edge), sessionKeyX: s(c.sessionKeyX), sessionKeyIsOdd: s(c.sessionKeyIsOdd),
+    edge: s(c.edge), sessionKeyX: s(c.sessionKeyX), sessionKeyIsOdd: s(c.sessionKeyIsOdd.toField()),
     tier: s(c.tier), expiry: s(c.expiry),
   });
   const n0 = F(chain[0].nullifier);
   const authTags = [
     ctx,
     { ...ctx, edge: F(424243) },
-    { ...ctx, sessionKeyIsOdd: F(0) },
+    { ...ctx, sessionKeyIsOdd: Bool(false) },
     { ...ctx, tier: F(policy.TIERS[0]) },
     { ...ctx, expiry: F(depositTime + 600_001n) },
   ].map((c) => ({ nullifier: s(n0), context: ctxJson(c), tag: s(p.authTag(n0, c)) }));
@@ -111,6 +112,17 @@ export function buildVectors() {
     oldEnough: policy.isOldEnoughForSubsidy(depositTime, depositTime + delta),
   }));
 
+  // Which amounts are tiers, deposit sizes and the smallest tier.
+  const amounts = [
+    0n, ...policy.TIERS, ...policy.DEPOSIT_SIZES, policy.TIERS[0] + 1n, policy.DEPOSIT_SIZES[0] - 1n,
+  ];
+  const membership = amounts.map((amount) => ({
+    amount: amount.toString(),
+    isTier: policy.isTier(amount),
+    isDepositSize: policy.isDepositSize(amount),
+    isSmallestTier: policy.isSmallestTier(amount),
+  }));
+
   const policyJson = {
     msPerDay: DAY.toString(),
     noteLifetimeMs: policy.NOTE_LIFETIME_MS.toString(),
@@ -125,6 +137,6 @@ export function buildVectors() {
       'Shared zk-note test vectors. Field elements are decimal strings; times are milliseconds. ' +
       'Regenerate with `npm run vectors` in o1js/; the Rust crate and the o1js tests both reproduce every entry.',
     tags, policy: policyJson, poseidon, domainSeparation, commitment, leaves, nullifiers,
-    authTags, periodNullifiers, periods, ages,
+    authTags, periodNullifiers, periods, ages, membership,
   };
 }

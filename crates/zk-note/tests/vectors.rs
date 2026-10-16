@@ -97,7 +97,11 @@ fn auth_tags_match() {
         let ctx = RequestContext {
             edge: f(&c["edge"]),
             session_key_x: f(&c["sessionKeyX"]),
-            session_key_is_odd: u(&c["sessionKeyIsOdd"]) == 1,
+            session_key_is_odd: match s(&c["sessionKeyIsOdd"]) {
+                "0" => false,
+                "1" => true,
+                other => panic!("sessionKeyIsOdd must be 0 or 1, got {other}"),
+            },
             tier: u(&c["tier"]),
             expiry: u(&c["expiry"]),
         };
@@ -109,6 +113,46 @@ fn auth_tags_match() {
 fn period_nullifiers_match() {
     for e in vectors()["periodNullifiers"].as_array().unwrap() {
         eq(period_nullifier(f(&e["secret"]), u(&e["index"]), u(&e["period"])), &e["periodNullifier"]);
+    }
+}
+
+#[test]
+fn period_nullifiers_need_the_secret() {
+    let v = vectors();
+    let find = |secret: &str, index: &str, period: &str| {
+        v["periodNullifiers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| s(&e["secret"]) == secret && s(&e["index"]) == index && s(&e["period"]) == period)
+            .map(|e| s(&e["periodNullifier"]).to_string())
+            .unwrap()
+    };
+    let secret = s(&v["nullifiers"]["secret"]);
+    let other = v["periodNullifiers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| s(&e["secret"]))
+        .find(|x| *x != secret)
+        .unwrap();
+    // Same note index and period, another secret: another per-period nullifier.
+    assert_ne!(find(secret, "7", "1"), find(other, "7", "1"));
+    // One note, different periods: all different.
+    let per: Vec<_> = ["0", "1", "2"].iter().map(|p| find(secret, "7", p)).collect();
+    assert!(per[0] != per[1] && per[1] != per[2] && per[0] != per[2]);
+}
+
+#[test]
+fn membership_agrees() {
+    let v = vectors();
+    let entries = v["membership"].as_array().unwrap();
+    assert!(!entries.is_empty());
+    for e in entries {
+        let amount = u(&e["amount"]);
+        assert_eq!(policy::is_tier(amount), e["isTier"].as_bool().unwrap(), "isTier {amount}");
+        assert_eq!(policy::is_deposit_size(amount), e["isDepositSize"].as_bool().unwrap(), "isDepositSize {amount}");
+        assert_eq!(policy::is_smallest_tier(amount), e["isSmallestTier"].as_bool().unwrap(), "isSmallestTier {amount}");
     }
 }
 

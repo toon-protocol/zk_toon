@@ -18,8 +18,8 @@ pub fn is_tier(b: u64) -> bool {
     TIERS.contains(&b)
 }
 
-pub fn is_deposit_size(a: u64) -> bool {
-    DEPOSIT_SIZES.contains(&a)
+pub fn is_deposit_size(size: u64) -> bool {
+    DEPOSIT_SIZES.contains(&size)
 }
 
 pub fn is_smallest_tier(b: u64) -> bool {

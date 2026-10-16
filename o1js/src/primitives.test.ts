@@ -31,6 +31,22 @@ describe('shared vectors', () => {
     expect(new Set(outs).size).toBe(outs.length);
   });
 
+  it('give another secret a different per-period nullifier for the same index and period', () => {
+    const at = (secret: string) =>
+      file.periodNullifiers.find((v: any) => v.secret === secret && v.index === '7' && v.period === '1');
+    const other = file.periodNullifiers.find((v: any) => v.secret !== file.nullifiers.secret).secret;
+    expect(at(file.nullifiers.secret).periodNullifier).not.toBe(at(other).periodNullifier);
+  });
+
+  it('classify tiers and deposit sizes', () => {
+    expect(file.membership.length).toBeGreaterThan(0);
+    for (const m of file.membership) {
+      const amount = BigInt(m.amount);
+      expect([policy.isTier(amount), policy.isDepositSize(amount), policy.isSmallestTier(amount)])
+        .toEqual([m.isTier, m.isDepositSize, m.isSmallestTier]);
+    }
+  });
+
   it('derive the next anchor from the nullifier, which needs the secret', () => {
     const n = file.nullifiers;
     expect(n.chain[1].anchor).toBe(n.nextAnchors[0]);

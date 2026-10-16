@@ -15,7 +15,7 @@ export const TIERS: readonly bigint[] = [MINA / 100n, MINA / 10n, MINA];
 export const DEPOSIT_SIZES: readonly bigint[] = [10n * MINA, 100n * MINA, 1000n * MINA];
 
 export const isTier = (b: bigint) => TIERS.includes(b);
-export const isDepositSize = (a: bigint) => DEPOSIT_SIZES.includes(a);
+export const isDepositSize = (size: bigint) => DEPOSIT_SIZES.includes(size);
 export const isSmallestTier = (b: bigint) => b === TIERS[0];
 
 export const expiryOf = (depositTime: bigint) => depositTime + NOTE_LIFETIME_MS;
