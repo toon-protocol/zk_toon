@@ -8,6 +8,10 @@ on:
 jobs:
   gate:
     runs-on: ubuntu-latest
+    # `shell: bash` runs with pipefail, so a failing test isn't masked by `tee`.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master

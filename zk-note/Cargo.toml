@@ -7,8 +7,8 @@ description = "Pure zk-note primitives: no I/O, no clock"
 [dependencies]
 mina-curves = { git = "https://github.com/o1-labs/proof-systems", tag = "0.7.0", default-features = false }
 mina-poseidon = { git = "https://github.com/o1-labs/proof-systems", tag = "0.7.0", default-features = false }
-o1-utils = { git = "https://github.com/o1-labs/proof-systems", tag = "0.7.0", default-features = false }
 
 [dev-dependencies]
+o1-utils = { git = "https://github.com/o1-labs/proof-systems", tag = "0.7.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
