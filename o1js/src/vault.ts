@@ -19,6 +19,7 @@ export class Deposit extends Struct({ commitment: Field, size: UInt64, depositTi
 /** The accepted deposit sizes, as on-chain state. */
 export class DepositSizes extends Struct({ a: UInt64, b: UInt64, c: UInt64 }) {
   static fromPolicy() {
+    if (policy.DEPOSIT_SIZES.length !== 3) throw Error('DepositSizes holds exactly three sizes');
     const [a, b, c] = policy.DEPOSIT_SIZES.map((s) => UInt64.from(s));
     return new DepositSizes({ a, b, c });
   }
@@ -28,16 +29,19 @@ export class DepositSizes extends Struct({ a: UInt64, b: UInt64, c: UInt64 }) {
 }
 
 /** The latest note-tree roots; a slot is zero until written. `head` is the next slot to overwrite. */
-export class RootRing extends Struct({ roots: Provable.Array(Field, ROOT_RING_LENGTH) }) {
+export class RootRing extends Struct({ roots: Provable.Array(Field, ROOT_RING_LENGTH), head: Field }) {
   static empty() {
-    return new RootRing({ roots: Array.from({ length: ROOT_RING_LENGTH }, () => Field(0)) });
+    return new RootRing({ roots: Array.from({ length: ROOT_RING_LENGTH }, () => Field(0)), head: Field(0) });
   }
   contains(root: Field): Bool {
     // Empty slots hold zero, which is no root.
     return this.roots.reduce((acc, r) => acc.or(r.equals(root)), Bool(false)).and(root.equals(0).not());
   }
-  push(head: Field, root: Field): RootRing {
-    return new RootRing({ roots: this.roots.map((r, i) => Provable.if(head.equals(i), root, r)) });
+  /** Writes `root` over the oldest slot and advances `head`. */
+  push(root: Field): RootRing {
+    const roots = this.roots.map((r, i) => Provable.if(this.head.equals(i), root, r));
+    const advanced = this.head.add(1);
+    return new RootRing({ roots, head: Provable.if(advanced.equals(ROOT_RING_LENGTH), Field(0), advanced) });
   }
 }
 
@@ -47,13 +51,12 @@ export class DepositBatch extends batchReducer.Batch {}
 export class DepositBatchProof extends batchReducer.BatchProof {}
 
 export class Vault extends SmartContract {
-  // State fields in use: 2 (batch reducer) + 1 + 1 + 8 + 1 + 1 + 3 + 1 + 1 = 19 of Mesa's 32.
+  // State fields in use: 2 (batch reducer) + 1 + 1 + (8 + 1) + 1 + 3 + 1 + 1 = 19 of Mesa's 32.
   actionState = State<Field>();
   actionStack = State<Field>();
   noteRoot = State<Field>();
   nextLeafIndex = State<Field>();
   rootRing = State<RootRing>();
-  ringHead = State<Field>();
   creationTime = State<UInt64>();
   depositSizes = State<DepositSizes>();
   noteLifetime = State<UInt64>();
@@ -73,7 +76,6 @@ export class Vault extends SmartContract {
     this.noteRoot.set(emptyNoteRoot());
     this.nextLeafIndex.set(Field(0));
     this.rootRing.set(RootRing.empty());
-    this.ringHead.set(Field(0));
   }
 
   async deposit(commitment: Field, size: UInt64, depositTime: UInt64) {
@@ -89,28 +91,24 @@ export class Vault extends SmartContract {
     let root = this.noteRoot.getAndRequireEquals();
     let next = this.nextLeafIndex.getAndRequireEquals();
     const ring = new RootRing(this.rootRing.getAndRequireEquals());
-    const head = this.ringHead.getAndRequireEquals();
     let changed = Bool(false);
 
     batchReducer.processBatch({ batch, proof }, (deposit, isDummy, i) => {
-      const w = Provable.witness(NoteWitness, () => witnesses.get()[i]);
+      const witness = Provable.witness(NoteWitness, () => witnesses.get()[i]);
       // The slot at `next` must be empty under the current root.
-      w.calculateIndex().assertEquals(next);
-      const l = depositLeaf(next, {
+      witness.calculateIndex().assertEquals(next);
+      const noteLeaf = depositLeaf(next, {
         commitment: deposit.commitment, size: deposit.size.value, depositTime: deposit.depositTime.value,
       });
-      w.calculateRoot(Field(0)).assertEquals(root);
-      root = Provable.if(isDummy, root, w.calculateRoot(l));
+      witness.calculateRoot(Field(0)).assertEquals(root);
+      root = Provable.if(isDummy, root, witness.calculateRoot(noteLeaf));
       next = Provable.if(isDummy, next, next.add(1));
       changed = changed.or(isDummy.not());
     });
 
     this.noteRoot.set(root);
     this.nextLeafIndex.set(next);
-    this.rootRing.set(new RootRing(Provable.if(changed, RootRing, ring.push(head, root), ring)));
-    const advanced = head.add(1);
-    const wrapped = Provable.if(advanced.equals(ROOT_RING_LENGTH), Field(0), advanced);
-    this.ringHead.set(Provable.if(changed, wrapped, head));
+    this.rootRing.set(new RootRing(Provable.if(changed, RootRing, ring.push(root), ring)));
   }
 }
 
@@ -126,7 +124,6 @@ declareState(Vault, {
   noteRoot: Field,
   nextLeafIndex: Field,
   rootRing: RootRing,
-  ringHead: Field,
   creationTime: UInt64,
   depositSizes: DepositSizes,
   noteLifetime: UInt64,

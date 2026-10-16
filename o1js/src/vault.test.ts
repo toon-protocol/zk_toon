@@ -87,9 +87,9 @@ describe('vault deposit path', () => {
     expect(vault.nextLeafIndex.get().toBigInt()).toBe(0n);
 
     await reduce();
-    const d = tree.leafAt(0n);
+    const leafAtZero = tree.leafAt(0n);
     const expected = leaf(Field(0), lastDeposit.commitment, Field(SMALL), lastDeposit.depositTime, Field(policy.expiryOf(lastDeposit.depositTime.toBigInt())));
-    expect(d.toBigInt()).toBe(expected.toBigInt());
+    expect(leafAtZero.toBigInt()).toBe(expected.toBigInt());
     expect(vault.noteRoot.get().toBigInt()).toBe(tree.root.toBigInt());
     expect(vault.nextLeafIndex.get().toBigInt()).toBe(1n);
     expect(ring()).toContain(tree.root.toBigInt());
