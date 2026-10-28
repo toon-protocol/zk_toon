@@ -1,4 +1,4 @@
-//! Prove an o1js step circuit with the vendored mina-rust kimchi prover.
+//! Prove an o1js step circuit with mina-rust's kimchi prover, from the pinned fork (see [`pins`]).
 //!
 //! A [`StepCircuit`] is the circuit o1js dumps (gates JSON, `internal_vars.bin`, `rows_rev.bin`);
 //! a [`StepWitness`] is the primary and auxiliary values for it. [`prove_step`] checks every
@@ -7,13 +7,15 @@
 //! The witness can come from o1js's own dump ([`StepWitness::from_o1js_json`]) or, later, be built
 //! in Rust ([`StepWitness::from_parts`]).
 
+pub mod pins;
+
 use std::str::FromStr;
 
 use ledger::proofs::{
     constants::ProofConstants,
     provers::{decode_constraints_data, decode_gates_file},
     toon1561::prove_step as kimchi_prove_step,
-    transaction::{make_prover_index, ProofError, ProofWithPublic, Prover},
+    transaction::{make_prover_index, ProofError, Prover},
     witness::Witness,
 };
 use mina_curves::pasta::Fp;
@@ -98,6 +100,6 @@ pub fn check_step<C: ProofConstants>(
 pub fn prove_step<C: ProofConstants>(
     circuit: &StepCircuit,
     witness: &StepWitness,
-) -> anyhow::Result<ProofWithPublic<Fp>> {
+) -> anyhow::Result<StepProof<Fp>> {
     kimchi_prove_step::<C>(&circuit.prover, &witness.0, false)
 }

@@ -1,10 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["challenger", "zk-note", "zk-prover"]
-# vendor/mina-rust is a copy of mina-rust's workspace; zk-prover depends on it by path.
-exclude = ["vendor/mina-rust"]
 
-# Copied from mina-rust's workspace manifest: a [patch] only counts at the root of the build.
+# From mina-rust's workspace manifest (toon-protocol/mina-rust@6feeb37): a [patch] only counts at the root of the build.
 [patch.crates-io]
 num-bigint = { git = "https://github.com/openmina/num-bigint", branch = "rebase-onstack" }
 num-rational = { git = "https://github.com/openmina/num-rational", branch = "rebase-onstack" }

@@ -1656,6 +1656,7 @@ checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 [[package]]
 name = "mina-core"
 version = "0.19.0"
+source = "git+https://github.com/toon-protocol/mina-rust?rev=6feeb3797fff6dba49fd848cb2d6decd63fee1b4#6feeb3797fff6dba49fd848cb2d6decd63fee1b4"
 dependencies = [
  "argon2",
  "ark-ff",
@@ -1723,6 +1724,7 @@ dependencies = [
 [[package]]
 name = "mina-macros"
 version = "0.19.0"
+source = "git+https://github.com/toon-protocol/mina-rust?rev=6feeb3797fff6dba49fd848cb2d6decd63fee1b4#6feeb3797fff6dba49fd848cb2d6decd63fee1b4"
 dependencies = [
  "proc-macro2 1.0.103",
  "quote 1.0.35",
@@ -1732,6 +1734,7 @@ dependencies = [
 [[package]]
 name = "mina-p2p-messages"
 version = "0.19.0"
+source = "git+https://github.com/toon-protocol/mina-rust?rev=6feeb3797fff6dba49fd848cb2d6decd63fee1b4#6feeb3797fff6dba49fd848cb2d6decd63fee1b4"
 dependencies = [
  "ark-ff",
  "ark-serialize",
@@ -1805,6 +1808,7 @@ dependencies = [
 [[package]]
 name = "mina-tree"
 version = "0.19.0"
+source = "git+https://github.com/toon-protocol/mina-rust?rev=6feeb3797fff6dba49fd848cb2d6decd63fee1b4#6feeb3797fff6dba49fd848cb2d6decd63fee1b4"
 dependencies = [
  "anyhow",
  "ark-ec",
@@ -2221,6 +2225,7 @@ dependencies = [
 [[package]]
 name = "poseidon"
 version = "0.19.0"
+source = "git+https://github.com/toon-protocol/mina-rust?rev=6feeb3797fff6dba49fd848cb2d6decd63fee1b4#6feeb3797fff6dba49fd848cb2d6decd63fee1b4"
 dependencies = [
  "ark-ff",
  "ark-serialize",
@@ -2402,6 +2407,7 @@ dependencies = [
 [[package]]
 name = "redux"
 version = "0.1.0"
+source = "git+https://github.com/toon-protocol/mina-rust?rev=6feeb3797fff6dba49fd848cb2d6decd63fee1b4#6feeb3797fff6dba49fd848cb2d6decd63fee1b4"
 dependencies = [
  "enum_dispatch",
  "linkme",
