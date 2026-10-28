@@ -19,8 +19,7 @@ case "${1:-}" in
       # forbids (connector#1554), so it would not answer what these tests ask.
       docker run -d --name "$NAME" \
         -e NETWORK_TYPE=single-node -e PROOF_LEVEL=full -e LOG_LEVEL=Info \
-        -p 127.0.0.1:3085:3085 -p 127.0.0.1:5432:5432 -p 127.0.0.1:8080:8080 \
-        -p 127.0.0.1:8181:8181 -p 127.0.0.1:8282:8282 \
+        -p 127.0.0.1:8080:8080 -p 127.0.0.1:8181:8181 -p 127.0.0.1:8282:8282 \
         "$IMAGE" >/dev/null
     elif [ "$(docker container inspect -f '{{.State.Running}}' "$NAME")" != true ]; then
       docker start "$NAME" >/dev/null
