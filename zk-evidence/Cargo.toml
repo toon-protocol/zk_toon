@@ -1,0 +1,16 @@
+[package]
+name = "zk-evidence"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "The evidence file's byte format: records, framing, header and evidence hash. No file I/O."
+
+[dependencies]
+ark-ff = "0.5"
+crc32c = "0.6"
+serde_json = "1"
+sha2 = "0.10"
+zk-note = { path = "../zk-note" }
+
+[dev-dependencies]
+hex = "0.4"

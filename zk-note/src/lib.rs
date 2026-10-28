@@ -26,6 +26,7 @@ pub const VECTORS_JSON: &str = include_str!("../../test-vectors/zk-note.json");
 
 pub mod balance;
 pub mod policy;
+pub mod request;
 pub mod state;
 
 use ark_ff::PrimeField;
