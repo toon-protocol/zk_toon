@@ -6,3 +6,7 @@ license = "MIT"
 description = "The challenger's decision core and its ports"
 
 [dependencies]
+zk-evidence = { path = "../zk-evidence" }
+
+[dev-dependencies]
+zk-note = { path = "../zk-note" }

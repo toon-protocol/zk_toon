@@ -1070,6 +1070,10 @@ dependencies = [
 [[package]]
 name = "zk-toon-challenger"
 version = "0.1.0"
+dependencies = [
+ "zk-evidence",
+ "zk-note",
+]
 
 [[package]]
 name = "zmij"
