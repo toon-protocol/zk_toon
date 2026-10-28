@@ -4,8 +4,13 @@ use std::str::FromStr;
 use zk_note::{policy, *};
 
 fn vectors() -> Value {
+    serde_json::from_str(VECTORS_JSON).unwrap()
+}
+
+#[test]
+fn exported_vectors_are_the_file() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../test-vectors/zk-note.json");
-    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    assert_eq!(VECTORS_JSON, std::fs::read_to_string(path).unwrap());
 }
 
 fn s(v: &Value) -> &str {
@@ -110,6 +115,19 @@ fn auth_tags_match() {
 }
 
 #[test]
+fn edges_are_vault_key_x_coordinates() {
+    let v = vectors();
+    let vault_xs: Vec<&str> =
+        v["stateSignatures"]["cases"].as_array().unwrap().iter().map(|c| s(&c["vault"]["x"])).collect();
+    let tag_edges: Vec<&str> = v["authTags"].as_array().unwrap().iter().map(|e| s(&e["context"]["edge"])).collect();
+    assert!(tag_edges.iter().all(|e| vault_xs.contains(e)), "every auth tag's edge is a vault key's x");
+    assert!(tag_edges.iter().any(|e| *e != tag_edges[0]), "auth tags cover another edge");
+    for r in v["requestProofs"].as_array().unwrap() {
+        assert_eq!(s(&r["private"]["context"]["edge"]), s(&r["public"]["vault"]["x"]));
+    }
+}
+
+#[test]
 fn period_nullifiers_match() {
     for e in vectors()["periodNullifiers"].as_array().unwrap() {
         eq(period_nullifier(f(&e["secret"]), u(&e["index"]), u(&e["period"])), &e["periodNullifier"]);
@@ -174,6 +192,17 @@ fn note_age_agrees() {
 }
 
 #[test]
+fn request_times_agree() {
+    let entries = vectors()["requestTimes"].as_array().unwrap().clone();
+    assert!(entries.iter().any(|e| e["fresh"].as_bool().unwrap()));
+    assert!(entries.iter().any(|e| !e["fresh"].as_bool().unwrap()));
+    for e in entries {
+        let (request_time, now) = (u(&e["requestTime"]), u(&e["now"]));
+        assert_eq!(policy::is_request_time_fresh(request_time, now), e["fresh"].as_bool().unwrap(), "{e}");
+    }
+}
+
+#[test]
 fn policy_constants_match() {
     let v = vectors();
     let p = &v["policy"];
@@ -181,6 +210,8 @@ fn policy_constants_match() {
     assert_eq!(policy::MIN_SUBSIDY_AGE_MS, u(&p["minSubsidyAgeMs"]));
     assert_eq!(policy::SUBSIDY_PERIOD_MS, u(&p["subsidyPeriodMs"]));
     assert_eq!(policy::CHALLENGE_WINDOW_MS, u(&p["challengeWindowMs"]));
+    assert_eq!(policy::REQUEST_MAX_AGE_MS, u(&p["requestMaxAgeMs"]));
+    assert_eq!(policy::REQUEST_MAX_LEAD_MS, u(&p["requestMaxLeadMs"]));
     let tiers: Vec<u64> = p["tiers"].as_array().unwrap().iter().map(u).collect();
     assert_eq!(tiers, policy::TIERS);
     let sizes: Vec<u64> = p["depositSizes"].as_array().unwrap().iter().map(u).collect();

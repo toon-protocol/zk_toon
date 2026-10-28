@@ -53,6 +53,21 @@ describe('shared vectors', () => {
     expect(p.nullifier(Field(987654321n), Field(n.chain[0].anchor)).toString()).not.toBe(n.chain[0].nullifier);
   });
 
+  it('take the edge from the vault key the zk edge signs state under', () => {
+    const vaultXs = file.stateSignatures.cases.map((c: any) => c.vault.x);
+    for (const e of file.authTags) expect(vaultXs).toContain(e.context.edge);
+    for (const r of file.requestProofs) expect(r.private.context.edge).toBe(r.public.vault.x);
+  });
+
+  it('accept a requestTime 10 minutes behind to 1 minute ahead', () => {
+    const now = 1_700_000_000_000n;
+    const min = policy.MS_PER_MINUTE;
+    expect(policy.isRequestTimeFresh(now - 10n * min, now)).toBe(true);
+    expect(policy.isRequestTimeFresh(now - 10n * min - 1n, now)).toBe(false);
+    expect(policy.isRequestTimeFresh(now + min, now)).toBe(true);
+    expect(policy.isRequestTimeFresh(now + min + 1n, now)).toBe(false);
+  });
+
   it('agree at week boundaries', () => {
     const c = 1_690_000_000_000n;
     const w = policy.SUBSIDY_PERIOD_MS;

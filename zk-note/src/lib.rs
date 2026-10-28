@@ -8,7 +8,21 @@
 //!
 //! `test-vectors/zk-note.json` is the parity contract: an implementation in another language or
 //! crate agrees with this one when it matches every entry in that file, refusing the
-//! mainnet-signed state as [`state`] does.
+//! mainnet-signed state as [`state`] does. The file is also exported as [`VECTORS_JSON`], so a
+//! consumer can replay it without a copy.
+//!
+//! # What the connector fixes
+//!
+//! The connector's zk edge depends on this crate (connector ADR 0080, decision 12) and fixes:
+//!
+//! - [`RequestContext::edge`] is the x-coordinate of the vault key the zk edge signs state under;
+//! - a `requestTime` is refused when it is more than [`policy::REQUEST_MAX_AGE_MS`] behind or
+//!   [`policy::REQUEST_MAX_LEAD_MS`] ahead of the zk edge's clock ([`policy::is_request_time_fresh`]);
+//! - subsidised proofs are refused until connector#1581.
+
+/// `test-vectors/zk-note.json`, the parity contract. It is read from outside the crate directory,
+/// which a git dependency has but a `cargo package` tarball would not.
+pub const VECTORS_JSON: &str = include_str!("../../test-vectors/zk-note.json");
 
 pub mod balance;
 pub mod policy;
@@ -85,7 +99,7 @@ pub fn next_anchor(nullifier: Field) -> Field {
 /// What an authorization tag binds a nullifier to.
 #[derive(Clone, Copy, Debug)]
 pub struct RequestContext {
-    /// The zk edge's identity.
+    /// The zk edge's identity: the x-coordinate of the vault key it signs state under.
     pub edge: Field,
     /// The session key's x coordinate and whether y is odd (hashed as 0 or 1).
     pub session_key_x: Field,
