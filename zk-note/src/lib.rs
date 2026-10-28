@@ -3,8 +3,8 @@
 //!
 //! # Stability
 //!
-//! The API and the derivations may change until the circuit issues (#7–#12) land; [`auth_tag`]
-//! is the most likely to move (#7, #12). Pin this crate by commit, not by branch.
+//! The API and the derivations may change until the remaining circuit issues (#8–#12) land;
+//! [`auth_tag`] is the most likely to move (#12). Pin this crate by commit, not by branch.
 //!
 //! `test-vectors/zk-note.json` is the parity contract: an implementation in another language or
 //! crate agrees with this one when it matches every entry in that file, refusing the
