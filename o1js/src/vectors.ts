@@ -3,6 +3,7 @@ import { Bool, Field, Group, Poseidon, PrivateKey, Scalar, Signature } from 'o1j
 import * as p from './primitives.js';
 import * as policy from './policy.js';
 import * as bal from './balance.js';
+import { VECTOR_SAMPLES, buildSample, requestVector } from './request-sample.js';
 import { stateFields, type StateMessage } from './state.js';
 
 const s = (f: Field) => f.toString();
@@ -207,6 +208,8 @@ export function buildVectors() {
   })();
   const stateSignatures = { networkId: 'devnet', cases: stateCases, mainnetState };
 
+  const requestProofs = VECTOR_SAMPLES.map((o) => requestVector(buildSample(o), o));
+
   return {
     description:
       'Shared zk-note test vectors. Field elements are decimal strings; times are milliseconds. ' +
@@ -214,5 +217,6 @@ export function buildVectors() {
     tags, policy: policyJson, poseidon, domainSeparation, commitment, leaves, nullifiers,
     authTags, periodNullifiers, periods, ages, membership,
     generators, balanceCommitments: commitments, rerandomised, charged, stateSignatures,
+    requestProofs,
   };
 }
