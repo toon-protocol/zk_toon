@@ -61,3 +61,30 @@ _Avoid_: Treasury, rewards pool, incentive fund
 **Subsidy period**:
 The span of time in which each zk note may claim at most one subsidised allowance.
 _Avoid_: Epoch, round, claim window
+
+**Charge**:
+What an allowance actually cost the zk note that opened it, known when the allowance closes. It is
+at most the allowance's tier.
+_Avoid_: Δ (in prose), usage, spend
+
+### Evidence
+
+**Evidence file**:
+The zk edge's append-only record of every allowance it granted and how each one closed, which the
+challenger reads.
+_Avoid_: Proof log, journal (that's the connector's own record)
+
+**Grant record**:
+An entry in the evidence file for one granted allowance: its request proof and the allowance's
+terms, written before the allowance is granted.
+_Avoid_: Proof record, allowance record
+
+**Close record**:
+An entry in the evidence file giving an allowance's charge, written when its zk note's state
+advances.
+_Avoid_: Settlement record, charge record
+
+**Evidence hash**:
+The hash that names one record in the evidence file. The connector's journal stores it in place of
+the record.
+_Avoid_: Proof hash, record id
