@@ -1,10 +1,12 @@
 // Builds test-vectors/zk-note.json, the one file the Rust primitives and the o1js code both reproduce.
-import { Bool, Field, Group, Poseidon, PrivateKey, Scalar, Signature } from 'o1js';
+import { Bool, Field, Group, Poseidon, PrivateKey, PublicKey, Scalar, Signature } from 'o1js';
 import * as p from './primitives.js';
 import * as policy from './policy.js';
 import * as bal from './balance.js';
 import { VECTOR_SAMPLES, buildSample, requestVector } from './request-sample.js';
 import { stateFields, type StateMessage } from './state.js';
+import { clearanceFields, signClearance } from './clearance.js';
+import { WITHDRAWAL_SAMPLES, buildWithdrawal, withdrawalVector } from './withdrawal-sample.js';
 
 const s = (f: Field) => f.toString();
 const F = (n: bigint | number | string) => Field(n);
@@ -208,6 +210,33 @@ export function buildVectors() {
   })();
   const stateSignatures = { networkId: 'devnet', cases: stateCases, mainnetState };
 
+  // Clearances: the state key signs one nullifier and one destination, under the devnet ID.
+  const CLEARANCE_CASES = [
+    { stateSecret: 1n, nullifier: F(chain[0].nullifier), destinationSecret: 77n },
+    { stateSecret: 1n, nullifier: F(chain[1].nullifier), destinationSecret: 77n },
+    { stateSecret: 1n, nullifier: F(chain[0].nullifier), destinationSecret: 78n },
+    { stateSecret: VAULT_SECRETS[1], nullifier: F(chain[2].nullifier), destinationSecret: 78n },
+  ];
+  const key = (k: PublicKey) => ({ x: s(k.x), isOdd: s(k.isOdd.toField()) });
+  const clearances = {
+    networkId: 'devnet',
+    cases: CLEARANCE_CASES.map((c) => {
+      const stateKey = PrivateKey.fromBigInt(c.stateSecret);
+      const msg = {
+        stateKey: stateKey.toPublicKey(), nullifier: c.nullifier,
+        destination: PrivateKey.fromBigInt(c.destinationSecret).toPublicKey(),
+      };
+      const sig = signClearance(stateKey, msg);
+      return {
+        stateSecret: c.stateSecret.toString(), stateKey: key(msg.stateKey), nullifier: s(c.nullifier),
+        destination: key(msg.destination), fields: clearanceFields(msg).map(s),
+        signature: { r: s(sig.r), s: sig.s.toBigInt().toString() },
+      };
+    }),
+  };
+
+  const withdrawalProofs = WITHDRAWAL_SAMPLES.map((o) => withdrawalVector(buildWithdrawal(o), o));
+
   const requestProofs = VECTOR_SAMPLES.map((o) => requestVector(buildSample(o), o));
 
   return {
@@ -217,6 +246,6 @@ export function buildVectors() {
     tags, policy: policyJson, poseidon, domainSeparation, commitment, leaves, nullifiers,
     authTags, periodNullifiers, periods, ages, membership,
     generators, balanceCommitments: commitments, rerandomised, charged, stateSignatures,
-    requestProofs,
+    requestProofs, clearances, withdrawalProofs,
   };
 }

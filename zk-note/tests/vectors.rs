@@ -50,7 +50,7 @@ fn same_inputs_under_different_tags_differ() {
     distinct.sort();
     distinct.dedup();
     assert_eq!(distinct.len(), outs.len());
-    assert_eq!(outs.len(), 7);
+    assert_eq!(outs.len(), 8);
 }
 
 #[test]
