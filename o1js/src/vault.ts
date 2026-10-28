@@ -19,6 +19,7 @@ export const SLOT_MS = 90_000n;
 export const REDUCE_BATCH_SIZE = 5;
 /** A mutual close must land within this long after its request time. */
 export const CLOSE_WINDOW_MS = 600_000n;
+/** The nullifier set's height: room for about 2^19 spent states. */
 export const NULLIFIER_TREE_HEIGHT = 20;
 
 /** The nullifier set: every spent state's nullifier, each mapped to 1. */
