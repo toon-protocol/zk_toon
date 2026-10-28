@@ -1,9 +1,11 @@
 // The vault zkApp. A deposit moves a fixed size into the vault and dispatches an action; a mutual close
 // checks a withdrawal proof and the zk edge's clearance and dispatches an action; an escape checks an
 // escape proof and dispatches an action; after the challenge window anyone can finalize an escape, which
-// dispatches an action too. A permissionless reduce folds every pending action in: deposits into the note
-// tree, consumed nullifiers into the nullifier set, escapes into the pending escapes, and the payouts of
-// closes and finalized escapes. A deposit is a note only once reduced, and nothing is paid except at the
+// dispatches an action too. Within the window, a challenger may defeat an escape with a request proof at its
+// next nullifier, or raise its concession with one at its current nullifier; each dispatches an action. A
+// permissionless reduce folds every pending action in: deposits into the note tree, consumed nullifiers into
+// the nullifier set, escapes, raises and defeats into the pending escapes, and the payouts of closes and
+// finalized escapes. A deposit is a note only once reduced, and nothing is paid except at the
 // reduce (ADR 0002, "A mutual close pays at the reduce, through the one action stream").
 //
 // The vault has no pause: its deploy makes its verification key, permissions and timing unchangeable, so
@@ -15,6 +17,7 @@ import {
 import * as policy from './policy.js';
 import { verifyClearance } from './clearance.js';
 import { NoteWitness, depositLeaf, emptyNoteRoot } from './note-tree.js';
+import { RequestProof, type RequestPublic } from './request.js';
 import { WithdrawalKind, WithdrawalProof, type WithdrawalPublic } from './withdrawal.js';
 
 /** How many recent note-tree roots the vault remembers. */
@@ -42,12 +45,14 @@ export class NullifierSet extends IndexedMerkleMap(NULLIFIER_SET_HEIGHT) {}
  */
 export class PendingEscapes extends IndexedMerkleMap(NULLIFIER_SET_HEIGHT) {}
 
-/** The kinds of the vault's one action stream. 0 is never dispatched; #10–#11 add theirs. */
+/** The kinds of the vault's one action stream. 0 is never dispatched; #11 adds its own. */
 export enum ActionKind {
   deposit = 1,
   mutualClose = 2,
   escape = 3,
   finalize = 4,
+  defeat = 5,
+  raise = 6,
 }
 
 /**
@@ -56,8 +61,8 @@ export enum ActionKind {
  * pays `amount − conceded` to `destination` and the rest of `size` to the treasury. Anyone may finalize
  * once the block time reaches `deadline`.
  *
- * A defeat (#10) is a request proof at `nextNullifier`; a raise (#10) is one at `nullifier` and lifts
- * `conceded`; both must land before `deadline`, and each replaces the record (or finishes it) by key.
+ * Before `deadline`, a defeat (a request proof at `nextNullifier`) finishes the record without paying, and
+ * a raise (a request proof at `nullifier`) replaces it with one whose `conceded` is lifted.
  */
 export class PendingEscape extends Struct({
   nullifier: Field,
@@ -75,6 +80,16 @@ export class PendingEscape extends Struct({
   payout(): UInt64 {
     return this.amount.sub(this.conceded);
   }
+  /**
+   * The concession a raise from `evidence` claiming `claimed` lifts this escape to: `min(claimed, b,
+   * balance)` (ADR 0004), where `b` is the evidence's tier. A subsidised proof's `b` counts as zero, so it
+   * never raises (ADR 0001). The request circuit bounds the tier to 64 bits.
+   */
+  raisedConcession(evidence: RequestPublic, claimed: UInt64): UInt64 {
+    const tier = Provable.if(evidence.subsidised, UInt64, UInt64.zero, UInt64.Unsafe.fromField(evidence.tier));
+    const min = (a: UInt64, b: UInt64) => Provable.if(a.lessThan(b), UInt64, a, b);
+    return min(min(claimed, tier), this.amount);
+  }
 }
 
 /**
@@ -82,7 +97,9 @@ export class PendingEscape extends Struct({
  * - a deposit: `commitment`, `size` and `time` (its deposit time);
  * - a mutual close: `nullifier`, `amount`, `size`, `destination` and `time` (its request time);
  * - an escape: those of a close, plus `nextNullifier`, `validUntil` and `conceded`;
- * - a finalize: the pending escape it finishes, with `time` its deadline.
+ * - a finalize or a defeat: the pending escape it finishes, with `time` its deadline;
+ * - a raise: the pending escape as raised, with `time` its deadline and `commitment` the hash of the
+ *   record it replaces.
  * Every dispatched action has `conceded ≤ amount ≤ size`.
  */
 export class VaultAction extends Struct({
@@ -122,12 +139,23 @@ export class VaultAction extends Struct({
     });
   }
   static finalize(e: PendingEscape): VaultAction {
+    return VaultAction.naming(ActionKind.finalize, e);
+  }
+  static defeat(e: PendingEscape): VaultAction {
+    return VaultAction.naming(ActionKind.defeat, e);
+  }
+  /** Replaces `e` with the record whose concession `evidence` and `claimed` lift it to. */
+  static raise(e: PendingEscape, evidence: RequestPublic, claimed: UInt64): VaultAction {
+    const raised = new PendingEscape({ ...e, conceded: e.raisedConcession(evidence, claimed) });
+    return new VaultAction({ ...VaultAction.naming(ActionKind.raise, raised), commitment: e.hash() });
+  }
+  private static naming(kind: ActionKind, e: PendingEscape): VaultAction {
     return new VaultAction({
-      ...VaultAction.none(), kind: Field(ActionKind.finalize), nullifier: e.nullifier, nextNullifier: e.nextNullifier,
+      ...VaultAction.none(), kind: Field(kind), nullifier: e.nullifier, nextNullifier: e.nextNullifier,
       amount: e.amount, conceded: e.conceded, size: e.size, destination: e.destination, time: e.deadline,
     });
   }
-  /** The escape a finalize names, or the record an escape becomes with `deadline`. */
+  /** The escape a finalize, defeat or raise names, or the record an escape becomes with `deadline`. */
   pendingEscape(deadline: UInt64): PendingEscape {
     return new PendingEscape({
       nullifier: this.nullifier, nextNullifier: this.nextNullifier, amount: this.amount, conceded: this.conceded,
@@ -298,6 +326,55 @@ export class Vault extends SmartContract {
   }
 
   /**
+   * Permissionless, before the escape's deadline. Cancels the pending `escape` with `evidence`, a request
+   * proof at its next nullifier: the note's successor state opened an allowance, so the escape was from
+   * a stale state. A subsidised proof defeats too (ADR 0001). The reduce finishes the escape without
+   * paying; the deposit stays in the vault, and the note goes on from the state the zk edge signs after
+   * that successor, since the escape consumed both its own and the successor's nullifier.
+   */
+  async defeat(escape: PendingEscape, evidence: RequestProof, escapes: PendingEscapes) {
+    this.checkEvidence(evidence);
+    evidence.publicInput.nullifier.assertEquals(escape.nextNullifier, "not the escape's next nullifier");
+    this.checkChallengeable(escape, escapes);
+    batchReducer.dispatch(VaultAction.defeat(escape));
+  }
+
+  /**
+   * Permissionless, before the escape's deadline. Lifts the pending `escape`'s concession to
+   * `min(claimed, b, balance)` with `evidence`, a request proof of tier `b` at its current nullifier
+   * (ADR 0004: the challenger claims the allowance's recorded charge, or `b` if it never closed). Refused
+   * unless that is more than the concession already is; a subsidised proof never raises (ADR 0001). The
+   * reduce replaces the record.
+   */
+  async raise(escape: PendingEscape, evidence: RequestProof, claimed: UInt64, escapes: PendingEscapes) {
+    this.checkEvidence(evidence);
+    evidence.publicInput.nullifier.assertEquals(escape.nullifier, "not the escape's nullifier");
+    this.checkChallengeable(escape, escapes);
+    const action = VaultAction.raise(escape, evidence.publicInput, claimed);
+    action.conceded.assertGreaterThan(escape.conceded, 'raise would not increase the concession');
+    batchReducer.dispatch(action);
+  }
+
+  /**
+   * A valid request proof under the vault's state key. Its root need not be in the ring: a challenger's
+   * evidence may be older than the ring, and only the note's holder can prove at its nullifiers.
+   */
+  private checkEvidence(evidence: RequestProof) {
+    evidence.verify();
+    const stateKey = this.stateKey.getAndRequireEquals();
+    stateKey.isEmpty().assertFalse('vault not set up');
+    evidence.publicInput.vault.equals(stateKey).assertTrue('not the vault state key');
+  }
+
+  /** `escape` is pending as named, and the block time is before its deadline. */
+  private checkChallengeable(escape: PendingEscape, escapes: PendingEscapes) {
+    escapes.root.assertEquals(this.pendingEscapesRoot.getAndRequireEquals(), 'not the vault pending escapes');
+    escapes.getOption(escape.nullifier).orElse(0n).assertEquals(escape.hash(), 'no such pending escape');
+    // A recorded deadline is a full window after a reduce's block time, so never zero.
+    this.network.timestamp.requireBetween(UInt64.zero, escape.deadline.sub(1));
+  }
+
+  /**
    * Permissionless. Folds up to a batch of pending actions:
    * - a deposit becomes the next note;
    * - a mutual close consumes its nullifier and pays `amount` to its destination and `size − amount` to
@@ -305,9 +382,12 @@ export class Vault extends SmartContract {
    * - an escape consumes its current and next nullifiers and is recorded as pending, with a deadline a
    *   full challenge window after this reduce lands;
    * - a finalize finishes its pending escape and pays `amount − conceded` to the destination and the
-   *   rest of `size` to the treasury.
-   * A close or escape with a nullifier already spent, in the set or earlier in the batch, and a finalize
-   * of an escape no longer pending as named, are skipped without paying and without failing.
+   *   rest of `size` to the treasury;
+   * - a defeat finishes its pending escape without paying;
+   * - a raise replaces its pending escape with the raised record.
+   * A close or escape with a nullifier already spent, in the set or earlier in the batch, and a finalize,
+   * defeat or raise of an escape no longer pending as named, are skipped without paying and without failing.
+   * So of a raise, a defeat and a finalize of one escape in one batch, only the first applies.
    *
    * `now` pins the block time to within a slot after it.
    */
@@ -335,6 +415,8 @@ export class Vault extends SmartContract {
       const isClose = isDummy.not().and(action.kind.equals(ActionKind.mutualClose));
       const isEscape = isDummy.not().and(action.kind.equals(ActionKind.escape));
       const isFinalize = isDummy.not().and(action.kind.equals(ActionKind.finalize));
+      const isDefeat = isDummy.not().and(action.kind.equals(ActionKind.defeat));
+      const isRaise = isDummy.not().and(action.kind.equals(ActionKind.raise));
 
       const witness = Provable.witness(NoteWitness, () => witnesses.get()[i]);
       // The slot at `next` must be empty under the current root.
@@ -358,11 +440,17 @@ export class Vault extends SmartContract {
       nullifiers.setIf(closes.or(recorded), current, Field(1));
       nullifiers.setIf(recorded, following, Field(1));
 
-      // An escape records its pending escape; a finalize finishes the one it names, if still pending as named.
+      // An escape records its pending escape. A finalize or a defeat finishes the one it names, and a raise
+      // replaces it with the raised record, each only if that escape is still pending as named: a finalize
+      // or a defeat names the record itself, a raise names it by hash.
       const record = action.pendingEscape(Provable.if(isEscape, UInt64, deadline, action.time));
-      const key = Provable.if(isEscape.or(isFinalize), action.nullifier, Field(1));
-      const finalizes = isFinalize.and(escapes.getOption(key).orElse(0n).equals(record.hash()));
-      escapes.setIf(recorded.or(finalizes), key, Provable.if(recorded, record.hash(), Field(0)));
+      const recordHash = record.hash();
+      const key = Provable.if(isEscape.or(isFinalize).or(isDefeat).or(isRaise), action.nullifier, Field(1));
+      const named = Provable.if(isRaise, action.commitment, recordHash);
+      const stands = escapes.getOption(key).orElse(0n).equals(named);
+      const finalizes = isFinalize.and(stands);
+      const writes = recorded.or(isRaise.and(stands));
+      escapes.setIf(writes.or(finalizes).or(isDefeat.and(stands)), key, Provable.if(writes, recordHash, Field(0)));
 
       // A close pays its balance, a finalize its balance less the concession; other kinds pay nothing.
       const pays = closes.or(finalizes);
@@ -395,6 +483,8 @@ declareMethods(Vault, {
   mutualClose: [WithdrawalProof, Signature, NullifierSet],
   escape: [WithdrawalProof, NullifierSet],
   finalize: [PendingEscape, PendingEscapes],
+  defeat: [PendingEscape, RequestProof, PendingEscapes],
+  raise: [PendingEscape, RequestProof, UInt64, PendingEscapes],
   reduce: [VaultBatch, VaultBatchProof, Unconstrained.provable, NullifierSet, PendingEscapes, UInt64],
 } as Record<string, any[]>);
 

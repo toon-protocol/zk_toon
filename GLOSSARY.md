@@ -120,6 +120,20 @@ The 2 days after the vault records an escape, during which a challenger may defe
 Only after it ends can anyone finalize the escape.
 _Avoid_: Dispute period, timeout
 
+**Defeat**:
+Cancelling an escape, within its challenge window, with a request proof at its next nullifier: the
+note's successor state already opened an allowance, so the escape was from a stale state. Nothing is
+paid and the deposit stays in the vault. The escape consumed both nullifiers, so the note goes on from
+the state the zk edge signs after that successor.
+_Avoid_: Cancel (unqualified), slash, veto
+
+**Raise**:
+Lifting an escape's concession, within its challenge window, to `min(claimed, b, balance)` with a
+request proof of tier `b` at its current nullifier, where `claimed` is the allowance's recorded charge
+or `b` if it never closed. Refused unless it increases the concession, and never from a subsidised
+proof.
+_Avoid_: Penalty, top-up, dispute
+
 **Ownership proof**:
 A proof, shown only to the zk edge, that the payer holds a zk note's current state. The vault
 refuses it.

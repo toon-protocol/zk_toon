@@ -3,10 +3,11 @@ import { Bool, Field, PrivateKey, PublicKey, Scalar, Signature } from 'o1js';
 import { commit } from './balance.js';
 import { NoteTree } from './note-tree.js';
 import { DEPOSIT_SIZES, expiryOf } from './policy.js';
-import { commitSecret, genesisAnchor, nextAnchor, nullifier } from './primitives.js';
+import { commitSecret, nextAnchor, nullifier } from './primitives.js';
 import { stateFields } from './state.js';
 import { WithdrawalKind, WithdrawalPrivate, WithdrawalPublic } from './withdrawal.js';
 import { clearanceFields, signClearance } from './clearance.js';
+import { stateChain } from './request-sample.js';
 
 export interface WithdrawalOptions {
   kind: WithdrawalKind;
@@ -18,6 +19,8 @@ export interface WithdrawalOptions {
   requestTime: bigint;
   /** A signed state; otherwise the note is at genesis and its balance is the deposit size. */
   signed: boolean;
+  /** A signed state's place in the note's chain of states: 1 (the default) is genesis's successor. */
+  step?: number;
   balance: bigint;
   blinding: bigint;
   stateKey: PrivateKey;
@@ -33,22 +36,14 @@ export const ESCAPE_VALIDITY_MS = 10n * 60_000n;
 /** Inputs for the note at `o.index` of `tree`, which must hold that note. */
 export function buildWithdrawal(tree: NoteTree, o: WithdrawalOptions) {
   const secret = Field(o.secret);
-  const commitment = commitSecret(secret);
   const vault = o.stateKey.toPublicKey();
-  const genesis = genesisAnchor(commitment);
   const balance = o.signed ? o.balance : o.size;
   const stateCommitment = commit(Scalar.from(balance), Scalar.from(o.blinding));
 
-  let anchor = genesis;
-  let prevNullifier = Field(0);
-  let prevAnchor = Field(0);
-  let signature = Signature.create(o.stateKey, [Field(0)]);
-  if (o.signed) {
-    prevAnchor = genesis;
-    prevNullifier = nullifier(secret, prevAnchor);
-    anchor = nextAnchor(prevNullifier);
-    signature = Signature.create(o.stateKey, stateFields({ vault, commitment: stateCommitment, anchor }));
-  }
+  const { anchor, prevNullifier, prevAnchor } = stateChain(secret, o.signed ? o.step ?? 1 : 0);
+  const signature = o.signed
+    ? Signature.create(o.stateKey, stateFields({ vault, commitment: stateCommitment, anchor }))
+    : Signature.create(o.stateKey, [Field(0)]);
 
   const current = nullifier(secret, anchor);
   const isEscape = o.kind === WithdrawalKind.escape;

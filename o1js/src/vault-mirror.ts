@@ -1,6 +1,6 @@
 // The vault's shared state, mirrored off chain: the note tree, the nullifier set and the pending escapes,
 // advanced as a reduce advances them. A reduce caller (and the tests) builds each reduce's inputs from it;
-// a finalize caller and a challenger read pending escapes from it.
+// a finalize caller and a challenger read pending escapes from it, and it follows their raises and defeats.
 import { Field, UInt64 } from 'o1js';
 import { NoteTree, NoteWitness } from './note-tree.js';
 import { CHALLENGE_WINDOW_MS } from './policy.js';
@@ -60,11 +60,18 @@ export class VaultMirror {
         const record = a.pendingEscape(deadline);
         this.escapes.insert(a.nullifier, record.hash());
         this.records.set(a.nullifier.toBigInt(), record);
-      } else if (kind === ActionKind.finalize) {
+      } else if (kind === ActionKind.finalize || kind === ActionKind.defeat || kind === ActionKind.raise) {
+        // A raise names the record it replaces by hash; a finalize or a defeat names the record itself.
         const record = a.pendingEscape(a.time);
-        if (this.escapes.getOption(a.nullifier).orElse(0n).equals(record.hash()).toBoolean()) {
-          this.escapes.set(a.nullifier, 0n);
-          this.records.delete(a.nullifier.toBigInt());
+        const named = kind === ActionKind.raise ? a.commitment : record.hash();
+        if (this.escapes.getOption(a.nullifier).orElse(0n).equals(named).toBoolean()) {
+          if (kind === ActionKind.raise) {
+            this.escapes.set(a.nullifier, record.hash());
+            this.records.set(a.nullifier.toBigInt(), record);
+          } else {
+            this.escapes.set(a.nullifier, 0n);
+            this.records.delete(a.nullifier.toBigInt());
+          }
         }
       }
       return w;

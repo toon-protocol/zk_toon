@@ -17,6 +17,8 @@ export interface SampleOptions {
   tier: bigint;
   /** A signed state; otherwise the note is at genesis. */
   signed: boolean;
+  /** A signed state's place in the note's chain of states: 1 (the default) is genesis's successor. */
+  step?: number;
   /** Balance and blinding of a signed state; a genesis state's balance is the deposit size. */
   balance: bigint;
   blinding: bigint;
@@ -49,31 +51,43 @@ export interface Sample {
   context: RequestContext;
 }
 
+/**
+ * The anchor of a note's state `step` steps after genesis, and the nullifier and anchor of the state
+ * before it (zero at genesis): each state's anchor follows from the nullifier its predecessor spent.
+ */
+export function stateChain(secret: Field, step: number) {
+  let anchor = genesisAnchor(commitSecret(secret));
+  let prevNullifier = F(0n);
+  let prevAnchor = F(0n);
+  for (let i = 0; i < step; i++) {
+    prevAnchor = anchor;
+    prevNullifier = nullifier(secret, prevAnchor);
+    anchor = nextAnchor(prevNullifier);
+  }
+  return { anchor, prevNullifier, prevAnchor };
+}
+
 export function buildSample(o: SampleOptions): Sample {
-  const secret = F(o.secret);
-  const commitment = commitSecret(secret);
   const tree = new NoteTree();
   for (let i = 0; i < o.before; i++) {
     tree.append({ commitment: commitSecret(F(BigInt(i + 1))), size: F(DEPOSIT_SIZES[0]), depositTime: F(o.depositTime) });
   }
-  const index = tree.append({ commitment, size: F(o.size), depositTime: F(o.depositTime) });
+  const index = tree.append({ commitment: commitSecret(F(o.secret)), size: F(o.size), depositTime: F(o.depositTime) });
+  return buildRequest(tree, index, o);
+}
 
+/** Inputs for the note at `index` of `tree`, which must hold that note; `o.before` is ignored. */
+export function buildRequest(tree: NoteTree, index: bigint, o: SampleOptions): Sample {
+  const secret = F(o.secret);
   const vaultKey = PrivateKey.fromBigInt(o.vaultSecret);
   const vault = vaultKey.toPublicKey();
-  const genesis = genesisAnchor(commitment);
   const balance = o.signed ? o.balance : o.size;
   const stateCommitment = commit(sc(balance), sc(o.blinding));
 
-  let anchor = genesis;
-  let prevNullifier = F(0n);
-  let prevAnchor = F(0n);
-  let signature = Signature.create(vaultKey, [F(0n)]);
-  if (o.signed) {
-    prevAnchor = genesis;
-    prevNullifier = nullifier(secret, prevAnchor);
-    anchor = nextAnchor(prevNullifier);
-    signature = Signature.create(vaultKey, stateFields({ vault, commitment: stateCommitment, anchor }));
-  }
+  const { anchor, prevNullifier, prevAnchor } = stateChain(secret, o.signed ? o.step ?? 1 : 0);
+  const signature = o.signed
+    ? Signature.create(vaultKey, stateFields({ vault, commitment: stateCommitment, anchor }))
+    : Signature.create(vaultKey, [F(0n)]);
 
   const context: RequestContext = {
     edge: vault.x, sessionKeyX: F(o.ctx.sessionKeyX), sessionKeyIsOdd: Bool(o.ctx.sessionKeyIsOdd),

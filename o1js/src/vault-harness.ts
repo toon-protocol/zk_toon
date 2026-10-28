@@ -1,6 +1,6 @@
 // A test harness for the vault on o1js's LocalBlockchain: fresh vaults with their own state key and
-// off-chain mirror, and helpers that deposit, close, escape, finalize and reduce as a payer, the zk
-// edge or a keeper would. Proofs are off unless a test turns them on.
+// off-chain mirror, and helpers that deposit, close, escape, finalize, defeat, raise and reduce as a payer,
+// the zk edge, its challenger or a keeper would. Proofs are off unless a test turns them on.
 import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, Signature, UInt64, Unconstrained } from 'o1js';
 import * as policy from './policy.js';
 import { signClearance } from './clearance.js';
@@ -9,6 +9,8 @@ import { PendingEscape, Vault, VaultAction, batchReducer } from './vault.js';
 import { VaultMirror } from './vault-mirror.js';
 import { WithdrawalKind, WithdrawalProgram, WithdrawalProof, WithdrawalPublic } from './withdrawal.js';
 import { buildWithdrawal } from './withdrawal-sample.js';
+import { RequestProgram, RequestProof } from './request.js';
+import { buildRequest, defaultSample } from './request-sample.js';
 
 type Local = Awaited<ReturnType<typeof Mina.LocalBlockchain>>;
 type Account = Local['testAccounts'][number];
@@ -62,6 +64,14 @@ export function vaultHarness(Local: Local) {
       Mina.transaction(from, async () => {
         await vault.finalize(escape, mirror.escapes.clone());
       });
+    const defeatTx = (escape: PendingEscape, evidence: RequestProof, from: Account = payer) =>
+      Mina.transaction(from, async () => {
+        await vault.defeat(escape, evidence, mirror.escapes.clone());
+      });
+    const raiseTx = (escape: PendingEscape, evidence: RequestProof, claimed: bigint, from: Account = payer) =>
+      Mina.transaction(from, async () => {
+        await vault.raise(escape, evidence, UInt64.from(claimed), mirror.escapes.clone());
+      });
 
     batchReducer.setContractInstance(vault);
     const tx = await Mina.transaction(deployer, async () => {
@@ -72,7 +82,7 @@ export function vaultHarness(Local: Local) {
     await tx.sign([deployer.key, zkappKey]).send();
 
     const h = {
-      vault, zkappKey, stateKey, treasury, mirror, send, clearance, closeTx, escapeTx, finalizeTx,
+      vault, zkappKey, stateKey, treasury, mirror, send, clearance, closeTx, escapeTx, finalizeTx, defeatTx, raiseTx,
       async setup(keys = [zkappKey]) {
         await send(
           await Mina.transaction(payer, async () => {
@@ -112,7 +122,7 @@ export function vaultHarness(Local: Local) {
         note: Note,
         o: {
           destination?: PublicKey; signed?: boolean; balance?: bigint; requestTime?: bigint; kind?: WithdrawalKind;
-          key?: PrivateKey; conceded?: bigint; validUntil?: bigint;
+          key?: PrivateKey; conceded?: bigint; validUntil?: bigint; step?: number;
         } = {}
       ) {
         const index = mirror.indexOf(commitSecret(Field(note.secret)));
@@ -121,7 +131,7 @@ export function vaultHarness(Local: Local) {
           kind, secret: note.secret, index, size: note.size, depositTime: note.depositTime,
           requestTime: o.requestTime ?? now(), signed: o.signed ?? false, balance: o.balance ?? 0n,
           blinding: 99n, stateKey: o.key ?? stateKey, destination: o.destination ?? alice,
-          conceded: o.conceded, validUntil: o.validUntil,
+          conceded: o.conceded, validUntil: o.validUntil, step: o.step,
         });
         const method = {
           [WithdrawalKind.mutualClose]: WithdrawalProgram.mutualClose,
@@ -129,6 +139,21 @@ export function vaultHarness(Local: Local) {
           [WithdrawalKind.ownership]: WithdrawalProgram.ownership,
         }[kind];
         const { proof } = await method(pub, priv);
+        return proof;
+      },
+      /**
+       * A request proof of `note`'s state at `step` (0 is genesis, the default 1 its successor) with
+       * `balance`, opening an allowance of `tier` now: the evidence a challenger holds.
+       */
+      async requestProof(note: Note, o: { step?: number; balance?: bigint; tier: bigint; foreignKey?: boolean }) {
+        const step = o.step ?? 1;
+        const index = mirror.indexOf(commitSecret(Field(note.secret)));
+        const { pub, priv } = buildRequest(mirror.tree, index, {
+          ...defaultSample(), secret: note.secret, size: note.size, depositTime: note.depositTime, requestTime: now(),
+          tier: o.tier, signed: step > 0, step, balance: o.balance ?? 3n * 1_000_000_000n,
+          vaultSecret: (o.foreignKey ? PrivateKey.random() : stateKey).toBigInt(),
+        });
+        const { proof } = await RequestProgram.unsubsidised(pub, priv);
         return proof;
       },
       /** Sends a mutual close and records its action in the mirror. */
@@ -147,6 +172,20 @@ export function vaultHarness(Local: Local) {
         if (!escape) throw Error('no pending escape at that nullifier in the mirror');
         await send(await finalizeTx(escape, from), [], from);
         mirror.dispatched(VaultAction.finalize(escape));
+      },
+      /** Sends a defeat of the pending escape at `nullifier` and records its action in the mirror. */
+      async defeat(nullifier: Field, evidence: RequestProof, from: Account = payer) {
+        const escape = mirror.pendingEscape(nullifier);
+        if (!escape) throw Error('no pending escape at that nullifier in the mirror');
+        await send(await defeatTx(escape, evidence, from), [], from);
+        mirror.dispatched(VaultAction.defeat(escape));
+      },
+      /** Sends a raise of the pending escape at `nullifier` and records its action in the mirror. */
+      async raise(nullifier: Field, evidence: RequestProof, claimed: bigint, from: Account = payer) {
+        const escape = mirror.pendingEscape(nullifier);
+        if (!escape) throw Error('no pending escape at that nullifier in the mirror');
+        await send(await raiseTx(escape, evidence, claimed, from), [], from);
+        mirror.dispatched(VaultAction.raise(escape, evidence.publicInput, UInt64.from(claimed)));
       },
     };
     if (setup) await h.setup();
