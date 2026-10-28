@@ -1,5 +1,14 @@
 //! Every derived value of a zk note. Mirrors `o1js/src/primitives.ts` byte for byte and is pinned
 //! by `test-vectors/zk-note.json`. No I/O, no clock.
+//!
+//! # Stability
+//!
+//! The API and the derivations may change until the circuit issues (#7–#12) land; [`auth_tag`]
+//! is the most likely to move (#7, #12). Pin this crate by commit, not by branch.
+//!
+//! `test-vectors/zk-note.json` is the parity contract: an implementation in another language or
+//! crate agrees with this one when it matches every entry in that file, refusing the
+//! mainnet-signed state as [`state`] does.
 
 pub mod balance;
 pub mod policy;
