@@ -11,6 +11,7 @@ export const TAGS = {
   anchor: 'toon.zk.anchor.v1',
   authTag: 'toon.zk.auth-tag.v1',
   periodNullifier: 'toon.zk.period-nullifier.v1',
+  clearance: 'toon.zk.clearance.v1',
 } as const;
 
 export function tagToBigint(tag: string): bigint {

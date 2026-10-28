@@ -18,7 +18,10 @@
 //! - [`RequestContext::edge`] is the x-coordinate of the vault key the zk edge signs state under;
 //! - a `requestTime` is refused when it is more than [`policy::REQUEST_MAX_AGE_MS`] behind or
 //!   [`policy::REQUEST_MAX_LEAD_MS`] ahead of the zk edge's clock ([`policy::is_request_time_fresh`]);
-//! - subsidised proofs are refused until connector#1581.
+//! - subsidised proofs are refused until connector#1581;
+//! - a [`clearance`] is signed by the state key under the same rule as a state message, and the
+//!   withdrawal proof ([`withdrawal`]) has its own verification key, pinned apart from the request
+//!   proof's (connector#1556).
 
 /// `test-vectors/zk-note.json`, the parity contract. It is read from outside the crate directory,
 /// which a git dependency has but a `cargo package` tarball would not.
@@ -27,6 +30,8 @@ pub const VECTORS_JSON: &str = include_str!("../../test-vectors/zk-note.json");
 pub mod balance;
 pub mod policy;
 pub mod state;
+pub mod clearance;
+pub mod withdrawal;
 
 use ark_ff::PrimeField;
 use mina_curves::pasta::Fp;
@@ -46,6 +51,8 @@ pub mod tags {
     pub const ANCHOR: &str = "toon.zk.anchor.v1";
     pub const AUTH_TAG: &str = "toon.zk.auth-tag.v1";
     pub const PERIOD_NULLIFIER: &str = "toon.zk.period-nullifier.v1";
+    /// Leads the clearance message, so a clearance never passes as a state message.
+    pub const CLEARANCE: &str = "toon.zk.clearance.v1";
 }
 
 pub fn tag_to_field(tag: &str) -> Field {

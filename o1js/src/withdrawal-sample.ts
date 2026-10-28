@@ -1,0 +1,123 @@
+// Builds withdrawal-proof inputs outside any circuit, for the tests, the vault tests and the shared vectors.
+import { Bool, Field, PrivateKey, PublicKey, Scalar, Signature } from 'o1js';
+import { commit } from './balance.js';
+import { NoteTree } from './note-tree.js';
+import { DEPOSIT_SIZES, expiryOf } from './policy.js';
+import { commitSecret, genesisAnchor, nextAnchor, nullifier } from './primitives.js';
+import { stateFields } from './state.js';
+import { WithdrawalKind, WithdrawalPrivate, WithdrawalPublic } from './withdrawal.js';
+import { clearanceFields, signClearance } from './clearance.js';
+
+export interface WithdrawalOptions {
+  kind: WithdrawalKind;
+  secret: bigint;
+  /** The note's index in `tree`. */
+  index: bigint;
+  size: bigint;
+  depositTime: bigint;
+  requestTime: bigint;
+  /** A signed state; otherwise the note is at genesis and its balance is the deposit size. */
+  signed: boolean;
+  balance: bigint;
+  blinding: bigint;
+  stateKey: PrivateKey;
+  destination: PublicKey;
+}
+
+/** Inputs for the note at `o.index` of `tree`, which must hold that note. */
+export function buildWithdrawal(tree: NoteTree, o: WithdrawalOptions) {
+  const secret = Field(o.secret);
+  const commitment = commitSecret(secret);
+  const vault = o.stateKey.toPublicKey();
+  const genesis = genesisAnchor(commitment);
+  const balance = o.signed ? o.balance : o.size;
+  const stateCommitment = commit(Scalar.from(balance), Scalar.from(o.blinding));
+
+  let anchor = genesis;
+  let prevNullifier = Field(0);
+  let prevAnchor = Field(0);
+  let signature = Signature.create(o.stateKey, [Field(0)]);
+  if (o.signed) {
+    prevAnchor = genesis;
+    prevNullifier = nullifier(secret, prevAnchor);
+    anchor = nextAnchor(prevNullifier);
+    signature = Signature.create(o.stateKey, stateFields({ vault, commitment: stateCommitment, anchor }));
+  }
+
+  const pub = new WithdrawalPublic({
+    kind: Field(o.kind), vault, root: tree.root, nullifier: nullifier(secret, anchor), nextNullifier: Field(0),
+    amount: Field(balance), size: Field(o.size), destination: o.destination, validUntil: Field(0),
+    requestTime: Field(o.requestTime),
+  });
+  const priv = new WithdrawalPrivate({
+    secret, index: Field(o.index), depositTime: Field(o.depositTime), expiry: Field(expiryOf(o.depositTime)),
+    path: tree.witness(o.index), blinding: Scalar.from(o.blinding), anchor, isGenesis: Bool(!o.signed),
+    signature, prevNullifier, prevAnchor,
+  });
+  return { pub, priv };
+}
+
+/** A tree holding `before` other deposits, then the sample's note. */
+export function sampleTree(o: { secret: bigint; size: bigint; depositTime: bigint }, before: number) {
+  const tree = new NoteTree();
+  for (let i = 0; i < before; i++) {
+    tree.append({ commitment: commitSecret(Field(BigInt(i + 1))), size: Field(DEPOSIT_SIZES[0]), depositTime: Field(o.depositTime) });
+  }
+  const index = tree.append({ commitment: commitSecret(Field(o.secret)), size: Field(o.size), depositTime: Field(o.depositTime) });
+  return { tree, index };
+}
+
+export const defaultWithdrawal = (kind = WithdrawalKind.mutualClose): Omit<WithdrawalOptions, 'index'> => {
+  const depositTime = 1_700_000_000_000n;
+  return {
+    kind, secret: 123456789012345678901234567890n, size: DEPOSIT_SIZES[0], depositTime,
+    requestTime: depositTime + 8n * 86_400_000n, signed: false, balance: 4_000_000_000n, blinding: 777_000_111n,
+    stateKey: PrivateKey.fromBigInt(1n), destination: PrivateKey.fromBigInt(7n).toPublicKey(),
+  };
+};
+
+/** A sample on a tree of `before` other deposits. */
+export function withdrawalSample(over: Partial<Omit<WithdrawalOptions, 'index'>> = {}, before = 3) {
+  const o = { ...defaultWithdrawal(), ...over };
+  const { tree, index } = sampleTree(o, before);
+  return { ...buildWithdrawal(tree, { ...o, index }), tree, options: { ...o, index } };
+}
+
+/** The samples the shared vector file pins: a mutual close of a signed state, and an ownership proof at genesis. */
+export const WITHDRAWAL_VECTOR_SAMPLES: { options: Omit<WithdrawalOptions, 'index'>; before: number }[] = [
+  { options: { ...defaultWithdrawal(WithdrawalKind.mutualClose), signed: true }, before: 5 },
+  { options: { ...defaultWithdrawal(WithdrawalKind.ownership), destination: PrivateKey.fromBigInt(8n).toPublicKey() }, before: 3 },
+];
+
+/**
+ * A sample's public inputs, their field layout, and the private values Rust needs to recompute them.
+ * A mutual close also carries the clearance the zk edge signs for it.
+ */
+export function withdrawalVector(sample: { options: Omit<WithdrawalOptions, 'index'>; before: number }) {
+  const { pub, priv, options: o } = withdrawalSample(sample.options, sample.before);
+  const str = (f: Field) => f.toString();
+  const key = (k: PublicKey) => ({ x: str(k.x), isOdd: str(k.isOdd.toField()) });
+  const clearance = (() => {
+    if (o.kind !== WithdrawalKind.mutualClose) return null;
+    const m = { stateKey: pub.vault, nullifier: pub.nullifier, destination: pub.destination };
+    const sig = signClearance(o.stateKey, m);
+    return { fields: clearanceFields(m).map(str), signature: { r: str(sig.r), s: sig.s.toBigInt().toString() } };
+  })();
+  return {
+    kind: WithdrawalKind[o.kind],
+    public: {
+      kind: str(pub.kind), vault: key(pub.vault), root: str(pub.root), nullifier: str(pub.nullifier),
+      nextNullifier: str(pub.nextNullifier), amount: str(pub.amount), size: str(pub.size),
+      destination: key(pub.destination), validUntil: str(pub.validUntil), requestTime: str(pub.requestTime),
+    },
+    fields: WithdrawalPublic.toFields(pub).map(str),
+    private: {
+      stateKeySecret: o.stateKey.toBigInt().toString(),
+      secret: str(priv.secret), index: str(priv.index), depositTime: str(priv.depositTime), expiry: str(priv.expiry),
+      blinding: o.blinding.toString(), anchor: str(priv.anchor), isGenesis: priv.isGenesis.toBoolean(),
+      signature: { r: str(priv.signature.r), s: priv.signature.s.toBigInt().toString() },
+      prevNullifier: str(priv.prevNullifier), prevAnchor: str(priv.prevAnchor),
+    },
+    clearance,
+  };
+}

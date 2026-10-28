@@ -1,14 +1,10 @@
 // The unsubsidised request proof: a payer proves that some unspent note in the vault can cover tier `b`,
 // without revealing which note. Every derivation comes from primitives.ts, balance.ts and state.ts.
-import { Bool, Field, Group, Provable, PublicKey, Scalar, Signature, Struct, ZkProgram } from 'o1js';
-import { commit, rerandomise } from './balance.js';
+import { Bool, Field, Group, PublicKey, Scalar, Signature, Struct, ZkProgram } from 'o1js';
+import { rerandomise } from './balance.js';
 import { NoteWitness } from './note-tree.js';
-import { expiryOfField } from './policy.js';
-import { authTag, commitSecret, genesisAnchor, leaf, nextAnchor, nullifier } from './primitives.js';
-import { verifyState } from './state.js';
-
-/** Amounts and times are bounded to 64 bits so no comparison can wrap the field. */
-const U64_BITS = 64;
+import { U64_BITS, checkNoteState } from './note-state.js';
+import { authTag } from './primitives.js';
 
 /**
  * The public inputs, in the spec's order (#2). The connector reads these fields, and the subsidised
@@ -54,38 +50,13 @@ export class RequestPrivate extends Struct({
 
 /** The checks shared by the request proof's methods. `pub.tier` is the tier `b` the balance must cover. */
 function checkRequest(pub: RequestPublic, priv: RequestPrivate) {
-  // Membership: the leaf is in the tree at `root`, at its own index, and its expiry follows from its deposit time.
-  const commitment = commitSecret(priv.secret);
-  priv.expiry.assertEquals(expiryOfField(priv.depositTime));
-  priv.depositTime.toBits(U64_BITS);
-  priv.expiry.toBits(U64_BITS);
-  priv.path.calculateRoot(leaf(priv.index, commitment, priv.size, priv.depositTime, priv.expiry)).assertEquals(pub.root);
-  priv.path.calculateIndex().assertEquals(priv.index);
-
-  // Not expired: requestTime < expiry.
-  pub.requestTime.toBits(U64_BITS);
-  priv.expiry.sub(pub.requestTime).sub(1).toBits(U64_BITS);
+  const stateCommitment = checkNoteState(pub, priv);
 
   // The balance covers `b`.
-  const balanceBits = priv.balance.toBits(U64_BITS);
   pub.tier.toBits(U64_BITS);
   priv.balance.sub(pub.tier).toBits(U64_BITS);
-  const stateCommitment = commit(Scalar.fromBits(balanceBits), priv.blinding);
 
-  // The state is the genesis state, or one the vault signed as this note's next state.
-  const genesisOk = priv.isGenesis
-    .and(priv.anchor.equals(genesisAnchor(commitment)))
-    .and(priv.balance.equals(priv.size));
-  const signedOk = priv.isGenesis
-    .not()
-    .and(verifyState(priv.signature, { vault: pub.vault, commitment: stateCommitment, anchor: priv.anchor }))
-    .and(priv.anchor.equals(nextAnchor(priv.prevNullifier)))
-    .and(priv.prevNullifier.equals(nullifier(priv.secret, priv.prevAnchor)));
-  genesisOk.or(signedOk).assertTrue();
-
-  const n = nullifier(priv.secret, priv.anchor);
-  n.assertEquals(pub.nullifier);
-  authTag(n, {
+  authTag(pub.nullifier, {
     edge: priv.edge, sessionKeyX: priv.sessionKeyX, sessionKeyIsOdd: priv.sessionKeyIsOdd,
     tier: pub.tier, expiry: priv.requestExpiry,
   }).assertEquals(pub.tag);

@@ -5,6 +5,8 @@ import * as policy from './policy.js';
 import * as bal from './balance.js';
 import { VECTOR_SAMPLES, buildSample, requestVector } from './request-sample.js';
 import { stateFields, type StateMessage } from './state.js';
+import { clearanceFields, signClearance, type ClearanceMessage } from './clearance.js';
+import { WITHDRAWAL_VECTOR_SAMPLES, withdrawalVector } from './withdrawal-sample.js';
 
 const s = (f: Field) => f.toString();
 const F = (n: bigint | number | string) => Field(n);
@@ -226,6 +228,34 @@ export function buildVectors() {
 
   const requestProofs = VECTOR_SAMPLES.map((o) => requestVector(buildSample(o), o));
 
+  // Clearances: the state keys of the state cases, over chain nullifiers, to two destinations.
+  const destinations = [7n, 8n].map((d) => PrivateKey.fromBigInt(d).toPublicKey());
+  const clearanceCases = [
+    { secret: VAULT_SECRETS[0], nullifier: F(chain[0].nullifier), destination: destinations[0] },
+    { secret: VAULT_SECRETS[0], nullifier: F(chain[0].nullifier), destination: destinations[1] },
+    { secret: VAULT_SECRETS[1], nullifier: F(chain[1].nullifier), destination: destinations[0] },
+  ].map((c) => {
+    const key = PrivateKey.fromBigInt(c.secret);
+    const msg: ClearanceMessage = { stateKey: key.toPublicKey(), nullifier: c.nullifier, destination: c.destination };
+    const fields = clearanceFields(msg);
+    const sig = signClearance(key, msg);
+    return {
+      secret: c.secret.toString(),
+      stateKey: { x: s(msg.stateKey.x), isOdd: s(msg.stateKey.isOdd.toField()) },
+      nullifier: s(c.nullifier),
+      destination: { x: s(c.destination.x), isOdd: s(c.destination.isOdd.toField()) },
+      fields: fields.map(s), signature: { r: s(sig.r), s: sig.s.toBigInt().toString() },
+    };
+  });
+  const mainnetClearance = (() => {
+    const base = clearanceCases[0];
+    const sig = signMainnet(BigInt(base.secret), base.fields.map(F));
+    return { ...base, signature: { r: s(sig.r), s: sig.s.toString() }, networkId: 'mainnet' };
+  })();
+  const clearances = { networkId: 'devnet', cases: clearanceCases, mainnetClearance };
+
+  const withdrawalProofs = WITHDRAWAL_VECTOR_SAMPLES.map(withdrawalVector);
+
   return {
     description:
       'Shared zk-note test vectors. Field elements are decimal strings; times are milliseconds. ' +
@@ -233,6 +263,6 @@ export function buildVectors() {
     tags, policy: policyJson, poseidon, domainSeparation, commitment, leaves, nullifiers,
     authTags, periodNullifiers, periods, ages, requestTimes, membership,
     generators, balanceCommitments: commitments, rerandomised, charged, stateSignatures,
-    requestProofs,
+    requestProofs, clearances, withdrawalProofs,
   };
 }
