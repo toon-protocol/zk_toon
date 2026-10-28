@@ -53,7 +53,7 @@ fn flag(f: Field, name: &'static str) -> Result<bool, RequestPublicError> {
     }
 }
 
-fn amount(f: Field, name: &'static str) -> Result<u64, RequestPublicError> {
+fn as_u64(f: Field, name: &'static str) -> Result<u64, RequestPublicError> {
     let limbs = f.into_bigint().0;
     if limbs[1..].iter().any(|l| *l != 0) {
         return Err(RequestPublicError::NotU64(name));
@@ -74,8 +74,8 @@ impl RequestPublic {
             vault_x,
             vault_is_odd: flag(vault_odd, "vault.isOdd")?,
             root,
-            request_time: amount(request_time, "requestTime")?,
-            tier: amount(tier, "tier")?,
+            request_time: as_u64(request_time, "requestTime")?,
+            tier: as_u64(tier, "tier")?,
             nullifier,
             tag,
             commitment: Point { x: cx, y: cy },
