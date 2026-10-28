@@ -1,0 +1,18 @@
+--- node_modules/o1js/dist/node/lib/provable/core/exists.js.orig	2026-10-28 12:20:52.615940550 -0400
++++ node_modules/o1js/dist/node/lib/provable/core/exists.js	2026-10-28 12:20:52.633940911 -0400
+@@ -29,8 +29,15 @@
+     // step outside prover block and create vars: prover case
+     let fieldVars = finish(MlOption(inputValues));
+     let vars = MlArray.mapFrom(fieldVars, createVarField);
++    spikeTrace(vars, size);
+     return TupleN.fromArray(size, vars);
+ }
++function spikeTrace(vars, size) {
++    if (!process.env.SPIKE_DUMP || size === 0) return;
++    const v = vars[0].value; // FieldVar: [1, index] for a fresh variable
++    const site = (new Error().stack.split('\n').slice(3, 9).filter(l => !l.includes('/provable/core/') ).map(l => l.trim().replace(/^at /, '').replace(/\(?file:\/\/.*?node_modules\/o1js\/dist\/node\//, '').replace(/\(?file:\/\/.*?spike-1561\/o1js\//, 'APP:')).slice(0, 4).join(' < '));
++    (globalThis.__spikeTrace ??= []).push([v[0] === 1 ? v[1] : -1, size, site]);
++}
+ /**
+  * Variant of {@link exists} that witnesses 1 field element.
+  */
