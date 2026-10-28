@@ -105,6 +105,21 @@ The zk edge's signature, under the state key, agreeing that one state's nullifie
 destination.
 _Avoid_: Co-signature, release, approval
 
+**Escape**:
+Leaving without the zk edge: a payer consumes a zk note's current and next nullifiers, names a
+concession and a destination, and is paid after the challenge window unless the escape is defeated.
+_Avoid_: Forced exit, unilateral close, emergency withdrawal
+
+**Concession**:
+What an escape gives up of its balance to the treasury: named by the payer, at most the balance,
+and liftable by a raise to at most one allowance's tier.
+_Avoid_: Penalty, fee, Δ (in prose)
+
+**Challenge window**:
+The 2 days after the vault records an escape, during which a challenger may defeat or raise it.
+Only after it ends can anyone finalize the escape.
+_Avoid_: Dispute period, timeout
+
 **Ownership proof**:
 A proof, shown only to the zk edge, that the payer holds a zk note's current state. The vault
 refuses it.

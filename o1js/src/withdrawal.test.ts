@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { Field, PrivateKey, Provable, Signature, verify } from 'o1js';
 import { DEPOSIT_SIZES, expiryOf } from './policy.js';
-import { nullifier } from './primitives.js';
+import { nextAnchor, nullifier } from './primitives.js';
 import { RequestProgram } from './request.js';
 import { WithdrawalKind, WithdrawalPrivate, WithdrawalProgram, WithdrawalPublic, checkWithdrawal } from './withdrawal.js';
 import { WITHDRAWAL_VECTOR_SAMPLES, withdrawalSample, withdrawalVector } from './withdrawal-sample.js';
@@ -22,7 +22,7 @@ const holds = async (kind: WithdrawalKind, pub: WithdrawalPublic, priv: Withdraw
 };
 const withPub = (s: { pub: WithdrawalPublic }, over: Partial<WithdrawalPublic>) => new WithdrawalPublic({ ...s.pub, ...over });
 
-const { mutualClose, ownership } = WithdrawalKind;
+const { mutualClose, escape, ownership } = WithdrawalKind;
 
 describe('withdrawal proof constraints', () => {
   it('hold for a mutual close and an ownership proof, of a genesis and a signed state', async () => {
@@ -44,11 +44,12 @@ describe('withdrawal proof constraints', () => {
     }
   });
 
-  it('enforce zero nextNullifier and validUntil', async () => {
+  it('enforce zero nextNullifier, validUntil and conceded', async () => {
     for (const kind of [mutualClose, ownership]) {
       const s = withdrawalSample({ kind });
       expect(await holds(kind, withPub(s, { nextNullifier: Field(1) }), s.priv)).toBe(false);
       expect(await holds(kind, withPub(s, { validUntil: Field(1) }), s.priv)).toBe(false);
+      expect(await holds(kind, withPub(s, { conceded: Field(1) }), s.priv)).toBe(false);
     }
   });
 
@@ -88,10 +89,53 @@ describe('withdrawal proof constraints', () => {
   });
 });
 
+describe('escape proof constraints', () => {
+  const hour = 3_600_000n;
+  const esc = (over: Parameters<typeof withdrawalSample>[0] = {}) =>
+    withdrawalSample({ kind: escape, signed: true, balance: 4_000_000_000n, conceded: 10_000_000n, ...over });
+
+  it('hold for an escape of a genesis and a signed state, publishing the next state nullifier', async () => {
+    for (const signed of [false, true]) {
+      const s = esc({ signed });
+      expect(await holds(escape, s.pub, s.priv)).toBe(true);
+      // The next state's anchor is derived from this state's nullifier.
+      const next = nullifier(s.priv.secret, nextAnchor(s.pub.nullifier));
+      expect(s.pub.nextNullifier.toBigInt()).toBe(next.toBigInt());
+    }
+    const s = esc();
+    expect(await holds(mutualClose, s.pub, s.priv)).toBe(false);
+  });
+
+  it('refuse a next nullifier other than the derived one', async () => {
+    const s = esc();
+    for (const nextNullifier of [Field(0), s.pub.nextNullifier.add(1), s.pub.nullifier]) {
+      expect(await holds(escape, withPub(s, { nextNullifier }), s.priv)).toBe(false);
+    }
+  });
+
+  it('bound the concession by the balance', async () => {
+    expect(await holds(escape, esc({ conceded: 4_000_000_000n }).pub, esc({ conceded: 4_000_000_000n }).priv)).toBe(true);
+    expect(await holds(escape, esc({ conceded: 0n }).pub, esc({ conceded: 0n }).priv)).toBe(true);
+    const over = esc({ conceded: 4_000_000_001n });
+    expect(await holds(escape, over.pub, over.priv)).toBe(false);
+  });
+
+  it('require requestTime ≤ validUntil < expiry', async () => {
+    const expiry = expiryOf(1_700_000_000_000n);
+    const requestTime = expiry - 2n * hour;
+    for (const [validUntil, ok] of [
+      [requestTime, true], [expiry - 1n, true], [requestTime - 1n, false], [expiry, false],
+    ] as const) {
+      const s = esc({ requestTime, validUntil });
+      expect(await holds(escape, s.pub, s.priv)).toBe(ok);
+    }
+  });
+});
+
 describe('withdrawal proof vectors', () => {
   const file = JSON.parse(readFileSync(new URL('../../test-vectors/zk-note.json', import.meta.url), 'utf8'));
-  it('cover a mutual close and an ownership proof, are reproduced, and satisfy the constraints', async () => {
-    expect(file.withdrawalProofs.map((v: any) => v.kind)).toEqual(['mutualClose', 'ownership']);
+  it('cover a mutual close, an ownership proof and an escape, are reproduced, and satisfy the constraints', async () => {
+    expect(file.withdrawalProofs.map((v: any) => v.kind)).toEqual(['mutualClose', 'ownership', 'escape']);
     for (const [i, sample] of WITHDRAWAL_VECTOR_SAMPLES.entries()) {
       expect(withdrawalVector(sample)).toEqual(file.withdrawalProofs[i]);
       const { pub, priv, options } = withdrawalSample(sample.options, sample.before);

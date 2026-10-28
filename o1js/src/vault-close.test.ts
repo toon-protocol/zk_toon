@@ -1,11 +1,12 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { AccountUpdate, Field, Mina, PrivateKey, Provable, PublicKey, Signature, UInt64, Unconstrained, verify } from 'o1js';
+import { Field, Mina, PrivateKey, Provable, Signature, verify } from 'o1js';
 import * as policy from './policy.js';
 import { signClearance } from './clearance.js';
 import { commitSecret } from './primitives.js';
-import { NullifierSet, Vault, VaultAction, batchReducer } from './vault.js';
+import { NullifierSet, VaultAction, batchReducer } from './vault.js';
+import { balanceOf, now, vaultHarness } from './vault-harness.js';
 import { VaultMirror } from './vault-mirror.js';
-import { WithdrawalKind, WithdrawalProgram, WithdrawalProof, WithdrawalPublic } from './withdrawal.js';
+import { WithdrawalKind, WithdrawalProgram } from './withdrawal.js';
 import { buildWithdrawal } from './withdrawal-sample.js';
 
 const [SMALL, MEDIUM] = policy.DEPOSIT_SIZES;
@@ -17,113 +18,11 @@ const Local = await Mina.LocalBlockchain({ proofsEnabled: false });
 Mina.setActiveInstance(Local);
 WithdrawalProgram.setProofsEnabled(false);
 
-const [payer, deployer, alice, bob, treasuryAccount] = Local.testAccounts;
-
-/** The network's timestamp is that of the current slot's start. */
-const now = () => {
-  const { genesisTimestamp, slotTime } = Mina.getNetworkConstants();
-  return genesisTimestamp.toBigInt() + Mina.getNetworkState().globalSlotSinceGenesis.toBigint() * slotTime.toBigInt();
-};
-const balanceOf = (pk: PublicKey) => Mina.getBalance(pk).toBigInt();
-type Tx = Awaited<ReturnType<typeof Mina.transaction>>;
+const { payer, deployer, alice, bob, freshVault } = vaultHarness(Local);
 
 beforeAll(async () => {
   await batchReducer.compile();
 });
-
-let nextSecret = 1000n;
-
-/** A fresh vault on the shared chain, with its own state key and an off-chain mirror. */
-async function freshVault({ setup = true } = {}) {
-  const zkappKey = PrivateKey.random();
-  const vault = new Vault(zkappKey.toPublicKey());
-  const stateKey = PrivateKey.random();
-  const treasury = treasuryAccount;
-  const mirror = new VaultMirror();
-  type Account = (typeof Local.testAccounts)[number];
-  const send = async (tx: Tx, keys: PrivateKey[] = [], from: Account = payer) => {
-    await tx.prove();
-    await tx.sign([from.key, ...keys]).send();
-  };
-  const clearance = (pub: WithdrawalPublic, over: { key?: PrivateKey; nullifier?: Field; destination?: PublicKey } = {}) =>
-    signClearance(over.key ?? stateKey, {
-      stateKey: stateKey.toPublicKey(),
-      nullifier: over.nullifier ?? pub.nullifier,
-      destination: over.destination ?? pub.destination,
-    });
-  const closeTx = (proof: WithdrawalProof, c: Signature, from: Account = payer) =>
-    Mina.transaction(from, async () => {
-      await vault.mutualClose(proof, c, mirror.nullifiers.clone());
-    });
-
-  batchReducer.setContractInstance(vault);
-  const tx = await Mina.transaction(deployer, async () => {
-    AccountUpdate.fundNewAccount(deployer);
-    await vault.deploy();
-  });
-  await tx.prove();
-  await tx.sign([deployer.key, zkappKey]).send();
-
-  const h = {
-    vault, zkappKey, stateKey, treasury, mirror, send, clearance, closeTx,
-    async setup(keys = [zkappKey]) {
-      await send(
-        await Mina.transaction(payer, async () => {
-          await vault.setup(stateKey.toPublicKey(), treasury);
-        }),
-        keys
-      );
-    },
-    /** Deposits a note and returns its secret. */
-    async deposit(size = SMALL) {
-      const secret = nextSecret++;
-      const depositTime = now();
-      const c = commitSecret(Field(secret));
-      await send(
-        await Mina.transaction(payer, async () => {
-          await vault.deposit(c, UInt64.from(size), UInt64.from(depositTime));
-        })
-      );
-      mirror.dispatched(VaultAction.deposit(c, UInt64.from(size), UInt64.from(depositTime)));
-      return { secret, size, depositTime };
-    },
-    async reduce() {
-      batchReducer.setContractInstance(vault);
-      for (const { batch, proof } of await batchReducer.prepareBatches()) {
-        const { witnesses, nullifiers } = mirror.nextReduce();
-        await send(
-          await Mina.transaction(payer, async () => {
-            await vault.reduce(batch, proof, Unconstrained.from(witnesses), nullifiers);
-          })
-        );
-      }
-    },
-    /** Inputs and a proof of a mutual close of `note`, made now against the mirror's tree. */
-    async closeProof(
-      note: { secret: bigint; size: bigint; depositTime: bigint },
-      o: { destination?: PublicKey; signed?: boolean; balance?: bigint; requestTime?: bigint; kind?: WithdrawalKind; key?: PrivateKey } = {}
-    ) {
-      const index = mirror.indexOf(commitSecret(Field(note.secret)));
-      const kind = o.kind ?? WithdrawalKind.mutualClose;
-      const { pub, priv } = buildWithdrawal(mirror.tree, {
-        kind, secret: note.secret, index, size: note.size, depositTime: note.depositTime,
-        requestTime: o.requestTime ?? now(), signed: o.signed ?? false, balance: o.balance ?? 0n,
-        blinding: 99n, stateKey: o.key ?? stateKey, destination: o.destination ?? alice,
-      });
-      const { proof } = kind === WithdrawalKind.ownership
-        ? await WithdrawalProgram.ownership(pub, priv)
-        : await WithdrawalProgram.mutualClose(pub, priv);
-      return proof;
-    },
-    /** Sends a mutual close and records its action in the mirror. */
-    async close(proof: WithdrawalProof, c = clearance(proof.publicInput)) {
-      await send(await closeTx(proof, c));
-      mirror.dispatched(VaultAction.mutualClose(proof.publicInput));
-    },
-  };
-  if (setup) await h.setup();
-  return h;
-}
 
 describe('vault setup', () => {
   it('records the state key and treasury once, with the vault account signature', async () => {
@@ -140,7 +39,7 @@ describe('vault setup', () => {
     const h = await freshVault({ setup: false });
     const note = await h.deposit();
     await h.reduce();
-    const proof = await h.closeProof(note);
+    const proof = await h.withdrawalProof(note);
     await expect(h.close(proof)).rejects.toThrow(/not set up/);
   });
 });
@@ -155,7 +54,7 @@ describe('vault mutual close', () => {
     const note = await h.deposit(SMALL);
     await h.reduce();
     const balance = 3_000_000_000n;
-    const proof = await h.closeProof(note, { signed: true, balance, destination: alice });
+    const proof = await h.withdrawalProof(note, { signed: true, balance, destination: alice });
     const [a, t, v] = [balanceOf(alice), balanceOf(h.treasury), balanceOf(h.vault.address)];
 
     await h.close(proof);
@@ -183,7 +82,7 @@ describe('vault mutual close', () => {
   it('pays a genesis note in full to the destination', async () => {
     const note = await h.deposit(MEDIUM);
     await h.reduce();
-    const proof = await h.closeProof(note, { destination: bob });
+    const proof = await h.withdrawalProof(note, { destination: bob });
     const [b, t] = [balanceOf(bob), balanceOf(h.treasury)];
     await h.close(proof);
     await h.reduce();
@@ -194,7 +93,7 @@ describe('vault mutual close', () => {
   it('pays the deposit to the treasury when the balance is zero', async () => {
     const note = await h.deposit(SMALL);
     await h.reduce();
-    const proof = await h.closeProof(note, { signed: true, balance: 0n, destination: bob });
+    const proof = await h.withdrawalProof(note, { signed: true, balance: 0n, destination: bob });
     const [b, t] = [balanceOf(bob), balanceOf(h.treasury)];
     await h.close(proof);
     await h.reduce();
@@ -205,7 +104,7 @@ describe('vault mutual close', () => {
   it('pays two closes of the same state, dispatched before one reduce, exactly once', async () => {
     const note = await h.deposit(SMALL);
     await h.reduce();
-    const proof = await h.closeProof(note, { destination: bob });
+    const proof = await h.withdrawalProof(note, { destination: bob });
     const [b, v] = [balanceOf(bob), balanceOf(h.vault.address)];
     await h.close(proof);
     await h.close(proof);
@@ -219,8 +118,8 @@ describe('vault mutual close', () => {
     const one = await h.deposit(SMALL);
     const two = await h.deposit(SMALL);
     await h.reduce();
-    const p1 = await h.closeProof(one, { destination: alice });
-    const p2 = await h.closeProof(two, { destination: bob });
+    const p1 = await h.withdrawalProof(one, { destination: alice });
+    const p2 = await h.withdrawalProof(two, { destination: bob });
     // Two payers build both against the same chain state before either is sent.
     const slot = Mina.getNetworkState().globalSlotSinceGenesis.toBigint();
     const tx1 = await h.closeTx(p1, h.clearance(p1.publicInput), payer);
@@ -239,7 +138,7 @@ describe('vault mutual close', () => {
   it('refuses a missing clearance, or one by another key, over another nullifier or destination', async () => {
     const note = await h.deposit(SMALL);
     await h.reduce();
-    const proof = await h.closeProof(note);
+    const proof = await h.withdrawalProof(note);
     const pub = proof.publicInput;
     const refused = [
       Signature.create(PrivateKey.random(), [Field(0)]),
@@ -249,14 +148,14 @@ describe('vault mutual close', () => {
     ];
     for (const c of refused) await expect(h.close(proof, c)).rejects.toThrow(/clearance/);
     // A proof bound to another destination is refused under the clearance the zk edge gave.
-    const elsewhere = await h.closeProof(note, { destination: bob });
+    const elsewhere = await h.withdrawalProof(note, { destination: bob });
     await expect(h.close(elsewhere, h.clearance(pub))).rejects.toThrow(/clearance/);
   });
 
   it('refuses an ownership proof', async () => {
     const note = await h.deposit(SMALL);
     await h.reduce();
-    const proof = await h.closeProof(note, { kind: WithdrawalKind.ownership });
+    const proof = await h.withdrawalProof(note, { kind: WithdrawalKind.ownership });
     await expect(h.close(proof)).rejects.toThrow(/not a mutual close/);
   });
 
@@ -275,7 +174,7 @@ describe('vault mutual close', () => {
 
     // A state signed under another key: the proof names that key as `vault`.
     const other = PrivateKey.random();
-    const foreign = await h.closeProof(note, { signed: true, balance: 1n, key: other });
+    const foreign = await h.withdrawalProof(note, { signed: true, balance: 1n, key: other });
     await expect(h.close(foreign, signClearance(other, {
       stateKey: other.toPublicKey(), nullifier: foreign.publicInput.nullifier, destination: alice,
     }))).rejects.toThrow(/state key/);
@@ -285,7 +184,7 @@ describe('vault mutual close', () => {
     const note = await h.deposit(SMALL);
     await h.reduce();
     // No proof can be made for a requestTime at or past the note's expiry.
-    await expect(h.closeProof(note, { requestTime: policy.expiryOf(note.depositTime) })).rejects.toThrow();
+    await expect(h.withdrawalProof(note, { requestTime: policy.expiryOf(note.depositTime) })).rejects.toThrow();
   });
 });
 
@@ -299,12 +198,12 @@ describe('vault mutual close timing', () => {
     await h.reduce();
     const t = now();
     for (const requestTime of [t + 1n, t - 10n * MINUTE - 1n]) {
-      const proof = await h.closeProof(note, { requestTime });
+      const proof = await h.withdrawalProof(note, { requestTime });
       await expect(h.send(await h.closeTx(proof, h.clearance(proof.publicInput)))).rejects.toThrow(/Protocol_state_precondition_unsatisfied/);
     }
     // At the window's edges, accepted.
     for (const requestTime of [t, t - 10n * MINUTE]) {
-      const proof = await h.closeProof(note, { requestTime });
+      const proof = await h.withdrawalProof(note, { requestTime });
       await h.send(await h.closeTx(proof, h.clearance(proof.publicInput)));
     }
   });
@@ -318,7 +217,7 @@ describe('vault mutual close with a real withdrawal proof', () => {
       const h = await freshVault();
       const note = await h.deposit(SMALL);
       await h.reduce();
-      const proof = await h.closeProof(note, { signed: true, balance: 1_000_000_000n, destination: alice });
+      const proof = await h.withdrawalProof(note, { signed: true, balance: 1_000_000_000n, destination: alice });
       expect(await verify(proof, verificationKey)).toBe(true);
       const a = balanceOf(alice);
       await h.close(proof);

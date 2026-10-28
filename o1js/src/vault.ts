@@ -1,11 +1,16 @@
 // The vault zkApp. A deposit moves a fixed size into the vault and dispatches an action; a mutual close
-// checks a withdrawal proof and the zk edge's clearance and dispatches an action. A permissionless reduce
-// folds every pending action in: deposits into the note tree, closes into the nullifier set and payouts.
-// A deposit is a note only once reduced, and a close is paid only at the reduce (ADR 0002, "A mutual
-// close pays at the reduce, through the one action stream").
+// checks a withdrawal proof and the zk edge's clearance and dispatches an action; an escape checks an
+// escape proof and dispatches an action; after the challenge window anyone can finalize an escape, which
+// dispatches an action too. A permissionless reduce folds every pending action in: deposits into the note
+// tree, consumed nullifiers into the nullifier set, escapes into the pending escapes, and the payouts of
+// closes and finalized escapes. A deposit is a note only once reduced, and nothing is paid except at the
+// reduce (ADR 0002, "A mutual close pays at the reduce, through the one action stream").
+//
+// The vault has no pause: its deploy makes its verification key, permissions and timing unchangeable, so
+// no owner action can stop or delay an escape.
 import {
-  AccountUpdate, Bool, Experimental, Field, IndexedMerkleMap, Provable, PublicKey, Signature, SmartContract,
-  State, Struct, UInt64, Unconstrained, declareMethods, declareState,
+  AccountUpdate, Bool, Experimental, Field, IndexedMerkleMap, Permissions, Poseidon, Provable, PublicKey, Signature,
+  SmartContract, State, Struct, UInt64, Unconstrained, declareMethods, declareState,
 } from 'o1js';
 import * as policy from './policy.js';
 import { verifyClearance } from './clearance.js';
@@ -30,16 +35,55 @@ export const NULLIFIER_SET_HEIGHT = 32;
 /** The consumed nullifiers. The vault stores only the root: a reduce inserts, a close proves absence. */
 export class NullifierSet extends IndexedMerkleMap(NULLIFIER_SET_HEIGHT) {}
 
-/** The kinds of the vault's one action stream. 0 is never dispatched; #9–#11 add theirs. */
+/**
+ * The escapes the vault has recorded, keyed by the escaping state's (current) nullifier. The value is
+ * the record's `hash()` while the escape is pending, and 0 once it is finished. A key is a consumed
+ * nullifier, so it is never reused.
+ */
+export class PendingEscapes extends IndexedMerkleMap(NULLIFIER_SET_HEIGHT) {}
+
+/** The kinds of the vault's one action stream. 0 is never dispatched; #10–#11 add theirs. */
 export enum ActionKind {
   deposit = 1,
   mutualClose = 2,
+  escape = 3,
+  finalize = 4,
 }
 
 /**
- * The vault's one fixed-width action. Each kind uses some fields and leaves the rest zero: a deposit
- * `commitment`, `size` and `time` (its deposit time); a mutual close `nullifier`, `amount`, `size`,
- * `destination` and `time` (its request time). `nextNullifier` and `validUntil` are for escapes (#9).
+ * A pending escape, as the reduce records it. The vault stores only its hash, at key `nullifier` of the
+ * pending escapes. `amount` is the escaping state's balance and `size` the note's deposit size; finalizing
+ * pays `amount − conceded` to `destination` and the rest of `size` to the treasury. Anyone may finalize
+ * once the block time reaches `deadline`.
+ *
+ * A defeat (#10) is a request proof at `nextNullifier`; a raise (#10) is one at `nullifier` and lifts
+ * `conceded`; both must land before `deadline`, and each replaces the record (or finishes it) by key.
+ */
+export class PendingEscape extends Struct({
+  nullifier: Field,
+  nextNullifier: Field,
+  amount: UInt64,
+  conceded: UInt64,
+  size: UInt64,
+  destination: PublicKey,
+  deadline: UInt64,
+}) {
+  hash(): Field {
+    return Poseidon.hash(PendingEscape.toFields(this));
+  }
+  /** What finalizing pays the destination. The escape proof bounds `conceded ≤ amount ≤ size`. */
+  payout(): UInt64 {
+    return this.amount.sub(this.conceded);
+  }
+}
+
+/**
+ * The vault's one fixed-width action. Each kind uses some fields and leaves the rest zero:
+ * - a deposit: `commitment`, `size` and `time` (its deposit time);
+ * - a mutual close: `nullifier`, `amount`, `size`, `destination` and `time` (its request time);
+ * - an escape: those of a close, plus `nextNullifier`, `validUntil` and `conceded`;
+ * - a finalize: the pending escape it finishes, with `time` its deadline.
+ * Every dispatched action has `conceded ≤ amount ≤ size`.
  */
 export class VaultAction extends Struct({
   kind: Field,
@@ -51,11 +95,12 @@ export class VaultAction extends Struct({
   time: UInt64,
   validUntil: UInt64,
   destination: PublicKey,
+  conceded: UInt64,
 }) {
   static none(): VaultAction {
     return new VaultAction({
       kind: Field(0), commitment: Field(0), nullifier: Field(0), nextNullifier: Field(0), amount: UInt64.zero,
-      size: UInt64.zero, time: UInt64.zero, validUntil: UInt64.zero, destination: PublicKey.empty(),
+      size: UInt64.zero, time: UInt64.zero, validUntil: UInt64.zero, destination: PublicKey.empty(), conceded: UInt64.zero,
     });
   }
   static deposit(commitment: Field, size: UInt64, depositTime: UInt64): VaultAction {
@@ -67,6 +112,26 @@ export class VaultAction extends Struct({
       ...VaultAction.none(), kind: Field(ActionKind.mutualClose), nullifier: pub.nullifier,
       amount: UInt64.Unsafe.fromField(pub.amount), size: UInt64.Unsafe.fromField(pub.size),
       time: UInt64.Unsafe.fromField(pub.requestTime), destination: pub.destination,
+    });
+  }
+  /** From an escape's public inputs; the withdrawal circuit bounds its amounts and times to 64 bits. */
+  static escape(pub: WithdrawalPublic): VaultAction {
+    return new VaultAction({
+      ...VaultAction.mutualClose(pub), kind: Field(ActionKind.escape), nextNullifier: pub.nextNullifier,
+      validUntil: UInt64.Unsafe.fromField(pub.validUntil), conceded: UInt64.Unsafe.fromField(pub.conceded),
+    });
+  }
+  static finalize(e: PendingEscape): VaultAction {
+    return new VaultAction({
+      ...VaultAction.none(), kind: Field(ActionKind.finalize), nullifier: e.nullifier, nextNullifier: e.nextNullifier,
+      amount: e.amount, conceded: e.conceded, size: e.size, destination: e.destination, time: e.deadline,
+    });
+  }
+  /** The escape a finalize names, or the record an escape becomes with `deadline`. */
+  pendingEscape(deadline: UInt64): PendingEscape {
+    return new PendingEscape({
+      nullifier: this.nullifier, nextNullifier: this.nextNullifier, amount: this.amount, conceded: this.conceded,
+      size: this.size, destination: this.destination, deadline,
     });
   }
 }
@@ -106,7 +171,7 @@ export class VaultBatch extends batchReducer.Batch {}
 export class VaultBatchProof extends batchReducer.BatchProof {}
 
 export class Vault extends SmartContract {
-  // State fields in use: 2 (batch reducer) + 1 + 1 + (8 + 1) + 1 + 3 + 1 + 1 + 1 + 2 + 2 = 24 of Mesa's 32.
+  // State fields in use: 2 (batch reducer) + 1 + 1 + (8 + 1) + 1 + 3 + 1 + 1 + 1 + 2 + 2 + 1 = 25 of Mesa's 32.
   actionState = State<Field>();
   actionStack = State<Field>();
   noteRoot = State<Field>();
@@ -122,6 +187,19 @@ export class Vault extends SmartContract {
   stateKey = State<PublicKey>();
   /** The zk edge operator's address: paid what a closed note's balance leaves of its deposit. */
   treasury = State<PublicKey>();
+  /** The root of the pending escapes. */
+  pendingEscapesRoot = State<Field>();
+
+  /** Deploys with the verification key, permissions and timing locked: the vault has no pause. */
+  async deploy(args?: Parameters<SmartContract['deploy']>[0]) {
+    await super.deploy(args);
+    this.account.permissions.set({
+      ...Permissions.default(),
+      setVerificationKey: Permissions.VerificationKey.impossibleDuringCurrentVersion(),
+      setPermissions: Permissions.impossible(),
+      setTiming: Permissions.impossible(),
+    });
+  }
 
   /** Pins the creation time to the block timestamp (within a slot) and records the policy. */
   init() {
@@ -138,6 +216,7 @@ export class Vault extends SmartContract {
     this.nextLeafIndex.set(Field(0));
     this.rootRing.set(RootRing.empty());
     this.nullifierRoot.set(new NullifierSet().root);
+    this.pendingEscapesRoot.set(new PendingEscapes().root);
   }
 
   /** Once, signed by the vault account: names the state key and the treasury. */
@@ -184,17 +263,66 @@ export class Vault extends SmartContract {
   }
 
   /**
-   * Permissionless. Folds up to a batch of pending actions: a deposit becomes the next note; a mutual
-   * close consumes its nullifier and pays `amount` to its destination and `size − amount` to the
-   * treasury. A close whose nullifier is already spent, in the set or earlier in the batch, is skipped
-   * without paying and without failing.
+   * Leaving without the zk edge. Checks an escape proof, landing between its `requestTime` and its
+   * `validUntil`, whose current and next nullifiers are both unspent, then dispatches an escape. The
+   * reduce consumes both nullifiers, records the escape and starts its challenge window. Pays nothing.
+   */
+  async escape(proof: WithdrawalProof, nullifiers: NullifierSet) {
+    proof.verify();
+    const pub = proof.publicInput;
+    pub.kind.assertEquals(WithdrawalKind.escape, 'not an escape');
+
+    const stateKey = this.stateKey.getAndRequireEquals();
+    stateKey.isEmpty().assertFalse('vault not set up');
+    pub.vault.equals(stateKey).assertTrue('not the vault state key');
+    new RootRing(this.rootRing.getAndRequireEquals()).contains(pub.root).assertTrue('root not in the ring');
+
+    const action = VaultAction.escape(pub);
+    this.network.timestamp.requireBetween(action.time, action.validUntil);
+
+    nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
+    nullifiers.assertNotIncluded(pub.nullifier, 'nullifier spent');
+    nullifiers.assertNotIncluded(pub.nextNullifier, 'nullifier spent');
+    batchReducer.dispatch(action);
+  }
+
+  /**
+   * Permissionless, once the block time reaches the escape's deadline. Checks that `escape` is pending,
+   * then dispatches a finalize; the reduce pays it.
+   */
+  async finalize(escape: PendingEscape, escapes: PendingEscapes) {
+    escapes.root.assertEquals(this.pendingEscapesRoot.getAndRequireEquals(), 'not the vault pending escapes');
+    escapes.getOption(escape.nullifier).orElse(0n).assertEquals(escape.hash(), 'no such pending escape');
+    this.network.timestamp.requireBetween(escape.deadline, UInt64.MAXINT());
+    batchReducer.dispatch(VaultAction.finalize(escape));
+  }
+
+  /**
+   * Permissionless. Folds up to a batch of pending actions:
+   * - a deposit becomes the next note;
+   * - a mutual close consumes its nullifier and pays `amount` to its destination and `size − amount` to
+   *   the treasury;
+   * - an escape consumes its current and next nullifiers and is recorded as pending, with a deadline a
+   *   full challenge window after this reduce lands;
+   * - a finalize finishes its pending escape and pays `amount − conceded` to the destination and the
+   *   rest of `size` to the treasury.
+   * A close or escape with a nullifier already spent, in the set or earlier in the batch, and a finalize
+   * of an escape no longer pending as named, are skipped without paying and without failing.
+   *
+   * `now` pins the block time to within a slot after it.
    */
   async reduce(
-    batch: VaultBatch, proof: VaultBatchProof, witnesses: Unconstrained<NoteWitness[]>, given: NullifierSet
+    batch: VaultBatch, proof: VaultBatchProof, witnesses: Unconstrained<NoteWitness[]>, given: NullifierSet,
+    givenEscapes: PendingEscapes, now: UInt64
   ) {
     // o1js may run a method more than once over the same argument; inserting into the caller's copy
     // would corrupt the next run.
     const nullifiers = given.clone();
+    const escapes = givenEscapes.clone();
+    escapes.root.assertEquals(this.pendingEscapesRoot.getAndRequireEquals(), 'not the vault pending escapes');
+    this.network.timestamp.requireBetween(now, now.add(UInt64.from(SLOT_MS)));
+    // The block time is at most `now + SLOT_MS`, so the window is never shorter than its full length.
+    const deadline = now.add(UInt64.from(SLOT_MS)).add(this.challengeWindow.getAndRequireEquals());
     let root = this.noteRoot.getAndRequireEquals();
     let next = this.nextLeafIndex.getAndRequireEquals();
     const ring = new RootRing(this.rootRing.getAndRequireEquals());
@@ -205,6 +333,8 @@ export class Vault extends SmartContract {
     batchReducer.processBatch({ batch, proof }, (action, isDummy, i) => {
       const isDeposit = isDummy.not().and(action.kind.equals(ActionKind.deposit));
       const isClose = isDummy.not().and(action.kind.equals(ActionKind.mutualClose));
+      const isEscape = isDummy.not().and(action.kind.equals(ActionKind.escape));
+      const isFinalize = isDummy.not().and(action.kind.equals(ActionKind.finalize));
 
       const witness = Provable.witness(NoteWitness, () => witnesses.get()[i]);
       // The slot at `next` must be empty under the current root.
@@ -217,19 +347,35 @@ export class Vault extends SmartContract {
       next = Provable.if(isDeposit, next.add(1), next);
       changed = changed.or(isDeposit);
 
-      // Other kinds carry nullifier 0, which the set cannot look up (no key is below it): they look up 1.
-      const nullifier = Provable.if(isClose, action.nullifier, Field(1));
-      const pays = isClose.and(nullifiers.isIncluded(nullifier).not());
-      nullifiers.setIf(pays, nullifier, Field(1));
-      // A close's amount never exceeds its size: the withdrawal circuit proves it. Other kinds pay nothing.
-      this.payIf(pays, action.destination, action.amount);
-      this.payIf(pays, treasury, action.size.sub(action.amount));
+      // Kinds without a nullifier look up 1: the sets cannot look up 0, since no key is below it.
+      const spends = isClose.or(isEscape);
+      const current = Provable.if(spends, action.nullifier, Field(1));
+      const following = Provable.if(isEscape, action.nextNullifier, Field(1));
+      const currentFresh = nullifiers.isIncluded(current).not();
+      const nextFresh = nullifiers.isIncluded(following).not();
+      const closes = isClose.and(currentFresh);
+      const recorded = isEscape.and(currentFresh).and(nextFresh);
+      nullifiers.setIf(closes.or(recorded), current, Field(1));
+      nullifiers.setIf(recorded, following, Field(1));
+
+      // An escape records its pending escape; a finalize finishes the one it names, if still pending as named.
+      const record = action.pendingEscape(Provable.if(isEscape, UInt64, deadline, action.time));
+      const key = Provable.if(isEscape.or(isFinalize), action.nullifier, Field(1));
+      const finalizes = isFinalize.and(escapes.getOption(key).orElse(0n).equals(record.hash()));
+      escapes.setIf(recorded.or(finalizes), key, Provable.if(recorded, record.hash(), Field(0)));
+
+      // A close pays its balance, a finalize its balance less the concession; other kinds pay nothing.
+      const pays = closes.or(finalizes);
+      const payout = Provable.if(isFinalize, UInt64, record.payout(), action.amount);
+      this.payIf(pays, action.destination, payout);
+      this.payIf(pays, treasury, action.size.sub(payout));
     });
 
     this.noteRoot.set(root);
     this.nextLeafIndex.set(next);
     this.rootRing.set(new RootRing(Provable.if(changed, RootRing, ring.push(root), ring)));
     this.nullifierRoot.set(nullifiers.root);
+    this.pendingEscapesRoot.set(escapes.root);
   }
 
   /** A circuit sends a fixed number of updates, so a skipped or zero payout is a zero send to the vault itself. */
@@ -247,7 +393,9 @@ declareMethods(Vault, {
   setup: [PublicKey, PublicKey],
   deposit: [Field, UInt64, UInt64],
   mutualClose: [WithdrawalProof, Signature, NullifierSet],
-  reduce: [VaultBatch, VaultBatchProof, Unconstrained.provable, NullifierSet],
+  escape: [WithdrawalProof, NullifierSet],
+  finalize: [PendingEscape, PendingEscapes],
+  reduce: [VaultBatch, VaultBatchProof, Unconstrained.provable, NullifierSet, PendingEscapes, UInt64],
 } as Record<string, any[]>);
 
 declareState(Vault, {
@@ -263,6 +411,7 @@ declareState(Vault, {
   nullifierRoot: Field,
   stateKey: PublicKey,
   treasury: PublicKey,
+  pendingEscapesRoot: Field,
 });
 
 batchReducer.setContractClass(Vault);

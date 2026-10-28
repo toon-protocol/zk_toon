@@ -131,6 +131,7 @@ fn public(p: &Value) -> WithdrawalPublic {
         destination: key(&p["destination"]),
         valid_until: u(&p["validUntil"]),
         request_time: u(&p["requestTime"]),
+        conceded: u(&p["conceded"]),
     }
 }
 
@@ -157,7 +158,6 @@ fn withdrawal_samples_are_recomputed() {
 
         // The public inputs' field layout is the one the connector reads.
         assert_eq!(strings(public.to_fields()), expected(&e["fields"]));
-        assert_eq!((public.next_nullifier, public.valid_until), (Field::from(0u64), 0));
         assert!(public.amount <= public.size);
         assert!(policy::is_deposit_size(public.size));
 
@@ -183,6 +183,16 @@ fn withdrawal_samples_are_recomputed() {
         }
         assert_eq!(public.nullifier, nullifier(secret, anchor));
 
+        // An escape also names the next state's nullifier, concedes at most its balance, and may
+        // land only while the note is unexpired. The other kinds leave those inputs zero.
+        if public.kind == WithdrawalKind::Escape {
+            assert_eq!(public.next_nullifier, public.escape_next_nullifier(secret));
+            assert!(public.conceded <= public.amount);
+            assert!(public.request_time <= public.valid_until && public.valid_until < u(&w["expiry"]));
+        } else {
+            assert_eq!((public.next_nullifier, public.valid_until, public.conceded), (Field::from(0u64), 0, 0));
+        }
+
         // A mutual close carries the clearance of its nullifier to its destination.
         match public.kind {
             WithdrawalKind::MutualClose => {
@@ -195,6 +205,6 @@ fn withdrawal_samples_are_recomputed() {
             _ => assert!(e["clearance"].is_null()),
         }
     }
-    assert_eq!(kinds, [WithdrawalKind::MutualClose, WithdrawalKind::Ownership]);
+    assert_eq!(kinds, [WithdrawalKind::MutualClose, WithdrawalKind::Ownership, WithdrawalKind::Escape]);
 }
 

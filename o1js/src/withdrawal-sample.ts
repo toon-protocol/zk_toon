@@ -22,7 +22,13 @@ export interface WithdrawalOptions {
   blinding: bigint;
   stateKey: PrivateKey;
   destination: PublicKey;
+  /** Escape only: what it concedes (default 0) and its last landing time (default requestTime + 10 min). */
+  conceded?: bigint;
+  validUntil?: bigint;
 }
+
+/** The default `validUntil` of an escape sample, after its `requestTime`. */
+export const ESCAPE_VALIDITY_MS = 10n * 60_000n;
 
 /** Inputs for the note at `o.index` of `tree`, which must hold that note. */
 export function buildWithdrawal(tree: NoteTree, o: WithdrawalOptions) {
@@ -44,10 +50,14 @@ export function buildWithdrawal(tree: NoteTree, o: WithdrawalOptions) {
     signature = Signature.create(o.stateKey, stateFields({ vault, commitment: stateCommitment, anchor }));
   }
 
+  const current = nullifier(secret, anchor);
+  const isEscape = o.kind === WithdrawalKind.escape;
   const pub = new WithdrawalPublic({
-    kind: Field(o.kind), vault, root: tree.root, nullifier: nullifier(secret, anchor), nextNullifier: Field(0),
-    amount: Field(balance), size: Field(o.size), destination: o.destination, validUntil: Field(0),
-    requestTime: Field(o.requestTime),
+    kind: Field(o.kind), vault, root: tree.root, nullifier: current,
+    nextNullifier: isEscape ? nullifier(secret, nextAnchor(current)) : Field(0),
+    amount: Field(balance), size: Field(o.size), destination: o.destination,
+    validUntil: Field(isEscape ? o.validUntil ?? o.requestTime + ESCAPE_VALIDITY_MS : 0n),
+    requestTime: Field(o.requestTime), conceded: Field(isEscape ? o.conceded ?? 0n : 0n),
   });
   const priv = new WithdrawalPrivate({
     secret, index: Field(o.index), depositTime: Field(o.depositTime), expiry: Field(expiryOf(o.depositTime)),
@@ -83,10 +93,20 @@ export function withdrawalSample(over: Partial<Omit<WithdrawalOptions, 'index'>>
   return { ...buildWithdrawal(tree, { ...o, index }), tree, options: { ...o, index } };
 }
 
-/** The samples the shared vector file pins: a mutual close of a signed state, and an ownership proof at genesis. */
+/**
+ * The samples the shared vector file pins: a mutual close of a signed state, an ownership proof at
+ * genesis, and an escape of a signed state conceding part of its balance.
+ */
 export const WITHDRAWAL_VECTOR_SAMPLES: { options: Omit<WithdrawalOptions, 'index'>; before: number }[] = [
   { options: { ...defaultWithdrawal(WithdrawalKind.mutualClose), signed: true }, before: 5 },
   { options: { ...defaultWithdrawal(WithdrawalKind.ownership), destination: PrivateKey.fromBigInt(8n).toPublicKey() }, before: 3 },
+  {
+    options: {
+      ...defaultWithdrawal(WithdrawalKind.escape), signed: true, conceded: 10_000_000n,
+      destination: PrivateKey.fromBigInt(9n).toPublicKey(),
+    },
+    before: 4,
+  },
 ];
 
 /**
@@ -109,6 +129,7 @@ export function withdrawalVector(sample: { options: Omit<WithdrawalOptions, 'ind
       kind: str(pub.kind), vault: key(pub.vault), root: str(pub.root), nullifier: str(pub.nullifier),
       nextNullifier: str(pub.nextNullifier), amount: str(pub.amount), size: str(pub.size),
       destination: key(pub.destination), validUntil: str(pub.validUntil), requestTime: str(pub.requestTime),
+      conceded: str(pub.conceded),
     },
     fields: WithdrawalPublic.toFields(pub).map(str),
     private: {
