@@ -137,6 +137,21 @@ fn one_nullifiers_bad_records_do_not_hide_anothers_evidence() {
 }
 
 #[test]
+fn a_record_that_does_not_decode_does_not_hide_the_rest_of_the_file() {
+    let f = TempFile::new("undecodable", &[grant(ID, 10, false, b"a")]);
+    let mut bytes = std::fs::read(&f.0).unwrap();
+    bytes.extend(frame(&[9, 1, 2, 3]));
+    let mut no_public_input = grant(NEXT, 10, false, b"c");
+    if let Record::Grant(g) = &mut no_public_input {
+        g.proof = b"{}".to_vec();
+    }
+    bytes.extend(frame(&no_public_input.encode().unwrap()));
+    std::fs::write(&f.0, bytes).unwrap();
+    f.append(&close(ID, 6, b"a"));
+    assert_eq!(decide_over(&f, true, &escape(2, 100)), Decision::Raise { to: 6 });
+}
+
+#[test]
 fn records_appended_after_the_port_opened_are_seen() {
     let f = TempFile::new("append", &[grant(ID, 10, false, b"a")]);
     let calls = Rc::new(Cell::new(0));

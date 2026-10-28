@@ -44,6 +44,7 @@ struct Index {
     by_nullifier: HashMap<Nullifier, Slot>,
 }
 
+/// The evidence file at `path`, read through `verifier`.
 pub struct FileEvidence<V> {
     path: PathBuf,
     verifier: V,
@@ -52,6 +53,7 @@ pub struct FileEvidence<V> {
 }
 
 impl<V: ProofVerifier> FileEvidence<V> {
+    /// Nothing is read until the first [`EvidencePort::at_nullifier`].
     pub fn new(path: impl Into<PathBuf>, verifier: V) -> Self {
         Self { path: path.into(), verifier, index: RefCell::default(), verified: RefCell::default() }
     }
@@ -71,30 +73,20 @@ impl<V: ProofVerifier> FileEvidence<V> {
             FileError::Corrupt { offset } => unavailable(&format!("corrupt record at byte {}", start + offset as u64)),
             other => unavailable(&format!("{other:?}")),
         })?;
-        // Decode everything before indexing any of it, so a bad record leaves the index as it was.
-        let mut decoded = Vec::new();
+        // A record whose CRC holds but which does not decode names no nullifier it could be
+        // evidence at, so it is skipped rather than stopping the rest of the file being read.
         for framed in &scan.records {
-            let record = Record::decode(framed.payload).map_err(|e| {
-                unavailable(&format!("record at byte {} does not decode: {e:?}", start + framed.offset as u64))
-            })?;
-            let entry = match record {
-                Record::Grant(grant) => {
-                    let public = grant.request_public().map_err(|e| {
-                        unavailable(&format!("grant at byte {} has no usable proof: {e:?}", start + framed.offset as u64))
-                    })?;
-                    let nullifier = field_to_bytes(public.nullifier);
+            match Record::decode(framed.payload) {
+                Ok(Record::Grant(grant)) => {
+                    let Ok(public) = grant.request_public() else { continue };
                     let hash = evidence_hash(framed.payload);
-                    (nullifier, Ok(GrantEntry { grant, tier: public.tier, subsidised: public.subsidised, hash }))
+                    let slot = index.by_nullifier.entry(field_to_bytes(public.nullifier)).or_default();
+                    slot.grants.push(GrantEntry { grant, tier: public.tier, subsidised: public.subsidised, hash });
                 }
-                Record::Close(close) => (field_to_bytes(close.nullifier), Err(close)),
-            };
-            decoded.push(entry);
-        }
-        for (nullifier, entry) in decoded {
-            let slot = index.by_nullifier.entry(nullifier).or_default();
-            match entry {
-                Ok(g) => slot.grants.push(g),
-                Err(c) => slot.closes.push(c),
+                Ok(Record::Close(close)) => {
+                    index.by_nullifier.entry(field_to_bytes(close.nullifier)).or_default().closes.push(close);
+                }
+                Err(_) => continue,
             }
         }
         index.consumed = start + scan.valid_len as u64;
