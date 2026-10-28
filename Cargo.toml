@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["challenger", "zk-note"]
+members = ["challenger", "tx-builder", "zk-note"]
