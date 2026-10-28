@@ -32,7 +32,7 @@ fn from_evidence(escape: &Escape, evidence: &dyn EvidencePort) -> Result<Decisio
     let raise_to = current
         .iter()
         .filter(|e| !e.subsidised)
-        .map(|e| e.charge.min(e.tier).min(escape.balance))
+        .map(|e| e.charge.unwrap_or(e.tier).min(e.tier).min(escape.balance))
         .filter(|to| *to > escape.conceded)
         .max();
     Ok(raise_to.map_or(Decision::NoOp, |to| Decision::Raise { to }))

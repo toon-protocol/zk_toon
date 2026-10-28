@@ -24,8 +24,8 @@ fn escape(conceded: u64, balance: u64) -> Escape {
     Escape { id: ID, next_nullifier: NEXT, conceded, balance, deadline: DEADLINE }
 }
 
-fn ev(nullifier: Nullifier, tier: u64, charge: u64, subsidised: bool, verifies: bool) -> Evidence {
-    Evidence { nullifier, tier, charge, subsidised, verifies }
+fn ev(nullifier: Nullifier, tier: u64, charge: impl Into<Option<u64>>, subsidised: bool, verifies: bool) -> Evidence {
+    Evidence { nullifier, tier, charge: charge.into(), subsidised, verifies }
 }
 
 fn decide_with(e: &Escape, evidence: FakeEvidence, now: Millis) -> Decision {
@@ -201,4 +201,15 @@ fn a_failed_submission_reports_why() {
         action: Action::Defeat,
         error: PortError::Refused("already defeated".into()),
     }));
+}
+
+#[test]
+fn evidence_without_a_close_record_raises_to_the_tier() {
+    let raise = |tier, balance| {
+        decide_with(&escape(2, balance), FakeEvidence::default().with(ev(ID, tier, None, false, true)), 0)
+    };
+    assert_eq!(raise(10, 100), Decision::Raise { to: 10 });
+    assert_eq!(raise(10, 4), Decision::Raise { to: 4 });
+    let d = decide_with(&escape(2, 100), FakeEvidence::default().with(ev(ID, 10, None, true, true)), 0);
+    assert_eq!(d, Decision::NoOp);
 }
