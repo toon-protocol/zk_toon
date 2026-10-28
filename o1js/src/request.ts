@@ -52,8 +52,37 @@ export class RequestPrivate extends Struct({
   requestExpiry: Field,
 }) {}
 
-/** The checks shared by the request proof's methods. `pub.tier` is the tier `b` the balance must cover. */
-function checkRequest(pub: RequestPublic, priv: RequestPrivate) {
+/** What the withdrawal and request proofs both state publicly about a note's state. */
+export interface NoteStatePublic {
+  vault: PublicKey;
+  root: Field;
+  requestTime: Field;
+  nullifier: Field;
+}
+
+/** The private note and state a proof opens. */
+export interface NoteStatePrivate {
+  secret: Field;
+  index: Field;
+  size: Field;
+  depositTime: Field;
+  expiry: Field;
+  path: NoteWitness;
+  balance: Field;
+  blinding: Scalar;
+  anchor: Field;
+  isGenesis: Bool;
+  signature: Signature;
+  prevNullifier: Field;
+  prevAnchor: Field;
+}
+
+/**
+ * The checks every proof about a note's current state makes: the note is in the tree at `root` and not
+ * expired at `requestTime`, the state is the genesis state or one the vault signed as the note's next, and
+ * `nullifier` is this state's. Returns the state's balance commitment.
+ */
+export function checkNoteState(pub: NoteStatePublic, priv: NoteStatePrivate) {
   // Membership: the leaf is in the tree at `root`, at its own index, and its expiry follows from its deposit time.
   const commitment = commitSecret(priv.secret);
   priv.expiry.assertEquals(expiryOfField(priv.depositTime));
@@ -66,10 +95,7 @@ function checkRequest(pub: RequestPublic, priv: RequestPrivate) {
   pub.requestTime.toBits(U64_BITS);
   priv.expiry.sub(pub.requestTime).sub(1).toBits(U64_BITS);
 
-  // The balance covers `b`.
   const balanceBits = priv.balance.toBits(U64_BITS);
-  pub.tier.toBits(U64_BITS);
-  priv.balance.sub(pub.tier).toBits(U64_BITS);
   const stateCommitment = commit(Scalar.fromBits(balanceBits), priv.blinding);
 
   // The state is the genesis state, or one the vault signed as this note's next state.
@@ -83,9 +109,19 @@ function checkRequest(pub: RequestPublic, priv: RequestPrivate) {
     .and(priv.prevNullifier.equals(nullifier(priv.secret, priv.prevAnchor)));
   genesisOk.or(signedOk).assertTrue();
 
-  const n = nullifier(priv.secret, priv.anchor);
-  n.assertEquals(pub.nullifier);
-  authTag(n, {
+  nullifier(priv.secret, priv.anchor).assertEquals(pub.nullifier);
+  return stateCommitment;
+}
+
+/** The checks shared by the request proof's methods. `pub.tier` is the tier `b` the balance must cover. */
+function checkRequest(pub: RequestPublic, priv: RequestPrivate) {
+  const stateCommitment = checkNoteState(pub, priv);
+
+  // The balance covers `b`.
+  pub.tier.toBits(U64_BITS);
+  priv.balance.sub(pub.tier).toBits(U64_BITS);
+
+  authTag(pub.nullifier, {
     edge: priv.edge, sessionKeyX: priv.sessionKeyX, sessionKeyIsOdd: priv.sessionKeyIsOdd,
     tier: pub.tier, expiry: priv.requestExpiry,
   }).assertEquals(pub.tag);

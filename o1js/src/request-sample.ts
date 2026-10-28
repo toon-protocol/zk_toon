@@ -49,14 +49,21 @@ export interface Sample {
   context: RequestContext;
 }
 
-export function buildSample(o: SampleOptions): Sample {
+/**
+ * `existing` is a tree that already holds the note, at `index` (a vault's own); otherwise a tree is built
+ * with `o.before` other deposits ahead of the note.
+ */
+export function buildSample(o: SampleOptions, existing?: { tree: NoteTree; index: bigint }): Sample {
   const secret = F(o.secret);
   const commitment = commitSecret(secret);
-  const tree = new NoteTree();
-  for (let i = 0; i < o.before; i++) {
-    tree.append({ commitment: commitSecret(F(BigInt(i + 1))), size: F(DEPOSIT_SIZES[0]), depositTime: F(o.depositTime) });
+  const tree = existing?.tree ?? new NoteTree();
+  let index = existing?.index ?? 0n;
+  if (!existing) {
+    for (let i = 0; i < o.before; i++) {
+      tree.append({ commitment: commitSecret(F(BigInt(i + 1))), size: F(DEPOSIT_SIZES[0]), depositTime: F(o.depositTime) });
+    }
+    index = tree.append({ commitment, size: F(o.size), depositTime: F(o.depositTime) });
   }
-  const index = tree.append({ commitment, size: F(o.size), depositTime: F(o.depositTime) });
 
   const vaultKey = PrivateKey.fromBigInt(o.vaultSecret);
   const vault = vaultKey.toPublicKey();

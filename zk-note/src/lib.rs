@@ -25,9 +25,11 @@
 pub const VECTORS_JSON: &str = include_str!("../../test-vectors/zk-note.json");
 
 pub mod balance;
+pub mod clearance;
 pub mod policy;
 pub mod request;
 pub mod state;
+pub mod withdrawal;
 
 use ark_ff::PrimeField;
 use mina_curves::pasta::Fp;
@@ -47,6 +49,7 @@ pub mod tags {
     pub const ANCHOR: &str = "toon.zk.anchor.v1";
     pub const AUTH_TAG: &str = "toon.zk.auth-tag.v1";
     pub const PERIOD_NULLIFIER: &str = "toon.zk.period-nullifier.v1";
+    pub const CLEARANCE: &str = "toon.zk.clearance.v1";
 }
 
 pub fn tag_to_field(tag: &str) -> Field {
