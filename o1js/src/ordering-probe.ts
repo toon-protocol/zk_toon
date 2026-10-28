@@ -20,6 +20,7 @@ export class OrderingProbe extends SmartContract {
   }
 }
 
+// declareMethods' argument type is looser than the types it accepts.
 declareMethods(OrderingProbe, { write: [Field], read: [Field, Field] } as Record<string, any[]>);
 declareState(OrderingProbe, { x: Field });
 
@@ -48,29 +49,33 @@ export async function deployProbe(probe: OrderingProbe, probeKey: PrivateKey, se
   if (outcome.status !== 'included') throw Error(`deploy failed: ${outcome.errors.join('; ')}`);
 }
 
-/** The probe's state field and latest action state, from the cached account. */
-export function onChain(probe: OrderingProbe) {
-  const account = Mina.getAccount(probe.address);
-  return {
-    x: account.zkapp!.appState[0].toBigInt(),
-    actionState: account.zkapp!.actionState[0].toBigInt(),
-  };
+/**
+ * The probe's state field, latest action state and last five action states, newest first, as o1js last
+ * saw them: on a network, call `fetchAccount` first.
+ */
+export function cachedState(probe: OrderingProbe) {
+  const { zkapp } = Mina.getAccount(probe.address);
+  const actionStates = zkapp!.actionState.map((s) => s.toBigInt());
+  return { x: zkapp!.appState[0].toBigInt(), actionState: actionStates[0], actionStates };
 }
 
 /**
  * One command with two account updates on the probe: `write(value)`, then `read` with preconditions on
- * either the value `write` leaves (`new`) or the value before the command (`old`).
+ * the value `write` leaves (`new`), the value before the command (`old`), or a given value.
  */
 export async function writeThenRead(
   probe: OrderingProbe,
   sender: Mina.TestPublicKey,
   value: Field,
-  expect: { x: 'old' | 'new'; actionState: 'old' | 'new' }
+  preconditions: { x: 'old' | 'new'; actionState: 'old' | 'new' | Field }
 ): Promise<Outcome> {
-  const before = onChain(probe);
+  const before = cachedState(probe);
   const after = { x: value.toBigInt(), actionState: actionStateAfter(Field(before.actionState), value).toBigInt() };
-  const x = Field(expect.x === 'new' ? after.x : before.x);
-  const actionState = Field(expect.actionState === 'new' ? after.actionState : before.actionState);
+  const x = Field(preconditions.x === 'new' ? after.x : before.x);
+  const actionState =
+    preconditions.actionState === 'new' ? Field(after.actionState)
+    : preconditions.actionState === 'old' ? Field(before.actionState)
+    : preconditions.actionState;
   const tx = await Mina.transaction({ sender, fee: FEE }, async () => {
     await probe.write(value);
     await probe.read(x, actionState);
@@ -79,7 +84,7 @@ export async function writeThenRead(
 }
 
 /** The action state after one `write(value)` on top of `state`. */
-export function actionStateAfter(state: Field, value: Field): Field {
+function actionStateAfter(state: Field, value: Field): Field {
   const { Actions } = AccountUpdate;
   return Actions.updateSequenceState(state, Actions.pushEvent(Actions.empty(), [value]).hash);
 }

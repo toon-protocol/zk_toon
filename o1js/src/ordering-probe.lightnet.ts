@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Field, Mina, PrivateKey, fetchAccount } from 'o1js';
 import { connectLightnet } from './lightnet.js';
-import { OrderingProbe, deployProbe, onChain, writeThenRead } from './ordering-probe.js';
+import { OrderingProbe, deployProbe, cachedState, writeThenRead } from './ordering-probe.js';
 
 // #33 on a proofs-on lightnet: every account update's proof is checked by the chain.
 const { sender, release } = await connectLightnet();
@@ -12,7 +12,7 @@ describe('preconditions within one zkApp command (proofs-on lightnet)', () => {
   /** The probe's on-chain state after the last block. */
   const refresh = async () => {
     await fetchAccount({ publicKey: probe.address });
-    return onChain(probe);
+    return cachedState(probe);
   };
 
   beforeAll(async () => {
@@ -40,18 +40,24 @@ describe('preconditions within one zkApp command (proofs-on lightnet)', () => {
     expect(await refresh()).toEqual(before);
   });
 
-  // An action-state precondition passes if it matches any of the account's last five action states.
-  // A dispatch in a later slot than the account's last one shifts that ring, so the state from before
-  // `write` is still in it and the old-value precondition holds too. That is the ring, not the order:
-  // the first test's new action state was in no ring entry before the command.
-  it('an action-state precondition on the pre-command state also holds, from the ring', async () => {
+  // The old action state is still one of the account's last five: `write` dispatches in a later slot than
+  // the first test's dispatch (a block apart), which shifts them. See lightnet/README.md.
+  it('an action-state precondition on the pre-command state also holds, from the last five', async () => {
     const before = await refresh();
     const result = await writeThenRead(probe, sender, Field(9), { x: 'new', actionState: 'old' });
     console.log('new x, old action state:', result);
     expect(result.status).toBe('included');
-    await refresh();
-    const ring = Mina.getAccount(probe.address).zkapp!.actionState.map((s) => s.toBigInt());
-    expect(ring[0]).not.toBe(before.actionState);
-    expect(ring[1]).toBe(before.actionState);
+    const { actionStates } = await refresh();
+    expect(actionStates[0]).not.toBe(before.actionState);
+    expect(actionStates[1]).toBe(before.actionState);
+  });
+
+  it('an action-state precondition on a state the account never had is rejected', async () => {
+    const before = await refresh();
+    const result = await writeThenRead(probe, sender, Field(10), { x: 'new', actionState: Field(1) });
+    console.log('new x, never-seen action state:', result);
+    expect(result.status).toBe('rejected');
+    expect(result.errors.join('\n')).toMatch(/Account_action_state_precondition_unsatisfied/);
+    expect(await refresh()).toEqual(before);
   });
 });
