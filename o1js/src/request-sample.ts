@@ -94,7 +94,6 @@ export function buildSample(o: SampleOptions): Sample {
   return { pub, priv, tree, vaultKey, stateCommitment, context };
 }
 
-
 /** The samples the shared vector file pins: one genesis state and one signed state. */
 export const VECTOR_SAMPLES: SampleOptions[] = [defaultSample(), { ...defaultSample(), signed: true, before: 5 }];
 

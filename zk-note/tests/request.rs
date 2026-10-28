@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::str::FromStr;
 use zk_note::balance::{commit, rerandomise, Scalar};
 use zk_note::{
-    auth_tag, commit_secret, field_to_string, genesis_anchor, leaf, next_anchor, nullifier, policy, Field,
+    auth_tag, commit_secret, field_to_string, genesis_anchor, next_anchor, nullifier, policy, Field,
     RequestContext,
 };
 
@@ -40,10 +40,9 @@ fn request_proof_samples_are_recomputed() {
         let secret = f(&w["secret"]);
         let c = &w["context"];
 
-        // The leaf the note was deposited as, and its expiry.
+        // The note's expiry follows from its deposit time, and the request comes before it.
         let (deposit_time, expiry) = (u(&w["depositTime"]), u(&w["expiry"]));
         assert_eq!(policy::expiry_of(deposit_time), expiry);
-        let _ = leaf(u(&w["index"]), commit_secret(secret), u(&w["size"]), deposit_time, expiry);
         assert!(u(&p["requestTime"]) < expiry);
 
         // The state: genesis, or the next state of a previous nullifier derived from this secret.

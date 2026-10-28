@@ -8,7 +8,7 @@ import { authTag, commitSecret, genesisAnchor, leaf, nextAnchor, nullifier } fro
 import { verifyState } from './state.js';
 
 /** Amounts and times are bounded to 64 bits so no comparison can wrap the field. */
-const AMOUNT_BITS = 64;
+const U64_BITS = 64;
 
 /**
  * The public inputs, in the spec's order (#2). The connector reads these fields, and the subsidised
@@ -57,19 +57,19 @@ function checkRequest(pub: RequestPublic, priv: RequestPrivate) {
   // Membership: the leaf is in the tree at `root`, at its own index, and its expiry follows from its deposit time.
   const commitment = commitSecret(priv.secret);
   priv.expiry.assertEquals(expiryOfField(priv.depositTime));
-  priv.depositTime.toBits(AMOUNT_BITS);
-  priv.expiry.toBits(AMOUNT_BITS);
+  priv.depositTime.toBits(U64_BITS);
+  priv.expiry.toBits(U64_BITS);
   priv.path.calculateRoot(leaf(priv.index, commitment, priv.size, priv.depositTime, priv.expiry)).assertEquals(pub.root);
   priv.path.calculateIndex().assertEquals(priv.index);
 
   // Not expired: requestTime < expiry.
-  pub.requestTime.toBits(AMOUNT_BITS);
-  priv.expiry.sub(pub.requestTime).sub(1).toBits(AMOUNT_BITS);
+  pub.requestTime.toBits(U64_BITS);
+  priv.expiry.sub(pub.requestTime).sub(1).toBits(U64_BITS);
 
   // The balance covers `b`.
-  const balanceBits = priv.balance.toBits(AMOUNT_BITS);
-  pub.tier.toBits(AMOUNT_BITS);
-  priv.balance.sub(pub.tier).toBits(AMOUNT_BITS);
+  const balanceBits = priv.balance.toBits(U64_BITS);
+  pub.tier.toBits(U64_BITS);
+  priv.balance.sub(pub.tier).toBits(U64_BITS);
   const stateCommitment = commit(Scalar.fromBits(balanceBits), priv.blinding);
 
   // The state is the genesis state, or one the vault signed as this note's next state.

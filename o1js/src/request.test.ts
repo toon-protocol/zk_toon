@@ -81,8 +81,9 @@ describe('request proof constraints', () => {
   it('fail for a genesis balance other than the deposit size', async () => {
     const g = sample();
     const balance = g.priv.balance.add(1);
-    const c = commit(Scalar.from(balance.toBigInt()), Scalar.from(777_000_111n));
-    const pub = withPub(g, { commitment: rerandomise(c, Scalar.from(424_242n)) });
+    const { blinding, rerandom } = defaultSample();
+    const c = commit(Scalar.from(balance.toBigInt()), Scalar.from(blinding));
+    const pub = withPub(g, { commitment: rerandomise(c, Scalar.from(rerandom)) });
     expect(await holds(pub, withPriv(g, { balance }))).toBe(false);
   });
 
@@ -130,7 +131,8 @@ describe('request proof constraints', () => {
 
   it('fail when the re-randomised commitment is of another balance', async () => {
     const s = sample();
-    const other = rerandomise(commit(Scalar.from(1n), Scalar.from(777_000_111n)), Scalar.from(424_242n));
+    const { blinding, rerandom } = defaultSample();
+    const other = rerandomise(commit(Scalar.from(1n), Scalar.from(blinding)), Scalar.from(rerandom));
     expect(await holds(withPub(s, { commitment: other }), s.priv)).toBe(false);
   });
 
