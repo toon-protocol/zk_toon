@@ -145,6 +145,7 @@ export function buildVectors() {
     noteLifetimeMs: policy.NOTE_LIFETIME_MS.toString(),
     minSubsidyAgeMs: policy.MIN_SUBSIDY_AGE_MS.toString(),
     subsidyPeriodMs: policy.SUBSIDY_PERIOD_MS.toString(),
+    challengeWindowMs: policy.CHALLENGE_WINDOW_MS.toString(),
     tiers: policy.TIERS.map(String),
     depositSizes: policy.DEPOSIT_SIZES.map(String),
   };

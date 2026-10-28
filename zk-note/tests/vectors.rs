@@ -180,6 +180,7 @@ fn policy_constants_match() {
     assert_eq!(policy::NOTE_LIFETIME_MS, u(&p["noteLifetimeMs"]));
     assert_eq!(policy::MIN_SUBSIDY_AGE_MS, u(&p["minSubsidyAgeMs"]));
     assert_eq!(policy::SUBSIDY_PERIOD_MS, u(&p["subsidyPeriodMs"]));
+    assert_eq!(policy::CHALLENGE_WINDOW_MS, u(&p["challengeWindowMs"]));
     let tiers: Vec<u64> = p["tiers"].as_array().unwrap().iter().map(u).collect();
     assert_eq!(tiers, policy::TIERS);
     let sizes: Vec<u64> = p["depositSizes"].as_array().unwrap().iter().map(u).collect();
