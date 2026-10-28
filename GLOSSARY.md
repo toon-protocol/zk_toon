@@ -143,3 +143,10 @@ _Avoid_: Ownership withdrawal, identity proof
 The zk edge operator's address, which receives what a closed or expired note's balance leaves of its
 deposit.
 _Avoid_: Subsidy budget, fee address
+
+### Building transactions
+
+**Transaction builder**:
+The o1js process that builds and proves vault transactions and request proofs for callers in Rust,
+which send it a note's secrets and get back a transaction ready to send or a proof.
+_Avoid_: Prover sidecar, o1js bridge

@@ -7,6 +7,7 @@
   "scripts": {
     "test": "vitest run",
     "vectors": "tsx src/gen-vectors.ts",
+    "tx-builder": "tsx src/tx-builder-main.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": { "o1js": "3.1.0" },

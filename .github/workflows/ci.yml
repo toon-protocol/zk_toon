@@ -20,6 +20,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # The transaction builder's Rust tests start the o1js builder, so its packages come first.
+      - name: o1js install
+        run: |
+          cd o1js
+          npm ci
       - name: Rust vectors
         run: |
           cargo test --workspace -- --nocapture 2>&1 | tee rust.log
@@ -27,6 +32,6 @@ jobs:
       - name: o1js vectors
         run: |
           cd o1js
-          npm ci
+          npm run typecheck
           npm test 2>&1 | tee ../o1js.log
           grep -E 'vector cases run: [1-9][0-9]*' ../o1js.log
