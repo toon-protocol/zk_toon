@@ -25,10 +25,14 @@ A hiding commitment to a zk note's balance, `B·G + r·H` on Pallas, that its ho
 or charge without opening it.
 _Avoid_: Encrypted balance, hidden balance
 
+**State key**:
+The Mina public key the zk edge signs states and clearances with, and the vault accepts them from.
+It isn't the vault's own address.
+_Avoid_: Vault key, edge key, signing key (unqualified)
+
 **State message**:
-What the zk edge signs for a zk note's state: the vault key (the Mina public key the vault accepts
-state signatures from), the balance commitment and the anchor, signed under the devnet network ID
-for every vault.
+What the zk edge signs for a zk note's state: the state key, the balance commitment and the anchor,
+signed under the devnet network ID for every vault.
 _Avoid_: Receipt, checkpoint
 
 **State advance**:
@@ -88,3 +92,25 @@ _Avoid_: Settlement record, charge record
 The hash that names one record in the evidence file. The connector's journal stores it in place of
 the record.
 _Avoid_: Proof hash, record id
+
+### Leaving the vault
+
+**Mutual close**:
+Leaving by agreement: a payer withdraws a zk note's balance with the zk edge's clearance, without
+a challenge window.
+_Avoid_: Cooperative exit, withdrawal (unqualified)
+
+**Clearance**:
+The zk edge's signature, under the state key, agreeing that one state's nullifier may close to one
+destination.
+_Avoid_: Co-signature, release, approval
+
+**Ownership proof**:
+A proof, shown only to the zk edge, that the payer holds a zk note's current state. The vault
+refuses it.
+_Avoid_: Ownership withdrawal, identity proof
+
+**Treasury**:
+The zk edge operator's address, which receives what a closed or expired note's balance leaves of its
+deposit.
+_Avoid_: Subsidy budget, fee address
