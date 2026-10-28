@@ -11,6 +11,8 @@ const F = (n: bigint | number | string) => Field(n);
 
 const SECRET = 123456789012345678901234567890n;
 const SECRET_B = 987654321n;
+/** Secrets of the vault keys the zk edge signs state under. */
+const VAULT_SECRETS = [1n, 987654321098765432109876543210n];
 const DAY = policy.MS_PER_DAY;
 const WEEK = policy.SUBSIDY_PERIOD_MS;
 const Q = Scalar.ORDER;
@@ -85,8 +87,10 @@ export function buildVectors() {
     otherSecretNullifier: s(p.nullifier(F(SECRET_B), F(chain[0].anchor))),
   };
 
+  // The edge in an auth tag is the x-coordinate of the vault key the zk edge signs state under.
+  const [edge, otherEdge] = VAULT_SECRETS.map((secret) => PrivateKey.fromBigInt(secret).toPublicKey().x);
   const ctx = {
-    edge: F(424242), sessionKeyX: F(31337), sessionKeyIsOdd: Bool(true), tier: F(policy.TIERS[1]),
+    edge, sessionKeyX: F(31337), sessionKeyIsOdd: Bool(true), tier: F(policy.TIERS[1]),
     expiry: F(depositTime + 600_000n),
   };
   const ctxJson = (c: p.RequestContext) => ({
@@ -96,7 +100,7 @@ export function buildVectors() {
   const n0 = F(chain[0].nullifier);
   const authTags = [
     ctx,
-    { ...ctx, edge: F(424243) },
+    { ...ctx, edge: otherEdge },
     { ...ctx, sessionKeyIsOdd: Bool(false) },
     { ...ctx, tier: F(policy.TIERS[0]) },
     { ...ctx, expiry: F(depositTime + 600_001n) },
@@ -130,6 +134,17 @@ export function buildVectors() {
     oldEnough: policy.isOldEnoughForSubsidy(depositTime, depositTime + delta),
   }));
 
+  // A requestTime at and either side of each edge of the window around now.
+  const now = depositTime;
+  const requestDeltas = [
+    0n, -policy.REQUEST_MAX_AGE_MS, -policy.REQUEST_MAX_AGE_MS - 1n,
+    policy.REQUEST_MAX_LEAD_MS, policy.REQUEST_MAX_LEAD_MS + 1n,
+  ];
+  const requestTimes = requestDeltas.map((delta) => ({
+    now: now.toString(), requestTime: (now + delta).toString(),
+    fresh: policy.isRequestTimeFresh(now + delta, now),
+  }));
+
   // Which amounts are tiers, deposit sizes and the smallest tier.
   const amounts = [
     0n, ...policy.TIERS, ...policy.DEPOSIT_SIZES, policy.TIERS[0] + 1n, policy.DEPOSIT_SIZES[0] - 1n,
@@ -147,6 +162,8 @@ export function buildVectors() {
     minSubsidyAgeMs: policy.MIN_SUBSIDY_AGE_MS.toString(),
     subsidyPeriodMs: policy.SUBSIDY_PERIOD_MS.toString(),
     challengeWindowMs: policy.CHALLENGE_WINDOW_MS.toString(),
+    requestMaxAgeMs: policy.REQUEST_MAX_AGE_MS.toString(),
+    requestMaxLeadMs: policy.REQUEST_MAX_LEAD_MS.toString(),
     tiers: policy.TIERS.map(String),
     depositSizes: policy.DEPOSIT_SIZES.map(String),
   };
@@ -182,7 +199,6 @@ export function buildVectors() {
     recommitted: pointJson(bal.commit(sc(balance - delta), sc(blinding))),
   }));
 
-  const VAULT_SECRETS = [1n, 987654321098765432109876543210n];
   const stateCases = [
     { secret: VAULT_SECRETS[0], balance: 10_000_000n, blinding: 123456789n, anchor: genesis },
     { secret: VAULT_SECRETS[1], balance: 1_000_000_000n, blinding: 5n, anchor: F(chain[1].anchor) },
@@ -215,7 +231,7 @@ export function buildVectors() {
       'Shared zk-note test vectors. Field elements are decimal strings; times are milliseconds. ' +
       'Regenerate with `npm run vectors` in o1js/; the Rust crate and the o1js tests both reproduce every entry.',
     tags, policy: policyJson, poseidon, domainSeparation, commitment, leaves, nullifiers,
-    authTags, periodNullifiers, periods, ages, membership,
+    authTags, periodNullifiers, periods, ages, requestTimes, membership,
     generators, balanceCommitments: commitments, rerandomised, charged, stateSignatures,
     requestProofs,
   };

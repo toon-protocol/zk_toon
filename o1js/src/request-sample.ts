@@ -22,7 +22,8 @@ export interface SampleOptions {
   blinding: bigint;
   rerandom: bigint;
   vaultSecret: bigint;
-  ctx: { edge: bigint; sessionKeyX: bigint; sessionKeyIsOdd: boolean; expiry: bigint };
+  /** The edge is the vault key's x-coordinate, the key the zk edge signs state under. */
+  ctx: { sessionKeyX: bigint; sessionKeyIsOdd: boolean; expiry: bigint };
 }
 
 export const defaultSample = (): SampleOptions => {
@@ -31,7 +32,7 @@ export const defaultSample = (): SampleOptions => {
     secret: 123456789012345678901234567890n, before: 3, size: DEPOSIT_SIZES[0], depositTime,
     requestTime: depositTime + 8n * 86_400_000n, tier: TIERS[1], signed: false,
     balance: 4_000_000_000n, blinding: 777_000_111n, rerandom: 424_242n, vaultSecret: 1n,
-    ctx: { edge: 424242n, sessionKeyX: 31337n, sessionKeyIsOdd: true, expiry: depositTime + 9n * 86_400_000n },
+    ctx: { sessionKeyX: 31337n, sessionKeyIsOdd: true, expiry: depositTime + 9n * 86_400_000n },
   };
 };
 
@@ -75,7 +76,7 @@ export function buildSample(o: SampleOptions): Sample {
   }
 
   const context: RequestContext = {
-    edge: F(o.ctx.edge), sessionKeyX: F(o.ctx.sessionKeyX), sessionKeyIsOdd: Bool(o.ctx.sessionKeyIsOdd),
+    edge: vault.x, sessionKeyX: F(o.ctx.sessionKeyX), sessionKeyIsOdd: Bool(o.ctx.sessionKeyIsOdd),
     tier: F(o.tier), expiry: F(o.ctx.expiry),
   };
   const n = nullifier(secret, anchor);
