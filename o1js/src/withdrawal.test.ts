@@ -137,5 +137,6 @@ describe('withdrawal vectors', () => {
       expect(withdrawalVector(s, o)).toEqual(file.withdrawalProofs[i]);
       expect(await holds(o.kind, s.pub, s.priv)).toBe(true);
     }
+    console.log(`vector cases run: ${WITHDRAWAL_SAMPLES.length}`);
   });
 });

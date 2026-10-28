@@ -8,7 +8,7 @@ import { authTag, commitSecret, genesisAnchor, leaf, nextAnchor, nullifier } fro
 import { verifyState } from './state.js';
 
 /** Amounts and times are bounded to 64 bits so no comparison can wrap the field. */
-const U64_BITS = 64;
+export const U64_BITS = 64;
 
 /**
  * The public inputs, in the spec's order (#2). The connector reads these fields, and the subsidised

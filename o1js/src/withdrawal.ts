@@ -4,9 +4,7 @@
 // Escape is added by #9, as kind 2.
 import { Bool, Field, PublicKey, Scalar, Signature, Struct, ZkProgram } from 'o1js';
 import { NoteWitness } from './note-tree.js';
-import { checkNoteState } from './request.js';
-
-const U64_BITS = 64;
+import { U64_BITS, checkNoteState } from './request.js';
 
 export const KIND_MUTUAL_CLOSE = 1;
 export const KIND_ESCAPE = 2;

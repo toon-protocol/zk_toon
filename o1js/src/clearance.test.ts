@@ -25,6 +25,7 @@ describe('clearance', () => {
       expect({ r: sig.r.toString(), s: sig.s.toBigInt().toString() }).toEqual(e.signature);
       expect(verifyClearance(sig, m).toBoolean()).toBe(true);
     }
+    console.log(`vector cases run: ${cases.length}`);
   });
 
   it('covers one nullifier and one destination, and one key', () => {
