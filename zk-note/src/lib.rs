@@ -3,6 +3,7 @@
 
 pub mod balance;
 pub mod policy;
+pub mod request;
 pub mod state;
 
 use ark_ff::PrimeField;

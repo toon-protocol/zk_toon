@@ -102,6 +102,8 @@ export function requestVector(s: Sample, o: SampleOptions) {
   const str = (f: Field) => f.toString();
   const pt = (g: Group) => ({ x: str(g.x), y: str(g.y) });
   return {
+    /** The public input as o1js flattens it into a JsonProof's `publicInput`, in `RequestPublic`'s field order. */
+    publicInput: RequestPublic.toFields(s.pub).map(str),
     public: {
       vault: { x: str(s.pub.vault.x), isOdd: str(s.pub.vault.isOdd.toField()) },
       root: str(s.pub.root), requestTime: str(s.pub.requestTime), tier: str(s.pub.tier),
