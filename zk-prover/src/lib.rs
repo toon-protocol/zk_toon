@@ -8,6 +8,7 @@
 //! in Rust ([`StepWitness::from_parts`]).
 
 pub mod pins;
+pub mod verify;
 
 use std::str::FromStr;
 
