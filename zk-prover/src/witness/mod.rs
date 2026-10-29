@@ -101,6 +101,13 @@ impl Cs {
         self.aux.extend(vs);
     }
 
+    /// Overwrite the value of an existing variable. The step circuit's app state is the account update
+    /// hash, which the circuit computes later and only compares (`checkPublicInput`) and hashes
+    /// last; nothing in between reads it.
+    pub fn set(&mut self, var: usize, v: Fp) {
+        self.aux[var - 1] = v;
+    }
+
     /// `emptyCell` (`gadgets/basic.js`): a variable with value 0, for an unused gate cell.
     pub fn empty_cell(&mut self) -> Field {
         self.exists_one(Fp::zero())
@@ -465,9 +472,4 @@ pub(crate) fn bit_slice(x: &Fp, start: usize, length: usize) -> Fp {
     };
     let masked = if length >= 128 { shifted } else { shifted & ((1u128 << length) - 1) };
     Fp::from(masked)
-}
-
-/// `Fp.from(u128)`.
-pub(crate) fn fp_from_u128(x: u128) -> Fp {
-    Fp::from(x)
 }

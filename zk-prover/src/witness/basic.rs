@@ -47,13 +47,13 @@ fn walk(x: &Expr, sx: Fp, lc: &mut LinearCombination) {
 /// `ScaledVar | Constant`, the result of [`reduce_to_scaled_var`].
 pub enum Scaled {
     Constant(Fp),
-    /// `scale * var`.
-    Var(Fp, Field),
+    /// `scale * var`. Only the scale is kept: nothing here needs the variable.
+    Var(Fp),
 }
 
 impl Scaled {
     fn is_var(&self) -> bool {
-        matches!(self, Scaled::Var(..))
+        matches!(self, Scaled::Var(_))
     }
 }
 
@@ -81,12 +81,12 @@ pub fn reduce_to_scaled_var(cs: &mut Cs, x: &Field) -> Scaled {
     }
     if terms.len() == 1 {
         let (s, i) = terms[0];
-        let xv = cs.var(i);
         if c.is_zero() {
-            return Scaled::Var(s, xv);
+            return Scaled::Var(s);
         }
-        let res = linear(cs, &xv, s, c);
-        return Scaled::Var(Fp::one(), res);
+        let xv = cs.var(i);
+        linear(cs, &xv, s, c);
+        return Scaled::Var(Fp::one());
     }
     let (s0, i0) = terms[0];
     let mut rest: Vec<(Fp, usize)> = terms[1..].to_vec();
@@ -98,8 +98,8 @@ pub fn reduce_to_scaled_var(cs: &mut Cs, x: &Field) -> Scaled {
         s1 = Fp::one();
     }
     let x0 = cs.var(i0);
-    let res = bilinear(cs, &x0, &x1, [Fp::zero(), s0, s1, c]);
-    Scaled::Var(Fp::one(), res)
+    bilinear(cs, &x0, &x1, [Fp::zero(), s0, s1, c]);
+    Scaled::Var(Fp::one())
 }
 
 /// `assertMulCompatible`: `x * y === z`, creating the variables snarky's `assert_r1cs` does.
@@ -132,11 +132,11 @@ pub fn assert_square_compatible(cs: &mut Cs, x: &Field, z: &Field) {
     let xv = reduce_to_scaled_var(cs, x);
     let zv = reduce_to_scaled_var(cs, z);
     match (xv, zv) {
-        (Scaled::Var(..), Scaled::Var(..)) => {}
-        (Scaled::Var(..), Scaled::Constant(_)) => {
+        (Scaled::Var(_), Scaled::Var(_)) => {}
+        (Scaled::Var(_), Scaled::Constant(_)) => {
             cs.empty_cell();
         }
-        (Scaled::Constant(_), Scaled::Var(..)) => {
+        (Scaled::Constant(_), Scaled::Var(_)) => {
             cs.empty_cell();
             cs.empty_cell();
         }
@@ -149,7 +149,7 @@ pub fn assert_square_compatible(cs: &mut Cs, x: &Field, z: &Field) {
 /// `assertBooleanCompatible`: `x` is 0 or 1.
 pub fn assert_boolean_compatible(cs: &mut Cs, x: &Field) {
     match reduce_to_scaled_var(cs, x) {
-        Scaled::Var(..) => {
+        Scaled::Var(_) => {
             cs.empty_cell();
         }
         Scaled::Constant(x0) => assert_eq!(x0 * x0, x0, "assertBoolean()"),
@@ -161,13 +161,13 @@ pub fn assert_equal_compatible(cs: &mut Cs, x: &Field, y: &Field) {
     let yv = reduce_to_scaled_var(cs, y);
     let xv = reduce_to_scaled_var(cs, x);
     match (xv, yv) {
-        (Scaled::Var(sx, _), Scaled::Var(sy, _)) => {
+        (Scaled::Var(sx), Scaled::Var(sy)) => {
             if sx != sy {
                 cs.empty_cell();
             }
             // otherwise a wire
         }
-        (Scaled::Var(..), Scaled::Constant(_)) | (Scaled::Constant(_), Scaled::Var(..)) => {}
+        (Scaled::Var(_), Scaled::Constant(_)) | (Scaled::Constant(_), Scaled::Var(_)) => {}
         (Scaled::Constant(sx), Scaled::Constant(sy)) => assert_eq!(sx, sy, "assertEqual()"),
     }
 }

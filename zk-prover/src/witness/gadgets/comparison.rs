@@ -1,6 +1,6 @@
 //! Mirrors o1js `lib/provable/gadgets/comparison.js`.
 
-use ark_ff::{Field as _, One, PrimeField, Zero};
+use ark_ff::{Field as _, One, Zero};
 use mina_curves::pasta::Fp;
 use num_bigint::BigInt;
 

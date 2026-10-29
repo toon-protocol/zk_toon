@@ -1,7 +1,7 @@
 //! Mirrors the parts of o1js `lib/provable/gadgets/foreign-field.js` that `land` uses: the chain
 //! of one foreign-field addition, with its range check.
 
-use ark_ff::{BigInteger, PrimeField, Zero};
+use ark_ff::{BigInteger, PrimeField};
 use mina_curves::pasta::Fp;
 use num_bigint::{BigInt, Sign};
 

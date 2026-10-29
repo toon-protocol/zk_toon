@@ -20,14 +20,14 @@ use super::{
     account_update::{pack_to_fields, Body},
     gadgets::{
         comparison::assert_less_than_generic_u64,
-        foreign_field::{big_to_fp, fp_to_big},
+        foreign_field::big_to_fp,
         native_curve::{fq_modulus, Point, ShiftedScalar},
         poseidon::{self, Sponge},
         range_check::range_check_n_64,
         signature::{self, PublicKey, Signature},
     },
     pickles::{self, from_fork},
-    Bool, Cs, Field,
+    Cs, Field,
 };
 
 /// Everything `land`'s witness depends on.
@@ -109,29 +109,20 @@ fn witness_public_key(cs: &mut Cs, x: Fp, is_odd: bool) -> PublicKey {
 /// The witness of `land`.
 ///
 /// The app state (the first two variables) is the account update hash, which the circuit also
-/// computes; it is run twice, the first time to get that hash.
+/// computes. The circuit is built with a placeholder there, and the hash put in once it is known:
+/// nothing in between reads it.
 pub fn land_witness(inputs: &LandInputs) -> anyhow::Result<LandWitness> {
-    let first = run(inputs, Fp::zero())?;
-    let second = run(inputs, first.account_update_hash)?;
-    anyhow::ensure!(
-        first.account_update_hash == second.account_update_hash,
-        "the account update hash depends on the app state"
-    );
-    Ok(LandWitness { primary: vec![second.public_input], aux: second.cs.into_aux() })
-}
-
-struct Run {
-    cs: Cs,
-    account_update_hash: Fp,
-    public_input: Fp,
-}
-
-fn run(inputs: &LandInputs, app_state_account_update: Fp) -> anyhow::Result<Run> {
     let mut cs = Cs::new();
-    let cs = &mut cs;
+    let account_update_hash = method_and_wrapper(&mut cs, inputs)?;
+    cs.set(1, account_update_hash);
+    let public_input = step_statement_hash(&mut cs, inputs)?;
+    Ok(LandWitness { primary: vec![public_input], aux: cs.into_aux() })
+}
 
-    // Pickles: the app state, `dummy_constraints`
-    pickles::prelude(cs, app_state_account_update, Fp::zero());
+/// Pickles' prelude, the wrapper, `land` and the account update hash. Returns that hash.
+fn method_and_wrapper(cs: &mut Cs, inputs: &LandInputs) -> anyhow::Result<Fp> {
+    // Pickles: the app state (a placeholder, see `land_witness`), `dummy_constraints`
+    pickles::prelude(cs, Fp::zero(), Fp::zero());
 
     // Pickles' rule main witnesses the arguments of the method: the address, the token id, then the
     // method's own (`cumulative: UInt64`, `sig: Signature`).
@@ -161,8 +152,7 @@ fn run(inputs: &LandInputs, app_state_account_update: Fp) -> anyhow::Result<Run>
     assert_less_than_generic_u64(cs, &landed, &cumulative);
 
     // the wrapper: call data = hash([argsSize, ...args packed, returnSize, name, blinding])
-    let two = Fp::from(2u64);
-    let packed_args = cumulative.mul_const(two).add(&low_bit_field(&sig));
+    let packed_args = cumulative.mul_const(Fp::from(2u64)).add(&sig.s.low_bit.to_field());
     let call_data_fields = vec![
         Field::from_u64(4),
         sig.r.clone(),
@@ -174,7 +164,7 @@ fn run(inputs: &LandInputs, app_state_account_update: Fp) -> anyhow::Result<Run>
     ];
     let call_data = poseidon::hash(cs, &call_data_fields);
     // setKind: the proof authorization carries the verification key hash
-    let vk_hash = cs.exists_one(inputs.vk_hash);
+    let verification_key_hash = cs.exists_one(inputs.vk_hash);
     // the account update hash
     let body = Body {
         public_key_x: zkapp.x.clone(),
@@ -182,14 +172,16 @@ fn run(inputs: &LandInputs, app_state_account_update: Fp) -> anyhow::Result<Run>
         app_state0: cumulative.clone(),
         call_data,
         state_preconditions: [landed.clone(), payer.x.clone(), payer.is_odd.to_field()],
-        verification_key_hash: vk_hash,
+        verification_key_hash,
     };
     let (fields, packed) = body.input();
     let input = pack_to_fields(fields, packed);
     let prefix = poseidon::salted_state("TestnetZkappBody****").map(Field::constant);
-    let account_update_hash = poseidon::update(cs, prefix, &input)[0].clone();
+    Ok(poseidon::update(cs, prefix, &input)[0].value())
+}
 
-    // Pickles: the verification key index, hashed with the app state to the public input
+/// Pickles: the verification key index, hashed with the app state into the public input.
+fn step_statement_hash(cs: &mut Cs, inputs: &LandInputs) -> anyhow::Result<Fp> {
     let vk = crate::verify::load_vk(&inputs.vk)?;
     let start = cs.next_var();
     let ((), aux) = from_fork(|w: &mut Witness<Fp>| {
@@ -197,23 +189,14 @@ fn run(inputs: &LandInputs, app_state_account_update: Fp) -> anyhow::Result<Run>
     });
     cs.extend(aux);
     let mut sponge = Sponge::new();
+    // the 56 fields of the 28 commitments are the first variables `exists` created
     for i in 0..56 {
         let index_field = cs.var(start + i);
         sponge.absorb(cs, &index_field);
     }
-    let app_state = [cs.var(1), cs.var(2)];
-    for x in &app_state {
-        sponge.absorb(cs, x);
+    for var in [1, 2] {
+        let app_state = cs.var(var);
+        sponge.absorb(cs, &app_state);
     }
-    let public_input = sponge.squeeze(cs).value();
-
-    let hash = account_update_hash.value();
-    let _ = fp_to_big;
-    let _ = Bool::constant;
-    Ok(Run { cs: std::mem::take(cs), account_update_hash: hash, public_input })
-}
-
-/// The low bit of the signature scalar as a field.
-fn low_bit_field(sig: &Signature) -> Field {
-    sig.s.low_bit.to_field()
+    Ok(sponge.squeeze(cs).value())
 }
