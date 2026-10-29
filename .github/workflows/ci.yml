@@ -17,6 +17,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.92"
+      # Building mina-rust (zk-prover's ledger) from scratch is slow.
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
           node-version: 22
