@@ -18,7 +18,9 @@
 //! - [`RequestContext::edge`] is the x-coordinate of the vault key the zk edge signs state under;
 //! - a `requestTime` is refused when it is more than [`policy::REQUEST_MAX_AGE_MS`] behind or
 //!   [`policy::REQUEST_MAX_LEAD_MS`] ahead of the zk edge's clock ([`policy::is_request_time_fresh`]);
-//! - subsidised proofs are refused until connector#1581;
+//! - subsidised proofs are refused until connector#1581; once accepted, every request proof must pass
+//!   [`request::RequestPublic::check_subsidy_period`] against the vault's `creationTime`, since the
+//!   circuit cannot bind a subsidised proof's period to the vault;
 //! - a [`clearance`] is signed by the state key under the same rule as a state message, and the
 //!   withdrawal proof ([`withdrawal`]) has its own verification key, pinned apart from the request
 //!   proof's (connector#1556).
@@ -133,6 +135,22 @@ pub fn auth_tag(nullifier: Field, ctx: &RequestContext) -> Field {
 /// Unlinkable across periods without the secret.
 pub fn period_nullifier(secret: Field, index: u64, period: u64) -> Field {
     hash_with_tag(tags::PERIOD_NULLIFIER, &[secret, index.into(), period.into()])
+}
+
+/// The value of a field element that fits 64 bits, as a circuit's `UInt64` or a range-checked
+/// `Field` holds it; `None` otherwise.
+pub fn field_to_u64(f: Field) -> Option<u64> {
+    let limbs = f.into_bigint().0;
+    limbs[1..].iter().all(|l| *l == 0).then_some(limbs[0])
+}
+
+/// The value of a field element that is 0 or 1, as a circuit's `Bool` holds it; `None` otherwise.
+pub fn field_to_bool(f: Field) -> Option<bool> {
+    match field_to_u64(f)? {
+        0 => Some(false),
+        1 => Some(true),
+        _ => None,
+    }
 }
 
 /// Decimal string of a field element, the vector file's encoding.

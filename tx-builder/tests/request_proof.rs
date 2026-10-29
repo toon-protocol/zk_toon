@@ -38,12 +38,13 @@ fn request_matches(b: &mut TxBuilder, chain: &Chain, note: &zk_toon_tx_builder::
         tier: TIERS[1],
         expiry: input.request_expiry,
     };
-    assert_eq!(p.vault, state_key);
+    assert_eq!((p.vault_x, p.vault_is_odd), (state_key.x, state_key.is_odd));
     assert_eq!(p.root, root);
     assert_eq!((p.request_time, p.tier), (request_time, TIERS[1]));
     assert_eq!(p.nullifier, n);
     assert_eq!(p.tag, auth_tag(n, &ctx));
-    assert_eq!(p.commitment, rerandomise(commit(Scalar::from(balance), state.blinding), input.rerandom_blinding));
+    let commitment = rerandomise(commit(Scalar::from(balance), state.blinding), input.rerandom_blinding);
+    assert_eq!((p.commitment.x, p.commitment.y), (commitment.x, commitment.y));
     assert_eq!((p.subsidised, p.period, p.period_nullifier), (false, 0, Field::from(0u64)));
 }
 
@@ -83,10 +84,14 @@ fn a_real_request_proof_verifies() {
         })
         .unwrap();
     assert_eq!(proof.public.nullifier, n);
-    assert!(b.verify_request_proof(&proof).unwrap());
+    assert!(b.verify_request_proof(&proof, None).unwrap());
+    // An unsubsidised proof's zero period passes the period check against the vault's creation time.
+    let creation: u64 = chain.vault_state(&mut b)["creationTime"].as_str().unwrap().parse().unwrap();
+    assert_eq!(proof.public.check_subsidy_period(creation), Ok(()));
+    assert!(b.verify_request_proof(&proof, Some(creation)).unwrap());
 
     // The same proof claiming another nullifier does not verify.
     let mut forged = proof.clone();
     forged.proof["publicInput"][5] = serde_json::json!("1");
-    assert!(!b.verify_request_proof(&forged).unwrap());
+    assert!(!b.verify_request_proof(&forged, None).unwrap());
 }

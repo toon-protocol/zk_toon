@@ -155,8 +155,11 @@ subsidised, period, periodNullifier]`. `proof` is the o1js `JsonProof` the zk ed
 
 ### `verifyRequestProof`
 
-`{"proof": <JsonProof>}` → `{"valid": true|false}`: whether the proof verifies against the request
-program's verification key, compiled by the builder. Needs `--proofs=on`.
+`{"proof": <JsonProof>, "vaultCreation"?: <ms>}` → `{"valid": true|false}`: whether the proof
+verifies against the request program's verification key, compiled by the builder. Given the vault's
+`creationTime` as `vaultCreation`, it is also valid only if its period is that vault's
+(`subsidyPeriodHolds` in `o1js/src/request.ts`, `RequestPublic::check_subsidy_period` in zk-note): the
+circuit can't check that, so a zk edge must. Needs `--proofs=on`.
 
 ### Local chain operations (`--local` only)
 
@@ -171,7 +174,7 @@ These let tests show that the vault accepts what the builder builds.
 | `local.advance` | `ms` | `{}`, after moving the clock forward at least `ms` |
 | `local.now` | | `{"now": <ms>}` |
 | `local.balance` | `publicKey` | `{"balance": <nanomina>}` |
-| `local.vaultState` | `vault` | the vault's roots, next leaf index, state key and treasury |
+| `local.vaultState` | `vault` | the vault's roots, next leaf index, state key, treasury and creation time |
 | `local.graphql` | `endpoint` (`mina` or `archive`), `request` | the answer to one of the challenger adapter's named GraphQL operations (`VaultState`, `EscapeEvents`, `SendChallenge`, `ChallengeStatus`), shaped as the daemon or archive answers it; a refused send is a GraphQL error |
 
 ## Failure answers

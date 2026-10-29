@@ -6,7 +6,7 @@ import { DEPOSIT_SIZES, TIERS, expiryOf, subsidyPeriod } from './policy.js';
 import {
   authTag, commitSecret, genesisAnchor, nextAnchor, nullifier, periodNullifier, type RequestContext,
 } from './primitives.js';
-import { RequestPrivate, RequestPublic } from './request.js';
+import { RequestPrivate, RequestPublic, subsidyPeriodHolds } from './request.js';
 import { stateFields } from './state.js';
 
 export interface SampleOptions {
@@ -165,5 +165,36 @@ export function requestVector(s: Sample, o: SampleOptions) {
       // The subsidised method's extra private input; absent for an unsubsidised request.
       ...(o.subsidy ? { vaultCreation: o.subsidy.vaultCreation.toString() } : {}),
     },
+  };
+}
+
+/**
+ * Subsidised claims by one note, all in the vault's real period 2 (`VECTOR_VAULT_CREATION`), each
+ * proven with the creation time `provenWith`: the honest one, and two forged earlier so that each
+ * proves another period and so another per-period nullifier. The circuit accepts all three; only the
+ * honest one passes the zk edge's period check (`subsidyPeriodHolds`).
+ */
+export const SUBSIDY_PERIOD_SAMPLES: { vaultCreation: bigint; options: SampleOptions }[] = (() => {
+  const DAY = 86_400_000n;
+  const claim = (requestTime: bigint, provenWith: bigint): SampleOptions => ({
+    ...defaultSample(), tier: TIERS[0], requestTime, subsidy: { vaultCreation: provenWith },
+    ctx: { ...defaultSample().ctx, expiry: requestTime + 60_000n },
+  });
+  const { depositTime } = defaultSample();
+  return [
+    { vaultCreation: VECTOR_VAULT_CREATION, options: claim(depositTime + 8n * DAY, VECTOR_VAULT_CREATION) },
+    { vaultCreation: VECTOR_VAULT_CREATION, options: claim(depositTime + 8n * DAY, VECTOR_VAULT_CREATION - 7n * DAY) },
+    { vaultCreation: VECTOR_VAULT_CREATION, options: claim(depositTime + 10n * DAY, VECTOR_VAULT_CREATION - 14n * DAY) },
+  ];
+})();
+
+/** A subsidised claim's public input, the vault's real creation time, and whether the period check passes it. */
+export function subsidyPeriodVector(c: { vaultCreation: bigint; options: SampleOptions }) {
+  const s = buildSample(c.options);
+  return {
+    vaultCreation: c.vaultCreation.toString(),
+    provenWith: c.options.subsidy!.vaultCreation.toString(),
+    publicInput: RequestPublic.toFields(s.pub).map((f) => f.toString()),
+    passes: subsidyPeriodHolds(s.pub, c.vaultCreation),
   };
 }

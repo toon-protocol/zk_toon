@@ -179,9 +179,14 @@ impl TxBuilder {
     }
 
     /// Whether `proof` verifies against the request proof's verification key, as the builder
-    /// compiles it.
-    pub fn verify_request_proof(&mut self, proof: &RequestProof) -> Result<bool, Error> {
-        let answer = self.call("verifyRequestProof", json!({ "proof": proof.proof }))?;
+    /// compiles it, and, given the vault's creation time, whether its period is that vault's
+    /// ([`zk_note::request::RequestPublic::check_subsidy_period`]), which a zk edge must check.
+    pub fn verify_request_proof(&mut self, proof: &RequestProof, vault_creation: Option<u64>) -> Result<bool, Error> {
+        let mut params = json!({ "proof": proof.proof });
+        if let Some(c) = vault_creation {
+            params["vaultCreation"] = json!(c.to_string());
+        }
+        let answer = self.call("verifyRequestProof", params)?;
         answer["valid"].as_bool().ok_or_else(|| Error::Protocol("valid is not a boolean".into()))
     }
 }

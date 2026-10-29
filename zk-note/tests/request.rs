@@ -6,6 +6,7 @@ use mina_curves::pasta::Pallas;
 use serde_json::Value;
 use std::str::FromStr;
 use zk_note::balance::{commit, rerandomise, Scalar};
+use zk_note::request::{RequestPublic, SubsidyPeriodError};
 use zk_note::{
     auth_tag, commit_secret, field_to_string, genesis_anchor, next_anchor, nullifier, period_nullifier, policy,
     Field, RequestContext,
@@ -100,7 +101,7 @@ fn request_proof_samples_are_recomputed() {
 
 #[test]
 fn public_input_array_decodes_to_the_structured_public_values() {
-    use zk_note::request::{RequestPublic, RequestPublicError};
+    use zk_note::request::RequestPublicError;
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../test-vectors/zk-note.json");
     let v: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let entries = v["requestProofs"].as_array().unwrap();
@@ -119,7 +120,7 @@ fn public_input_array_decodes_to_the_structured_public_values() {
         assert_eq!(r.tag, f(&p["tag"]));
         assert_eq!((r.commitment.x, r.commitment.y), (f(&p["commitment"]["x"]), f(&p["commitment"]["y"])));
         assert_eq!(r.subsidised, p["subsidised"].as_bool().unwrap());
-        assert_eq!(r.period, f(&p["period"]));
+        assert_eq!(r.period, u(&p["period"]));
         assert_eq!(r.period_nullifier, f(&p["periodNullifier"]));
 
         assert_eq!(RequestPublic::from_fields(&flat[1..]), Err(RequestPublicError::Length(11)));
@@ -130,4 +131,87 @@ fn public_input_array_decodes_to_the_structured_public_values() {
         bad[4] = -Field::from(1u64);
         assert_eq!(RequestPublic::from_fields(&bad), Err(RequestPublicError::NotU64("tier")));
     }
+}
+
+/// The `subsidyPeriods` vector entries: (the vault's creation time, the creation time the proof was
+/// made with, its public inputs, whether the period check passes it).
+fn subsidy_periods() -> Vec<(u64, u64, RequestPublic, bool)> {
+    let v: Value = serde_json::from_str(zk_note::VECTORS_JSON).unwrap();
+    v["subsidyPeriods"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            let flat: Vec<Field> = e["publicInput"].as_array().unwrap().iter().map(f).collect();
+            let public = RequestPublic::from_fields(&flat).unwrap();
+            (u(&e["vaultCreation"]), u(&e["provenWith"]), public, e["passes"].as_bool().unwrap())
+        })
+        .collect()
+}
+
+#[test]
+fn the_period_check_refuses_a_proof_made_with_a_forged_creation_time() {
+    let cases = subsidy_periods();
+    println!("vector cases run: {}", cases.len());
+    let (creation, proven_with, honest, _) = &cases[0];
+    assert_eq!(creation, proven_with);
+    assert_eq!(honest.check_subsidy_period(*creation), Ok(()));
+    for (creation, proven_with, forged, _) in &cases[1..] {
+        assert!(proven_with < creation, "forged earlier than the vault's creation");
+        assert_eq!(
+            forged.check_subsidy_period(*creation),
+            Err(SubsidyPeriodError::WrongPeriod { claimed: forged.period, expected: 2 })
+        );
+        // The proof is consistent with the creation time it was made with, which is all the circuit checks.
+        assert_eq!(forged.check_subsidy_period(*proven_with), Ok(()));
+    }
+    // o1js agrees on every entry.
+    for (creation, _, public, passes) in &cases {
+        assert_eq!(public.check_subsidy_period(*creation).is_ok(), *passes);
+    }
+}
+
+#[test]
+fn two_claims_in_one_real_period_with_forged_creation_times_differ_but_at_most_one_passes() {
+    let cases = subsidy_periods();
+    let creation = cases[0].0;
+    // Every claim is by one note, in the vault's real period 2.
+    for (_, _, p, _) in &cases {
+        assert_eq!(policy::subsidy_period(creation, p.request_time), Some(2));
+        assert_eq!(p.nullifier, cases[0].2.nullifier);
+    }
+    let (a, b) = (&cases[1].2, &cases[2].2);
+    assert_ne!(a.period_nullifier, b.period_nullifier);
+    let passing: std::collections::BTreeSet<String> = cases
+        .iter()
+        .filter(|(c, _, p, _)| p.check_subsidy_period(*c).is_ok())
+        .map(|(_, _, p, _)| field_to_string(p.period_nullifier))
+        .collect();
+    assert_eq!(passing.len(), 1, "one per-period nullifier gets through per real period");
+}
+
+#[test]
+fn the_period_check_passes_an_unsubsidised_request_only_with_zero_subsidy_fields() {
+    let v: Value = serde_json::from_str(zk_note::VECTORS_JSON).unwrap();
+    let mut seen = 0;
+    for e in v["requestProofs"].as_array().unwrap() {
+        let flat: Vec<Field> = e["publicInput"].as_array().unwrap().iter().map(f).collect();
+        let p = RequestPublic::from_fields(&flat).unwrap();
+        if p.subsidised {
+            continue;
+        }
+        seen += 1;
+        assert_eq!(p.check_subsidy_period(0), Ok(()));
+        let with_period = RequestPublic { period: 1, ..p };
+        assert_eq!(with_period.check_subsidy_period(0), Err(SubsidyPeriodError::Unsubsidised));
+        let with_nullifier = RequestPublic { period_nullifier: Field::from(1u64), ..p };
+        assert_eq!(with_nullifier.check_subsidy_period(0), Err(SubsidyPeriodError::Unsubsidised));
+    }
+    assert!(seen > 0);
+}
+
+#[test]
+fn the_period_check_refuses_a_request_before_the_vaults_creation() {
+    let (_, _, p, _) = subsidy_periods().remove(0);
+    assert_eq!(p.check_subsidy_period(p.request_time + 1), Err(SubsidyPeriodError::BeforeCreation));
 }

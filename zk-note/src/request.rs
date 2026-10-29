@@ -1,10 +1,16 @@
 //! The request proof's public inputs, decoded from the flat field array o1js puts in a proof's
 //! `publicInput`. Mirrors `RequestPublic` in `o1js/src/request.ts`; the field order is pinned by the
 //! `publicInput` entries of `test-vectors/zk-note.json`.
+//!
+//! # The subsidy period
+//!
+//! A subsidised proof's `period` is checked by the circuit only against a creation time the payer
+//! chooses, because the circuit cannot read the vault. A payer who forges the creation time proves
+//! another period, and with it another per-period nullifier, so it could claim twice in one week. The
+//! zk edge must therefore call [`RequestPublic::check_subsidy_period`] with the vault's `creationTime`
+//! on every request proof it accepts, before it trusts the per-period nullifier.
 
-use ark_ff::{PrimeField, Zero};
-
-use crate::Field;
+use crate::{field_to_bool, field_to_u64, policy, Field};
 
 /// How many fields o1js flattens `RequestPublic` into.
 pub const REQUEST_PUBLIC_FIELDS: usize = 12;
@@ -19,6 +25,18 @@ pub enum RequestPublicError {
     NotU64(&'static str),
 }
 
+/// Why [`RequestPublic::check_subsidy_period`] refused a request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubsidyPeriodError {
+    /// An unsubsidised request with a nonzero `period` or `periodNullifier`.
+    Unsubsidised,
+    /// A subsidised request whose `requestTime` is before the vault's creation, so in no period.
+    BeforeCreation,
+    /// A subsidised request whose `period` is not the week of its `requestTime` counted from the
+    /// vault's creation: it was proven with another creation time.
+    WrongPeriod { claimed: u64, expected: u64 },
+}
+
 /// The point on the curve a commitment is: affine coordinates, not checked here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Point {
@@ -29,7 +47,7 @@ pub struct Point {
 /// The request proof's public inputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RequestPublic {
-    /// The vault's public key: x coordinate and whether y is odd.
+    /// The vault's public key (the state key): x coordinate and whether y is odd.
     pub vault_x: Field,
     pub vault_is_odd: bool,
     pub root: Field,
@@ -37,28 +55,21 @@ pub struct RequestPublic {
     pub tier: u64,
     pub nullifier: Field,
     pub tag: Field,
+    /// The state's balance commitment, re-randomised.
     pub commitment: Point,
     pub subsidised: bool,
-    pub period: Field,
+    /// Whole weeks since a creation time. The circuit bounds it to 64 bits when subsidised and makes
+    /// it zero otherwise; [`RequestPublic::check_subsidy_period`] binds it to the vault.
+    pub period: u64,
     pub period_nullifier: Field,
 }
 
 fn flag(f: Field, name: &'static str) -> Result<bool, RequestPublicError> {
-    if f.is_zero() {
-        Ok(false)
-    } else if f == Field::from(1u64) {
-        Ok(true)
-    } else {
-        Err(RequestPublicError::NotBool(name))
-    }
+    field_to_bool(f).ok_or(RequestPublicError::NotBool(name))
 }
 
 fn as_u64(f: Field, name: &'static str) -> Result<u64, RequestPublicError> {
-    let limbs = f.into_bigint().0;
-    if limbs[1..].iter().any(|l| *l != 0) {
-        return Err(RequestPublicError::NotU64(name));
-    }
-    Ok(limbs[0])
+    field_to_u64(f).ok_or(RequestPublicError::NotU64(name))
 }
 
 impl RequestPublic {
@@ -80,8 +91,34 @@ impl RequestPublic {
             tag,
             commitment: Point { x: cx, y: cy },
             subsidised: flag(subsidised, "subsidised")?,
-            period,
+            period: as_u64(period, "period")?,
             period_nullifier,
         })
+    }
+
+    /// Binds a verified request proof's period to the vault (spec #2: "the period number is whole
+    /// weeks since the vault's creation"), which the circuit cannot do: it takes the creation time as
+    /// a private input. A subsidised request passes when its `period` is
+    /// [`policy::subsidy_period`]`(vault_creation, request_time)`; an unsubsidised one when its `period`
+    /// and `period_nullifier` are zero.
+    ///
+    /// The zk edge must call this, with the vault's `creationTime`, on every request proof it accepts,
+    /// before it trusts a subsidised proof's per-period nullifier. Mirrors `subsidyPeriodHolds` in
+    /// `o1js/src/request.ts`.
+    pub fn check_subsidy_period(&self, vault_creation: u64) -> Result<(), SubsidyPeriodError> {
+        if !self.subsidised {
+            return if self.period == 0 && self.period_nullifier == Field::from(0u64) {
+                Ok(())
+            } else {
+                Err(SubsidyPeriodError::Unsubsidised)
+            };
+        }
+        let expected =
+            policy::subsidy_period(vault_creation, self.request_time).ok_or(SubsidyPeriodError::BeforeCreation)?;
+        if self.period == expected {
+            Ok(())
+        } else {
+            Err(SubsidyPeriodError::WrongPeriod { claimed: self.period, expected })
+        }
     }
 }

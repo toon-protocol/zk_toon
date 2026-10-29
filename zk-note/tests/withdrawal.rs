@@ -109,3 +109,28 @@ fn an_escape_has_a_next_nullifier_a_bounded_concession_and_a_validity() {
     assert!(!WithdrawalPublic { valid_until: base.request_time - 1, ..base }.shape_is_valid());
     assert!(!WithdrawalPublic { amount: base.size + 1, ..base }.shape_is_valid());
 }
+
+#[test]
+fn the_public_input_array_decodes_only_in_a_shape_its_kind_allows() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../test-vectors/zk-note.json");
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    for e in v["withdrawalProofs"].as_array().unwrap() {
+        let pubs = public(&e["public"]);
+        let flat = pubs.to_fields();
+        assert_eq!(WithdrawalPublic::from_fields(&flat), Ok(pubs));
+        assert_eq!(WithdrawalPublic::from_fields(&flat[1..]), Err(WithdrawalPublicError::Length(12)));
+        let mut bad = flat.clone();
+        bad[0] = Field::from(4u64);
+        assert_eq!(WithdrawalPublic::from_fields(&bad), Err(WithdrawalPublicError::Kind(4)));
+        let mut bad = flat.clone();
+        bad[9] = Field::from(2u64);
+        assert_eq!(WithdrawalPublic::from_fields(&bad), Err(WithdrawalPublicError::NotBool("destination.isOdd")));
+        let mut bad = flat.clone();
+        bad[6] = -Field::from(1u64);
+        assert_eq!(WithdrawalPublic::from_fields(&bad), Err(WithdrawalPublicError::NotU64("amount")));
+        // Every field decodes, but the inputs break the rule of their kind: amount above size.
+        let mut bad = flat.clone();
+        bad[6] = Field::from(pubs.size + 1);
+        assert_eq!(WithdrawalPublic::from_fields(&bad), Err(WithdrawalPublicError::Shape));
+    }
+}

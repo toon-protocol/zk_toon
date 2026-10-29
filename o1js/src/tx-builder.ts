@@ -9,7 +9,7 @@
 import { AccountUpdate, Bool, Field, Mina, PrivateKey, PublicKey, Scalar, Signature, UInt64, fetchAccount, verify } from 'o1js';
 import { commit, rerandomise } from './balance.js';
 import { authTag, commitSecret, genesisAnchor, nextAnchor, nullifier } from './primitives.js';
-import { RequestPrivate, RequestProgram, RequestProof, RequestPublic } from './request.js';
+import { RequestPrivate, RequestProgram, RequestProof, RequestPublic, subsidyPeriodHolds } from './request.js';
 import { expiryOf } from './policy.js';
 import { PendingEscape, PendingEscapes, Vault, batchReducer, setupFields } from './vault.js';
 import { VaultKeeper, chainNow, escapeEvents, pendingEscapesView, vaultView } from './vault-view.js';
@@ -363,7 +363,10 @@ export async function createBuilder(options: BuilderOptions) {
     return { publicInputFields: fieldStrings(RequestPublic.toFields(pub)), proof: proof.toJSON() };
   };
 
-  /** Whether a request proof verifies against the request program's verification key. */
+  /**
+   * Whether a request proof verifies against the request program's verification key and, given the
+   * vault's `vaultCreation`, whether its period is that vault's (`subsidyPeriodHolds`).
+   */
   ops.verifyRequestProof = async (p) => {
     let proof: RequestProof;
     try {
@@ -371,9 +374,11 @@ export async function createBuilder(options: BuilderOptions) {
     } catch {
       throw bad('proof: not a request proof');
     }
+    const vaultCreation = p.vaultCreation === undefined ? undefined : u64(p.vaultCreation, 'vaultCreation');
     if (!options.proofs) throw bad('verifyRequestProof needs --proofs=on');
     await compile({ request: true });
-    return { valid: await verify(proof, requestVk!) };
+    const periodHolds = vaultCreation === undefined || subsidyPeriodHolds(proof.publicInput, vaultCreation);
+    return { valid: periodHolds && (await verify(proof, requestVk!)) };
   };
 
   /** Hashes of the commands `local.graphql` has landed. */
@@ -489,6 +494,7 @@ export async function createBuilder(options: BuilderOptions) {
         pendingEscapesRoot: vault.pendingEscapesRoot.get().toString(),
         stateKey: vault.stateKey.get().toBase58(),
         treasury: vault.treasury.get().toBase58(),
+        creationTime: vault.creationTime.get().toString(),
       };
     },
   };

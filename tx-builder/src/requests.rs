@@ -1,14 +1,14 @@
 //! The typed requests and answers. `docs/tx-builder.md` documents their JSON.
 use std::fmt;
 
-use mina_curves::pasta::Pallas;
 use mina_signer::{CompressedPubKey, Signature};
 use serde_json::{json, Value};
 use zk_note::balance::Scalar;
-use zk_note::withdrawal::{WithdrawalPublic, KIND_ESCAPE, KIND_MUTUAL_CLOSE, KIND_OWNERSHIP};
+pub use zk_note::request::RequestPublic;
+use zk_note::withdrawal::WithdrawalPublic;
 use zk_note::Field;
 
-use crate::{dec_field, dec_scalar, parse_field, parse_u64, sig_json, Error};
+use crate::{dec_field, dec_scalar, parse_field, sig_json, Error};
 
 /// The account that pays the fee and signs the transaction. A deposit is also paid from it.
 #[derive(Clone)]
@@ -299,31 +299,14 @@ pub struct Transaction {
 impl Transaction {
     pub(crate) fn from_answer(mut answer: Value) -> Result<Self, Error> {
         let withdrawal = match answer.get("publicInputFields") {
-            Some(fields) => Some(withdrawal_public(&fields_of(fields)?)?),
+            Some(fields) => Some(
+                WithdrawalPublic::from_fields(&fields_of(fields)?)
+                    .map_err(|e| Error::Protocol(format!("withdrawal public inputs: {e:?}")))?,
+            ),
             None => None,
         };
         Ok(Transaction { zkapp_command: answer["zkappCommand"].take(), withdrawal })
     }
-}
-
-/// The request proof's public inputs, in the circuit's order (`RequestPublic` in
-/// `o1js/src/request.ts`): twelve field elements,
-/// `[vault.x, vault.isOdd, root, requestTime, tier, nullifier, tag, commitment.x, commitment.y,
-///   subsidised, period, periodNullifier]`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RequestPublic {
-    /// The state key.
-    pub vault: CompressedPubKey,
-    pub root: Field,
-    pub request_time: u64,
-    pub tier: u64,
-    pub nullifier: Field,
-    pub tag: Field,
-    /// The re-randomised balance commitment.
-    pub commitment: Pallas,
-    pub subsidised: bool,
-    pub period: u64,
-    pub period_nullifier: Field,
 }
 
 /// A request proof and its public inputs.
@@ -338,7 +321,9 @@ pub struct RequestProof {
 impl RequestProof {
     pub(crate) fn from_answer(mut answer: Value) -> Result<Self, Error> {
         let fields = fields_of(&answer["publicInputFields"])?;
-        Ok(RequestProof { public: request_public(&fields)?, fields, proof: answer["proof"].take() })
+        let public =
+            RequestPublic::from_fields(&fields).map_err(|e| Error::Protocol(format!("request public inputs: {e:?}")))?;
+        Ok(RequestProof { public, fields, proof: answer["proof"].take() })
     }
 }
 
@@ -348,63 +333,4 @@ fn fields_of(v: &Value) -> Result<Vec<Field>, Error> {
         .iter()
         .map(parse_field)
         .collect()
-}
-
-fn u64_of(f: Field) -> Result<u64, Error> {
-    parse_u64(&json!(dec_field(f)))
-}
-
-fn bool_of(f: Field) -> Result<bool, Error> {
-    match u64_of(f)? {
-        0 => Ok(false),
-        1 => Ok(true),
-        n => Err(Error::Protocol(format!("not a boolean: {n}"))),
-    }
-}
-
-fn key_of(x: Field, is_odd: Field) -> Result<CompressedPubKey, Error> {
-    Ok(CompressedPubKey { x, is_odd: bool_of(is_odd)? })
-}
-
-fn withdrawal_public(f: &[Field]) -> Result<WithdrawalPublic, Error> {
-    if f.len() != 13 {
-        return Err(Error::Protocol(format!("a withdrawal has 13 public inputs, not {}", f.len())));
-    }
-    let kind = u64_of(f[0])?;
-    if ![KIND_MUTUAL_CLOSE, KIND_ESCAPE, KIND_OWNERSHIP].contains(&kind) {
-        return Err(Error::Protocol(format!("withdrawal kind {kind}")));
-    }
-    Ok(WithdrawalPublic {
-        kind,
-        vault_x: f[1],
-        vault_is_odd: bool_of(f[2])?,
-        root: f[3],
-        nullifier: f[4],
-        next_nullifier: f[5],
-        amount: u64_of(f[6])?,
-        size: u64_of(f[7])?,
-        destination_x: f[8],
-        destination_is_odd: bool_of(f[9])?,
-        valid_until: u64_of(f[10])?,
-        request_time: u64_of(f[11])?,
-        conceded: u64_of(f[12])?,
-    })
-}
-
-fn request_public(f: &[Field]) -> Result<RequestPublic, Error> {
-    if f.len() != 12 {
-        return Err(Error::Protocol(format!("a request proof has 12 public inputs, not {}", f.len())));
-    }
-    Ok(RequestPublic {
-        vault: key_of(f[0], f[1])?,
-        root: f[2],
-        request_time: u64_of(f[3])?,
-        tier: u64_of(f[4])?,
-        nullifier: f[5],
-        tag: f[6],
-        commitment: Pallas::new_unchecked(f[7], f[8]),
-        subsidised: bool_of(f[9])?,
-        period: u64_of(f[10])?,
-        period_nullifier: f[11],
-    })
 }

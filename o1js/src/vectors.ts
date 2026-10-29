@@ -1,12 +1,15 @@
 // Builds test-vectors/zk-note.json, the one file the Rust primitives and the o1js code both reproduce.
-import { Bool, Field, Group, Poseidon, PrivateKey, PublicKey, Scalar, Signature } from 'o1js';
+import { Bool, Field, Group, Poseidon, PrivateKey, PublicKey, Scalar, Signature, UInt64 } from 'o1js';
 import * as p from './primitives.js';
 import * as policy from './policy.js';
 import * as bal from './balance.js';
-import { VECTOR_SAMPLES, buildSample, requestVector } from './request-sample.js';
+import {
+  SUBSIDY_PERIOD_SAMPLES, VECTOR_SAMPLES, buildSample, requestVector, subsidyPeriodVector,
+} from './request-sample.js';
 import { stateFields, type StateMessage } from './state.js';
 import { clearanceFields, signClearance } from './clearance.js';
 import { WITHDRAWAL_VECTOR_SAMPLES, withdrawalVector } from './withdrawal-sample.js';
+import { NULLIFIER_SET_HEIGHT, PendingEscape, PendingEscapes } from './vault.js';
 
 const s = (f: Field) => f.toString();
 const F = (n: bigint | number | string) => Field(n);
@@ -258,6 +261,42 @@ export function buildVectors() {
   const withdrawalProofs = WITHDRAWAL_VECTOR_SAMPLES.map(withdrawalVector);
 
   const requestProofs = VECTOR_SAMPLES.map((o) => requestVector(buildSample(o), o));
+  const subsidyPeriods = SUBSIDY_PERIOD_SAMPLES.map(subsidyPeriodVector);
+
+  // The vault's pending escapes: record hashes, and the map's root after each insert or update, as a
+  // challenger replaying the vault's escape events rebuilds it.
+  const escapeRecords = [
+    { nullifier: F(chain[0].nullifier), nextNullifier: F(chain[1].nullifier), amount: 3_000_000_000n,
+      conceded: 10_000_000n, size: 10_000_000_000n, destinationSecret: 77n, deadline: 1_700_172_800_000n },
+    { nullifier: F(chain[2].nullifier), nextNullifier: F(12345), amount: 10_000_000_000n,
+      conceded: 0n, size: 10_000_000_000n, destinationSecret: 78n, deadline: 1_700_259_200_000n },
+  ].map((r) => new PendingEscape({
+    nullifier: r.nullifier, nextNullifier: r.nextNullifier, amount: UInt64.from(r.amount),
+    conceded: UInt64.from(r.conceded), size: UInt64.from(r.size),
+    destination: PrivateKey.fromBigInt(r.destinationSecret).toPublicKey(), deadline: UInt64.from(r.deadline),
+  }));
+  // The second record raised to 0.5 MINA.
+  const raised = new PendingEscape({ ...escapeRecords[1], conceded: UInt64.from(500_000_000n) });
+  const records = [...escapeRecords, raised];
+  const map = new PendingEscapes();
+  const emptyRoot = map.root;
+  // Small keys first (an insert, an insert below it, an update), then the records as a reduce writes
+  // them: two recorded, the first finished, the second raised.
+  const mapOps: [Field, Field][] = [
+    [F(5), F(7)], [F(3), F(9)], [F(5), F(0)],
+    [records[0].nullifier, records[0].hash()], [records[1].nullifier, records[1].hash()],
+    [records[0].nullifier, F(0)], [raised.nullifier, raised.hash()],
+  ];
+  const updates = mapOps.map(([k, v]) => {
+    map.set(k, v);
+    return { key: s(k), value: s(v), root: s(map.root) };
+  });
+  const pendingEscapes = {
+    height: NULLIFIER_SET_HEIGHT,
+    emptyRoot: s(emptyRoot),
+    records: records.map((r) => ({ fields: PendingEscape.toFields(r).map(s), hash: s(r.hash()) })),
+    updates,
+  };
 
   return {
     description:
@@ -266,6 +305,6 @@ export function buildVectors() {
     tags, policy: policyJson, poseidon, domainSeparation, commitment, leaves, nullifiers,
     authTags, periodNullifiers, periods, ages, requestTimes, membership,
     generators, balanceCommitments: commitments, rerandomised, charged, stateSignatures,
-    requestProofs, clearances, withdrawalProofs,
+    requestProofs, clearances, withdrawalProofs, subsidyPeriods, pendingEscapes,
   };
 }

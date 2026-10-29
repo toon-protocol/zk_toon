@@ -4,7 +4,7 @@ import { Bool, Field, Group, PublicKey, Scalar, Signature, Struct, ZkProgram } f
 import { rerandomise } from './balance.js';
 import { NoteWitness } from './note-tree.js';
 import { U64_BITS, checkNoteState } from './note-state.js';
-import { MIN_SUBSIDY_AGE_MS, SUBSIDY_PERIOD_MS, TIERS } from './policy.js';
+import { MIN_SUBSIDY_AGE_MS, SUBSIDY_PERIOD_MS, TIERS, subsidyPeriod } from './policy.js';
 import { authTag, periodNullifier } from './primitives.js';
 
 /**
@@ -82,12 +82,11 @@ export function checkUnsubsidised(pub: RequestPublic, priv: RequestPrivate) {
  *
  * `vaultCreation` is a private input, not a public one: the public layout is fixed, and the circuit
  * cannot read the vault's state. So this proof shows only that `period` is the week of `requestTime`
- * counted from *some* creation time. What binds it to the vault is the verifier's check that
- * `period == subsidyPeriod(vault.creationTime, requestTime)`: `period` and `requestTime` are public,
- * and the vault's creation time is fixed at its init and readable by anyone. The zk edge must make
- * that check (`subsidyPeriod` in policy.ts, `policy::subsidy_period` in zk-note) before it trusts the
- * per-period nullifier; the vault itself never needs to, since a subsidised proof never raises and a
- * defeat does not depend on the period.
+ * counted from *some* creation time; a payer who forges the creation time proves another period, and
+ * with it another per-period nullifier. What binds the period to the vault is `subsidyPeriodHolds`,
+ * which the zk edge must call with the vault's creation time before it trusts the per-period
+ * nullifier. The vault itself never needs to: a subsidised proof never raises, and a defeat does not
+ * depend on the period.
  */
 export function checkSubsidised(pub: RequestPublic, priv: RequestPrivate, vaultCreation: Field) {
   pub.subsidised.assertTrue();
@@ -107,6 +106,20 @@ export function checkSubsidised(pub: RequestPublic, priv: RequestPrivate, vaultC
 
   periodNullifier(priv.secret, priv.index, pub.period).assertEquals(pub.periodNullifier);
   checkRequest(pub, priv);
+}
+
+/**
+ * The check that binds a verified request proof's period to the vault (spec #2: "the period number is
+ * whole weeks since the vault's creation"), which the circuit cannot make (see `checkSubsidised`). A
+ * subsidised request holds when its `period` is `subsidyPeriod(vaultCreation, requestTime)`; an
+ * unsubsidised one when its `period` and `periodNullifier` are zero. The zk edge must call it, with the
+ * vault's `creationTime`, before it trusts a subsidised proof's per-period nullifier. Mirrors
+ * `RequestPublic::check_subsidy_period` in zk-note.
+ */
+export function subsidyPeriodHolds(pub: RequestPublic, vaultCreation: bigint): boolean {
+  if (!pub.subsidised.toBoolean()) return pub.period.toBigInt() === 0n && pub.periodNullifier.toBigInt() === 0n;
+  const period = subsidyPeriod(vaultCreation, pub.requestTime.toBigInt());
+  return period !== undefined && pub.period.toBigInt() === period;
 }
 
 export const RequestProgram = ZkProgram({

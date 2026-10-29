@@ -4,8 +4,13 @@ import { Bool, Field, Group, PrivateKey, Provable, Scalar, Signature, Verificati
 import { commit, rerandomise } from './balance.js';
 import { TIERS, expiryOf } from './policy.js';
 import { authTag, commitSecret, genesisAnchor, nextAnchor, nullifier, periodNullifier } from './primitives.js';
-import { RequestPrivate, RequestProgram, RequestPublic, checkSubsidised, checkUnsubsidised } from './request.js';
-import { VECTOR_SAMPLES, buildSample, defaultSample, requestVector, type SampleOptions } from './request-sample.js';
+import {
+  RequestPrivate, RequestProgram, RequestPublic, checkSubsidised, checkUnsubsidised, subsidyPeriodHolds,
+} from './request.js';
+import {
+  SUBSIDY_PERIOD_SAMPLES, VECTOR_SAMPLES, buildSample, defaultSample, requestVector, subsidyPeriodVector,
+  type SampleOptions,
+} from './request-sample.js';
 import { PROOFS_ON } from './proofs-on.js';
 import { stateFields } from './state.js';
 
@@ -243,6 +248,57 @@ describe('subsidised request proof constraints', () => {
   });
 });
 
+describe("the zk edge's subsidy period check", () => {
+  const DAY = 86_400_000n;
+  const { depositTime } = defaultSample();
+  const vaultCreation = depositTime - 10n * DAY;
+  const claim = (requestTime: bigint, provenWith: bigint) =>
+    sample({ tier: TIERS[0], requestTime, subsidy: { vaultCreation: provenWith } });
+
+  it('passes a subsidised request in the period of its request time, counted from the vault creation', () => {
+    // 18 days after creation is period 2; 21 days is the first instant of period 3.
+    expect(subsidyPeriodHolds(claim(depositTime + 8n * DAY, vaultCreation).pub, vaultCreation)).toBe(true);
+    expect(subsidyPeriodHolds(claim(vaultCreation + 21n * DAY, vaultCreation).pub, vaultCreation)).toBe(true);
+  });
+
+  it('refuses a proof made with a forged creation time, which the circuit accepts', async () => {
+    const forged = vaultCreation - 7n * DAY;
+    const s = claim(depositTime + 8n * DAY, forged);
+    expect(s.pub.period.toBigInt()).toBe(3n);
+    expect(await holdsSubsidised(s.pub, s.priv, Field(forged))).toBe(true);
+    expect(subsidyPeriodHolds(s.pub, vaultCreation)).toBe(false);
+    // A request time before the vault's creation has no period at all.
+    expect(subsidyPeriodHolds(s.pub, s.pub.requestTime.toBigInt() + 1n)).toBe(false);
+  });
+
+  it('passes an unsubsidised request only with a zero period and per-period nullifier', () => {
+    const s = sample();
+    expect(subsidyPeriodHolds(s.pub, vaultCreation)).toBe(true);
+    expect(subsidyPeriodHolds(withPub(s, { period: Field(2) }), vaultCreation)).toBe(false);
+    expect(subsidyPeriodHolds(withPub(s, { periodNullifier: Field(1) }), vaultCreation)).toBe(false);
+  });
+
+  it('lets at most one of two claims in one real period through, though forged creation times give them different per-period nullifiers', async () => {
+    const [, a, b] = SUBSIDY_PERIOD_SAMPLES.map((c) => ({ c, s: buildSample(c.options) }));
+    for (const { c, s } of [a, b]) {
+      expect(await holdsSubsidised(s.pub, s.priv, s.vaultCreation)).toBe(true);
+      expect(subsidyPeriodHolds(s.pub, c.vaultCreation)).toBe(false);
+    }
+    expect(a.s.pub.periodNullifier.toBigInt()).not.toBe(b.s.pub.periodNullifier.toBigInt());
+    // The same two claims proven honestly carry one per-period nullifier, which the zk edge refuses twice.
+    const honest = [a, b].map(({ c }) => buildSample({ ...c.options, subsidy: { vaultCreation: c.vaultCreation } }).pub);
+    for (const pub of honest) expect(subsidyPeriodHolds(pub, vaultCreation)).toBe(true);
+    expect(honest[0].periodNullifier.toBigInt()).toBe(honest[1].periodNullifier.toBigInt());
+  });
+
+  it('vectors pin the forged and honest claims', () => {
+    const file = JSON.parse(readFileSync(new URL('../../test-vectors/zk-note.json', import.meta.url), 'utf8'));
+    expect(SUBSIDY_PERIOD_SAMPLES.map(subsidyPeriodVector)).toEqual(file.subsidyPeriods);
+    expect(file.subsidyPeriods.map((e: any) => e.passes)).toEqual([true, false, false]);
+    console.log(`vector cases run: ${file.subsidyPeriods.length}`);
+  });
+});
+
 describe('request proof', () => {
   let verificationKey: VerificationKey;
   beforeAll(async () => {
@@ -263,6 +319,14 @@ describe('request proof', () => {
     expect(await verify(proof, verificationKey)).toBe(true);
     expect(proof.publicInput.subsidised.toBoolean()).toBe(true);
     expect(proof.publicInput.periodNullifier.toString()).toBe(sub.pub.periodNullifier.toString());
+
+    // A proof made with a forged creation time verifies too: only the zk edge's period check refuses it.
+    const real = defaultSample().depositTime - 10n * 86_400_000n;
+    const forged = signedSample({ tier: TIERS[0], subsidy: { vaultCreation: real - 7n * 86_400_000n } });
+    const forgedProof = (await RequestProgram.subsidised(forged.pub, forged.priv, forged.vaultCreation)).proof;
+    expect(await verify(forgedProof, verificationKey)).toBe(true);
+    expect(subsidyPeriodHolds(proof.publicInput, real)).toBe(true);
+    expect(subsidyPeriodHolds(forgedProof.publicInput, real)).toBe(false);
   }, 900_000);
 });
 
