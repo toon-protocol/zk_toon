@@ -147,6 +147,17 @@ A proof, shown only to the zk edge, that the payer holds a zk note's current sta
 refuses it.
 _Avoid_: Ownership withdrawal, identity proof
 
+**Expiry sweep**:
+Paying the treasury, in aggregate, what expired notes left in the vault. The sweep walks the note tree
+in index order and adds up the expired notes' sizes. It pays that total less the sizes already
+withdrawn or held for pending escapes, less what earlier sweeps paid. It never names a note, and it
+underpays until withdrawn notes also expire.
+_Avoid_: Expiry claim, forfeiture, reclaim
+
+**Sweep cursor**:
+The index of the next note an expiry sweep walks. Every note below it has expired.
+_Avoid_: Expiry pointer, watermark
+
 **Treasury**:
 The zk edge operator's address, which receives what a closed or expired note's balance leaves of its
 deposit.
