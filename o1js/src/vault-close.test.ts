@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import { PROOFS_ON } from './proofs-on.js';
 import { Field, Mina, PrivateKey, Provable, Signature, verify } from 'o1js';
 import * as policy from './policy.js';
 import { signClearance } from './clearance.js';
@@ -210,7 +211,7 @@ describe('vault mutual close timing', () => {
 });
 
 describe('vault mutual close with a real withdrawal proof', () => {
-  it('accepts it and pays at the reduce', async () => {
+  it(PROOFS_ON.close, async () => {
     const { verificationKey } = await WithdrawalProgram.compile({ proofsEnabled: true });
     WithdrawalProgram.setProofsEnabled(true);
     try {

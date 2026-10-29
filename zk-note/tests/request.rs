@@ -1,13 +1,14 @@
 //! The request proof's sample entries in `test-vectors/zk-note.json`: recomputes the public nullifier,
-//! authorization tag and re-randomised commitment from the entry's private values.
+//! authorization tag and re-randomised commitment from the entry's private values, and for a
+//! subsidised entry its age, period and per-period nullifier.
 use ark_ec::AffineRepr;
 use mina_curves::pasta::Pallas;
 use serde_json::Value;
 use std::str::FromStr;
 use zk_note::balance::{commit, rerandomise, Scalar};
 use zk_note::{
-    auth_tag, commit_secret, field_to_string, genesis_anchor, next_anchor, nullifier, policy, Field,
-    RequestContext,
+    auth_tag, commit_secret, field_to_string, genesis_anchor, next_anchor, nullifier, period_nullifier, policy,
+    Field, RequestContext,
 };
 
 fn s(v: &Value) -> &str {
@@ -35,6 +36,7 @@ fn request_proof_samples_are_recomputed() {
     assert!(!entries.is_empty());
     println!("vector cases run: {}", entries.len());
     let (mut genesis_seen, mut signed_seen) = (false, false);
+    let mut subsidised_periods = std::collections::BTreeSet::new();
     for e in entries {
         let (p, w) = (&e["public"], &e["private"]);
         let secret = f(&w["secret"]);
@@ -76,8 +78,22 @@ fn request_proof_samples_are_recomputed() {
         same(state, &w["stateCommitment"]);
         same(rerandomise(state, sc(&w["rerandomBlinding"])), &p["commitment"]);
 
-        assert!(!p["subsidised"].as_bool().unwrap());
-        assert_eq!((s(&p["period"]), s(&p["periodNullifier"])), ("0", "0"));
+        if p["subsidised"].as_bool().unwrap() {
+            // Smallest tier, a note at least 7 days old, the period of the request time counted from
+            // the vault's creation, and the per-period nullifier of this note in that period.
+            let request_time = u(&p["requestTime"]);
+            let period = policy::subsidy_period(u(&w["vaultCreation"]), request_time).unwrap();
+            assert!(policy::is_smallest_tier(u(&p["tier"])));
+            assert!(policy::is_old_enough_for_subsidy(deposit_time, request_time));
+            assert_eq!(u(&p["period"]), period);
+            let pn = period_nullifier(secret, u(&w["index"]), period);
+            assert_eq!(field_to_string(pn), s(&p["periodNullifier"]));
+            subsidised_periods.insert(period);
+        } else {
+            assert_eq!((s(&p["period"]), s(&p["periodNullifier"])), ("0", "0"));
+            assert!(w.get("vaultCreation").is_none());
+        }
     }
     assert!(genesis_seen && signed_seen);
+    assert!(subsidised_periods.len() >= 2, "subsidised samples in two periods");
 }

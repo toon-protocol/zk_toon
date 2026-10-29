@@ -1,11 +1,11 @@
 // A test harness for the vault on o1js's LocalBlockchain: fresh vaults with their own state key and
 // off-chain mirror, and helpers that deposit, close, escape, finalize, defeat, raise and reduce as a payer,
-// the zk edge, its challenger or a keeper would. Proofs are off unless a test turns them on.
-import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, Signature, UInt64, Unconstrained } from 'o1js';
+// the zk edge, its challenger, a keeper or a sweeper would. Proofs are off unless a test turns them on.
+import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, Signature, UInt32, UInt64, Unconstrained } from 'o1js';
 import * as policy from './policy.js';
 import { signClearance } from './clearance.js';
 import { commitSecret } from './primitives.js';
-import { PendingEscape, Vault, VaultAction, batchReducer } from './vault.js';
+import { CLOSE_WINDOW_MS, PendingEscape, SWEEP_BATCH_SIZE, SweptNote, Vault, VaultAction, batchReducer } from './vault.js';
 import { VaultMirror } from './vault-mirror.js';
 import { WithdrawalKind, WithdrawalProgram, WithdrawalProof, WithdrawalPublic } from './withdrawal.js';
 import { buildWithdrawal } from './withdrawal-sample.js';
@@ -68,6 +68,17 @@ export function vaultHarness(Local: Local) {
       Mina.transaction(from, async () => {
         await vault.defeat(escape, evidence, mirror.escapes.clone());
       });
+    /**
+     * A sweep walking `count` notes from the vault's sweep cursor, or, to test a refusal, from note `from`
+     * offered as if at the cursor.
+     */
+    const sweepTx = async (count: number, o: { from?: bigint } = {}) => {
+      const from = o.from ?? vault.sweepCursor.get().toBigInt();
+      const notes = SweptNote.batch(mirror.tree, from, count);
+      return Mina.transaction(payer, async () => {
+        await vault.sweepExpired(UInt32.from(count), Unconstrained.from(notes), UInt64.from(now()));
+      });
+    };
     const raiseTx = (escape: PendingEscape, evidence: RequestProof, claimed: bigint, from: Account = payer) =>
       Mina.transaction(from, async () => {
         await vault.raise(escape, evidence, UInt64.from(claimed), mirror.escapes.clone());
@@ -82,7 +93,7 @@ export function vaultHarness(Local: Local) {
     await tx.sign([deployer.key, zkappKey]).send();
 
     const h = {
-      vault, zkappKey, stateKey, treasury, mirror, send, clearance, closeTx, escapeTx, finalizeTx, defeatTx, raiseTx,
+      vault, zkappKey, stateKey, treasury, mirror, send, clearance, closeTx, escapeTx, finalizeTx, defeatTx, raiseTx, sweepTx,
       async setup(keys = [zkappKey]) {
         await send(
           await Mina.transaction(payer, async () => {
@@ -91,10 +102,10 @@ export function vaultHarness(Local: Local) {
           keys
         );
       },
-      /** Deposits a note and returns its secret. */
-      async deposit(size = policy.DEPOSIT_SIZES[0]): Promise<Note> {
+      /** Deposits a note, by default named at the current block time, and returns it. */
+      async deposit(size = policy.DEPOSIT_SIZES[0], o: { depositTime?: bigint } = {}): Promise<Note> {
         const secret = nextSecret++;
-        const depositTime = now();
+        const depositTime = o.depositTime ?? now();
         const c = commitSecret(Field(secret));
         await send(
           await Mina.transaction(payer, async () => {
@@ -116,6 +127,20 @@ export function vaultHarness(Local: Local) {
             })
           );
         }
+      },
+      /**
+       * Sends a sweep walking `count` notes, by default every note from the cursor (up to a batch) that
+       * a sweep may count now, and records its action in the mirror.
+       */
+      async sweep(o: { count?: number } = {}) {
+        const cursor = vault.sweepCursor.get().toBigInt();
+        const countable = (i: number) =>
+          i < SWEEP_BATCH_SIZE && cursor + BigInt(i) < mirror.tree.nextIndex &&
+          policy.expiryOf(mirror.tree.depositAt(cursor + BigInt(i)).depositTime.toBigInt()) + CLOSE_WINDOW_MS <= now();
+        let count = 0;
+        while (o.count === undefined && countable(count)) count++;
+        await send(await sweepTx(o.count ?? count));
+        mirror.dispatched(VaultAction.sweep(vault.expiredTotal.get()));
       },
       /** Inputs and a proof of a withdrawal of `note`, made now against the mirror's tree. */
       async withdrawalProof(
@@ -143,17 +168,23 @@ export function vaultHarness(Local: Local) {
       },
       /**
        * A request proof of `note`'s state at `step` (0 is genesis, the default 1 its successor) with
-       * `balance`, opening an allowance of `tier` now: the evidence a challenger holds.
+       * `balance`, opening an allowance of `tier` now: the evidence a challenger holds. A subsidised
+       * one counts its period from the vault's creation time.
        */
-      async requestProof(note: Note, o: { step?: number; balance?: bigint; tier: bigint; foreignKey?: boolean }) {
+      async requestProof(
+        note: Note, o: { step?: number; balance?: bigint; tier: bigint; foreignKey?: boolean; subsidised?: boolean }
+      ) {
         const step = o.step ?? 1;
         const index = mirror.indexOf(commitSecret(Field(note.secret)));
-        const { pub, priv } = buildRequest(mirror.tree, index, {
+        const { pub, priv, vaultCreation } = buildRequest(mirror.tree, index, {
           ...defaultSample(), secret: note.secret, size: note.size, depositTime: note.depositTime, requestTime: now(),
           tier: o.tier, signed: step > 0, step, balance: o.balance ?? 3n * 1_000_000_000n,
           vaultSecret: (o.foreignKey ? PrivateKey.random() : stateKey).toBigInt(),
+          subsidy: o.subsidised ? { vaultCreation: vault.creationTime.get().toBigInt() } : undefined,
         });
-        const { proof } = await RequestProgram.unsubsidised(pub, priv);
+        const { proof } = o.subsidised
+          ? await RequestProgram.subsidised(pub, priv, vaultCreation)
+          : await RequestProgram.unsubsidised(pub, priv);
         return proof;
       },
       /** Sends a mutual close and records its action in the mirror. */

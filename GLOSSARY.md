@@ -63,8 +63,16 @@ What a zk edge chooses to spend, each period, on paying for subsidised allowance
 _Avoid_: Treasury, rewards pool, incentive fund
 
 **Subsidy period**:
-The span of time in which each zk note may claim at most one subsidised allowance.
+The span of time in which each zk note may claim at most one subsidised allowance. Periods are whole
+weeks counted from the vault's creation time. A subsidised request proof publishes its period, and
+the zk edge checks it against the vault's creation time and the proof's request time.
 _Avoid_: Epoch, round, claim window
+
+**Per-period nullifier**:
+The value a subsidised request proof publishes so a zk edge can refuse a second claim by one note in
+one subsidy period: derived from the note's secret, index and period, so it is the same for every
+state of the note within a period and different in the next.
+_Avoid_: Claim nullifier, subsidy tag
 
 **Charge**:
 What an allowance actually cost the zk note that opened it, known when the allowance closes. It is
@@ -139,6 +147,17 @@ A proof, shown only to the zk edge, that the payer holds a zk note's current sta
 refuses it.
 _Avoid_: Ownership withdrawal, identity proof
 
+**Expiry sweep**:
+Paying the treasury, in aggregate, what expired notes left in the vault. The sweep walks the note tree
+in index order and adds up the expired notes' sizes. It pays that total less the sizes already
+withdrawn or held for pending escapes, less what earlier sweeps paid. It never names a note, and it
+underpays until withdrawn notes also expire.
+_Avoid_: Expiry claim, forfeiture, reclaim
+
+**Sweep cursor**:
+The index of the next note an expiry sweep walks. Every note below it has expired.
+_Avoid_: Expiry pointer, watermark
+
 **Treasury**:
 The zk edge operator's address, which receives what a closed or expired note's balance leaves of its
 deposit.
@@ -150,3 +169,21 @@ _Avoid_: Subsidy budget, fee address
 The o1js process that builds and proves vault transactions and request proofs for callers in Rust,
 which send it a note's secrets and get back a transaction ready to send or a proof.
 _Avoid_: Prover sidecar, o1js bridge
+
+### Building and publishing
+
+**Published keys**:
+The verification keys of the request proof, the withdrawal proof and the vault's batch reducer, with
+their hashes and the vault's code hash, that each build writes and the gate uploads. A zk edge's
+greeting pins are checked against them.
+_Avoid_: VK dump, key bundle
+
+**Vault code hash**:
+The hash of the vault's verification key: the key a deployed vault account carries, and so the only
+thing that names its code on chain.
+_Avoid_: Contract hash, bytecode hash
+
+**Proofs-on set**:
+The named tests that compile the circuits and prove for real: the request proof, the subsidised proof,
+mutual close, escape, defeat and the vault's compile. The gate fails unless each ran and passed.
+_Avoid_: Slow tests, integration tests

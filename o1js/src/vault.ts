@@ -8,15 +8,19 @@
 // finalized escapes. A deposit is a note only once reduced, and nothing is paid except at the
 // reduce (ADR 0002, "A mutual close pays at the reduce, through the one action stream").
 //
+// Once notes expire, anyone may sweep: the sweep walks the note tree in index order, adds up the sizes
+// of the expired notes it passes, and dispatches a sweep; the reduce pays the treasury what those notes
+// left in the vault, `expired − claimed − swept`, without learning which note was withdrawn (ADR 0005).
+//
 // The vault has no pause: its deploy makes its verification key, permissions and timing unchangeable, so
 // no owner action can stop or delay an escape.
 import {
   AccountUpdate, Bool, Experimental, Field, IndexedMerkleMap, Permissions, Poseidon, Provable, PublicKey, Signature,
-  SmartContract, State, Struct, UInt64, Unconstrained, declareMethods, declareState,
+  SmartContract, State, Struct, UInt32, UInt64, Unconstrained, declareMethods, declareState,
 } from 'o1js';
 import * as policy from './policy.js';
 import { verifyClearance } from './clearance.js';
-import { NoteWitness, depositLeaf, emptyNoteRoot } from './note-tree.js';
+import { type NoteTree, NoteWitness, depositLeaf, emptyNoteRoot } from './note-tree.js';
 import { RequestProof, type RequestPublic } from './request.js';
 import { WithdrawalKind, WithdrawalProof, type WithdrawalPublic } from './withdrawal.js';
 
@@ -26,12 +30,15 @@ export const ROOT_RING_LENGTH = 8;
 export const SLOT_MS = 90_000n;
 /**
  * Actions folded per reduce. A reduce sends two account updates per action (a close's two payouts),
- * so a full batch is 10 unsigned updates: 5 pairs, plus the fee payer and the vault, 7 of Mina's 16
- * segments per transaction.
+ * so a full batch is 8 unsigned updates: 4 pairs, plus the fee payer and the vault, 6 of Mina's 16
+ * segments per transaction. The proving cost binds first: at 5, the reduce plus the check of its batch
+ * proof needs more than 2^16 rows, and the vault doesn't compile (#16). `npm run keys` compiles it.
  */
-export const REDUCE_BATCH_SIZE = 5;
+export const REDUCE_BATCH_SIZE = 4;
 /** How long after its `requestTime` a mutual close may land: the connector's request-time window. */
 export const CLOSE_WINDOW_MS = policy.REQUEST_MAX_AGE_MS;
+/** Notes a sweep walks per call, at most. */
+export const SWEEP_BATCH_SIZE = 16;
 /** The nullifier set holds up to 2^(height − 1) nullifiers. */
 export const NULLIFIER_SET_HEIGHT = 32;
 
@@ -45,7 +52,7 @@ export class NullifierSet extends IndexedMerkleMap(NULLIFIER_SET_HEIGHT) {}
  */
 export class PendingEscapes extends IndexedMerkleMap(NULLIFIER_SET_HEIGHT) {}
 
-/** The kinds of the vault's one action stream. 0 is never dispatched; #11 adds its own. */
+/** The kinds of the vault's one action stream. 0 is never dispatched. */
 export enum ActionKind {
   deposit = 1,
   mutualClose = 2,
@@ -53,6 +60,7 @@ export enum ActionKind {
   finalize = 4,
   defeat = 5,
   raise = 6,
+  sweep = 7,
 }
 
 /**
@@ -109,7 +117,8 @@ export class EscapeUpdate extends Struct({ pending: Bool, record: PendingEscape 
  * - an escape: those of a close, plus `nextNullifier`, `validUntil` and `conceded`;
  * - a finalize or a defeat: the pending escape it finishes, with `time` its deadline;
  * - a raise: the pending escape as raised, with `time` its deadline and `commitment` the hash of the
- *   record it replaces.
+ *   record it replaces;
+ * - a sweep: `size`, the vault's expired total when it was dispatched.
  * Every dispatched action has `conceded ≤ amount ≤ size`.
  */
 export class VaultAction extends Struct({
@@ -154,6 +163,10 @@ export class VaultAction extends Struct({
   static defeat(e: PendingEscape): VaultAction {
     return VaultAction.naming(ActionKind.defeat, e);
   }
+  /** A sweep up to `expired`, the vault's expired total when it was dispatched. */
+  static sweep(expired: UInt64): VaultAction {
+    return new VaultAction({ ...VaultAction.none(), kind: Field(ActionKind.sweep), size: expired });
+  }
   /** Replaces `e` with the record whose concession `evidence` and `claimed` lift it to. */
   static raise(e: PendingEscape, evidence: RequestPublic, claimed: UInt64): VaultAction {
     const raised = new PendingEscape({ ...e, conceded: e.raisedConcession(evidence, claimed) });
@@ -170,6 +183,24 @@ export class VaultAction extends Struct({
     return new PendingEscape({
       nullifier: this.nullifier, nextNullifier: this.nextNullifier, amount: this.amount, conceded: this.conceded,
       size: this.size, destination: this.destination, deadline,
+    });
+  }
+}
+
+/**
+ * A note a sweep walks past: the deposit as the reduce made it a leaf, and the leaf's witness. A sweep
+ * uses each note's size and deposit time, which are public at deposit anyway, and nothing of its fate.
+ */
+export class SweptNote extends Struct({ commitment: Field, size: UInt64, depositTime: UInt64, path: NoteWitness }) {
+  /** The notes at `from` onwards in `tree`, `count` of them, padded to a sweep batch with the empty slot after them. */
+  static batch(tree: NoteTree, from: bigint, count: number): SweptNote[] {
+    return Array.from({ length: SWEEP_BATCH_SIZE }, (_, i) => {
+      const index = from + BigInt(Math.min(i, count));
+      const d = i < count ? tree.depositAt(index) : { commitment: Field(0), size: Field(0), depositTime: Field(0) };
+      return new SweptNote({
+        commitment: d.commitment, size: UInt64.Unsafe.fromField(d.size), depositTime: UInt64.Unsafe.fromField(d.depositTime),
+        path: tree.witness(index),
+      });
     });
   }
 }
@@ -209,7 +240,7 @@ export class VaultBatch extends batchReducer.Batch {}
 export class VaultBatchProof extends batchReducer.BatchProof {}
 
 export class Vault extends SmartContract {
-  // State fields in use: 2 (batch reducer) + 1 + 1 + (8 + 1) + 1 + 3 + 1 + 1 + 1 + 2 + 2 + 1 = 25 of Mesa's 32.
+  // State fields in use: 2 (batch reducer) + 1 + 1 + (8 + 1) + 1 + 3 + 1 + 1 + 1 + 2 + 2 + 1 + 4 = 29 of Mesa's 32.
   actionState = State<Field>();
   actionStack = State<Field>();
   noteRoot = State<Field>();
@@ -227,6 +258,17 @@ export class Vault extends SmartContract {
   treasury = State<PublicKey>();
   /** The root of the pending escapes. */
   pendingEscapesRoot = State<Field>();
+  /** The index of the next note a sweep walks: every note below it has expired. */
+  sweepCursor = State<Field>();
+  /** The sizes of the notes below the sweep cursor. */
+  expiredTotal = State<UInt64>();
+  /**
+   * The sizes of the notes the reduce has paid out or holds for a pending escape: each close and each
+   * recorded escape adds its note's size, and each defeat takes it back. A finalize leaves it alone.
+   */
+  claimedTotal = State<UInt64>();
+  /** What sweeps have paid the treasury. */
+  sweptTotal = State<UInt64>();
 
   events = { escape: EscapeUpdate };
 
@@ -257,6 +299,10 @@ export class Vault extends SmartContract {
     this.rootRing.set(RootRing.empty());
     this.nullifierRoot.set(new NullifierSet().root);
     this.pendingEscapesRoot.set(new PendingEscapes().root);
+    this.sweepCursor.set(Field(0));
+    this.expiredTotal.set(UInt64.zero);
+    this.claimedTotal.set(UInt64.zero);
+    this.sweptTotal.set(UInt64.zero);
   }
 
   /** Once, signed by the vault account: names the state key and the treasury. */
@@ -368,6 +414,45 @@ export class Vault extends SmartContract {
   }
 
   /**
+   * Permissionless. Walks the next `count` notes (at most a batch) from the sweep cursor, each of which
+   * must have expired by the block time, adds their sizes to the expired total, and dispatches a sweep of
+   * that total; the reduce pays the treasury what the expired notes left (ADR 0005). Refused while
+   * nothing has expired. A note counts only once a close proven before its expiry can no longer land,
+   * at `expiry + CLOSE_WINDOW_MS`; an escape lands before its note's expiry. So every withdrawal of a
+   * counted note was dispatched before the sweep, and the reduce applies it first.
+   *
+   * `notes` holds a batch: the walked notes in index order, padded with anything (`SweptNote.batch` builds one).
+   * `now` is at most the block time. Deposit times may run up to a slot out of index order; a note
+   * expiring later than the one after it holds that one back until it expires too.
+   */
+  async sweepExpired(count: UInt32, notes: Unconstrained<SweptNote[]>, now: UInt64) {
+    this.treasury.getAndRequireEquals().isEmpty().assertFalse('vault not set up');
+    this.network.timestamp.requireBetween(now, UInt64.MAXINT());
+    const root = this.noteRoot.getAndRequireEquals();
+    let cursor = this.sweepCursor.getAndRequireEquals();
+    let expired = this.expiredTotal.getAndRequireEquals();
+    const lapse = UInt64.from(policy.NOTE_LIFETIME_MS + CLOSE_WINDOW_MS);
+
+    for (let i = 0; i < SWEEP_BATCH_SIZE; i++) {
+      const walks = count.greaterThan(UInt32.from(i));
+      const note = Provable.witness(SweptNote, () => notes.get()[i]);
+      const leaf = depositLeaf(cursor, { commitment: note.commitment, size: note.size.value, depositTime: note.depositTime.value });
+      const isNext = note.path.calculateIndex().equals(cursor).and(note.path.calculateRoot(leaf).equals(root));
+      walks.not().or(isNext).assertTrue('not the note at the sweep cursor');
+      // A note not walked may hold anything: it adds nothing, and must not overflow either.
+      const depositTime = Provable.if(walks, UInt64, note.depositTime, UInt64.zero);
+      walks.not().or(depositTime.add(lapse).lessThanOrEqual(now)).assertTrue('note not expired');
+      expired = expired.add(Provable.if(walks, UInt64, note.size, UInt64.zero));
+      cursor = Provable.if(walks, cursor.add(1), cursor);
+    }
+
+    expired.assertGreaterThan(UInt64.zero, 'nothing has expired');
+    this.sweepCursor.set(cursor);
+    this.expiredTotal.set(expired);
+    batchReducer.dispatch(VaultAction.sweep(expired));
+  }
+
+  /**
    * A valid request proof under the vault's state key. Its root need not be in the ring: a challenger's
    * evidence may be older than the ring, and only the note's holder can prove at its nullifiers.
    */
@@ -396,7 +481,9 @@ export class Vault extends SmartContract {
    * - a finalize finishes its pending escape and pays `amount − conceded` to the destination and the
    *   rest of `size` to the treasury;
    * - a defeat finishes its pending escape without paying;
-   * - a raise replaces its pending escape with the raised record.
+   * - a raise replaces its pending escape with the raised record;
+   * - a sweep pays the treasury `expired − claimed − swept`, or nothing if that is not positive, where
+   *   `expired` is the sweep's and `claimed` and `swept` stand as of the actions before it (ADR 0005).
    * A close or escape with a nullifier already spent, in the set or earlier in the batch, and a finalize,
    * defeat or raise of an escape no longer pending as named, are skipped without paying and without failing.
    * So of a raise, a defeat and a finalize of one escape in one batch, only the first applies.
@@ -421,6 +508,8 @@ export class Vault extends SmartContract {
     const ring = new RootRing(this.rootRing.getAndRequireEquals());
     nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
     const treasury = this.treasury.getAndRequireEquals();
+    let claimed = this.claimedTotal.getAndRequireEquals();
+    let swept = this.sweptTotal.getAndRequireEquals();
     let changed = Bool(false);
 
     batchReducer.processBatch({ batch, proof }, (action, isDummy, i) => {
@@ -430,6 +519,7 @@ export class Vault extends SmartContract {
       const isFinalize = isDummy.not().and(action.kind.equals(ActionKind.finalize));
       const isDefeat = isDummy.not().and(action.kind.equals(ActionKind.defeat));
       const isRaise = isDummy.not().and(action.kind.equals(ActionKind.raise));
+      const isSweep = isDummy.not().and(action.kind.equals(ActionKind.sweep));
 
       const witness = Provable.witness(NoteWitness, () => witnesses.get()[i]);
       // The slot at `next` must be empty under the current root.
@@ -463,15 +553,28 @@ export class Vault extends SmartContract {
       const stands = escapes.getOption(key).orElse(0n).equals(named);
       const finalizes = isFinalize.and(stands);
       const writes = recorded.or(isRaise.and(stands));
-      const updates = writes.or(finalizes).or(isDefeat.and(stands));
+      const defeats = isDefeat.and(stands);
+      const updates = writes.or(finalizes).or(defeats);
       escapes.setIf(updates, key, Provable.if(writes, recordHash, Field(0)));
       this.emitEventIf(updates, 'escape', new EscapeUpdate({ pending: writes, record }));
 
-      // A close pays its balance, a finalize its balance less the concession; other kinds pay nothing.
+      // A close or a recorded escape claims its note's size, and a defeat gives it back; a finalize pays
+      // what its escape already claimed.
+      claimed = claimed.add(Provable.if(closes.or(recorded), UInt64, action.size, UInt64.zero));
+      claimed = claimed.sub(Provable.if(defeats, UInt64, action.size, UInt64.zero));
+
+      // A sweep pays what the expired notes left: the expired total less what is claimed and already swept.
+      const owed = claimed.add(swept);
+      const left = Provable.if(action.size.greaterThan(owed), UInt64, action.size, owed).sub(owed);
+      const sweeps = Provable.if(isSweep, UInt64, left, UInt64.zero);
+      swept = swept.add(sweeps);
+
+      // A close pays its balance and a finalize its balance less the concession, each the rest of the size
+      // to the treasury; a sweep pays the treasury alone; other kinds pay nothing.
       const pays = closes.or(finalizes);
       const payout = Provable.if(isFinalize, UInt64, record.payout(), action.amount);
       this.payIf(pays, action.destination, payout);
-      this.payIf(pays, treasury, action.size.sub(payout));
+      this.payIf(pays.or(isSweep), treasury, Provable.if(isSweep, UInt64, sweeps, action.size.sub(payout)));
     });
 
     this.noteRoot.set(root);
@@ -479,6 +582,8 @@ export class Vault extends SmartContract {
     this.rootRing.set(new RootRing(Provable.if(changed, RootRing, ring.push(root), ring)));
     this.nullifierRoot.set(nullifiers.root);
     this.pendingEscapesRoot.set(escapes.root);
+    this.claimedTotal.set(claimed);
+    this.sweptTotal.set(swept);
   }
 
   /** A circuit sends a fixed number of updates, so a skipped or zero payout is a zero send to the vault itself. */
@@ -500,6 +605,7 @@ declareMethods(Vault, {
   finalize: [PendingEscape, PendingEscapes],
   defeat: [PendingEscape, RequestProof, PendingEscapes],
   raise: [PendingEscape, RequestProof, UInt64, PendingEscapes],
+  sweepExpired: [UInt32, Unconstrained.provable, UInt64],
   reduce: [VaultBatch, VaultBatchProof, Unconstrained.provable, NullifierSet, PendingEscapes, UInt64],
 } as Record<string, any[]>);
 
@@ -517,6 +623,10 @@ declareState(Vault, {
   stateKey: PublicKey,
   treasury: PublicKey,
   pendingEscapesRoot: Field,
+  sweepCursor: Field,
+  expiredTotal: UInt64,
+  claimedTotal: UInt64,
+  sweptTotal: UInt64,
 });
 
 batchReducer.setContractClass(Vault);

@@ -2,8 +2,10 @@
 import { Bool, Field, Group, PrivateKey, Scalar, Signature } from 'o1js';
 import { commit, rerandomise } from './balance.js';
 import { NoteTree } from './note-tree.js';
-import { DEPOSIT_SIZES, TIERS, expiryOf } from './policy.js';
-import { authTag, commitSecret, genesisAnchor, nextAnchor, nullifier, type RequestContext } from './primitives.js';
+import { DEPOSIT_SIZES, TIERS, expiryOf, subsidyPeriod } from './policy.js';
+import {
+  authTag, commitSecret, genesisAnchor, nextAnchor, nullifier, periodNullifier, type RequestContext,
+} from './primitives.js';
 import { RequestPrivate, RequestPublic } from './request.js';
 import { stateFields } from './state.js';
 
@@ -26,6 +28,8 @@ export interface SampleOptions {
   vaultSecret: bigint;
   /** The edge is the vault key's x-coordinate, the key the zk edge signs state under. */
   ctx: { sessionKeyX: bigint; sessionKeyIsOdd: boolean; expiry: bigint };
+  /** A subsidised request, in a vault created at `vaultCreation`; otherwise unsubsidised. */
+  subsidy?: { vaultCreation: bigint };
 }
 
 export const defaultSample = (): SampleOptions => {
@@ -49,6 +53,8 @@ export interface Sample {
   vaultKey: PrivateKey;
   stateCommitment: Group;
   context: RequestContext;
+  /** The vault's creation time, the subsidised method's extra private input; zero when unsubsidised. */
+  vaultCreation: Field;
 }
 
 /**
@@ -94,10 +100,13 @@ export function buildRequest(tree: NoteTree, index: bigint, o: SampleOptions): S
     tier: F(o.tier), expiry: F(o.ctx.expiry),
   };
   const n = nullifier(secret, anchor);
+  // A request before the vault's creation has no period; the sample still builds, and fails to prove.
+  const period = o.subsidy ? subsidyPeriod(o.subsidy.vaultCreation, o.requestTime) ?? 0n : 0n;
   const pub = new RequestPublic({
     vault, root: tree.root, requestTime: F(o.requestTime), tier: F(o.tier), nullifier: n,
     tag: authTag(n, context), commitment: rerandomise(stateCommitment, sc(o.rerandom)),
-    subsidised: Bool(false), period: F(0n), periodNullifier: F(0n),
+    subsidised: Bool(o.subsidy !== undefined), period: F(period),
+    periodNullifier: o.subsidy ? periodNullifier(secret, F(index), F(period)) : F(0n),
   });
   const priv = new RequestPrivate({
     secret, index: F(index), size: F(o.size), depositTime: F(o.depositTime), expiry: F(expiryOf(o.depositTime)),
@@ -106,11 +115,27 @@ export function buildRequest(tree: NoteTree, index: bigint, o: SampleOptions): S
     edge: context.edge, sessionKeyX: context.sessionKeyX, sessionKeyIsOdd: context.sessionKeyIsOdd,
     requestExpiry: context.expiry,
   });
-  return { pub, priv, tree, vaultKey, stateCommitment, context };
+  const vaultCreation = F(o.subsidy?.vaultCreation ?? 0n);
+  return { pub, priv, tree, vaultKey, stateCommitment, context, vaultCreation };
 }
 
-/** The samples the shared vector file pins: one genesis state and one signed state. */
-export const VECTOR_SAMPLES: SampleOptions[] = [defaultSample(), { ...defaultSample(), signed: true, before: 5 }];
+/** The vault creation time of the subsidised vector samples: 10 days before the default deposit. */
+const VECTOR_VAULT_CREATION = defaultSample().depositTime - 10n * 86_400_000n;
+
+/**
+ * The samples the shared vector file pins: one genesis state and one signed state, unsubsidised; then
+ * subsidised, a genesis state in period 2 and a signed state of the same note in period 3.
+ */
+export const VECTOR_SAMPLES: SampleOptions[] = [
+  defaultSample(),
+  { ...defaultSample(), signed: true, before: 5 },
+  { ...defaultSample(), tier: TIERS[0], subsidy: { vaultCreation: VECTOR_VAULT_CREATION } },
+  {
+    ...defaultSample(), tier: TIERS[0], signed: true, step: 2, subsidy: { vaultCreation: VECTOR_VAULT_CREATION },
+    requestTime: VECTOR_VAULT_CREATION + 3n * 7n * 86_400_000n,
+    ctx: { ...defaultSample().ctx, expiry: VECTOR_VAULT_CREATION + 3n * 7n * 86_400_000n + 60_000n },
+  },
+];
 
 /** A sample's public inputs, and the private values Rust needs to recompute the derived ones. */
 export function requestVector(s: Sample, o: SampleOptions) {
@@ -135,6 +160,8 @@ export function requestVector(s: Sample, o: SampleOptions) {
         sessionKeyIsOdd: str(s.context.sessionKeyIsOdd.toField()), tier: str(s.context.tier), expiry: str(s.context.expiry),
       },
       stateCommitment: pt(s.stateCommitment),
+      // The subsidised method's extra private input; absent for an unsubsidised request.
+      ...(o.subsidy ? { vaultCreation: o.subsidy.vaultCreation.toString() } : {}),
     },
   };
 }
