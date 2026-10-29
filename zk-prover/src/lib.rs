@@ -4,11 +4,13 @@
 //! a [`StepWitness`] is the primary and auxiliary values for it. [`prove_step`] checks every
 //! constraint and returns the step proof.
 //!
-//! The witness can come from o1js's own dump ([`StepWitness::from_o1js_json`]) or, later, be built
-//! in Rust ([`StepWitness::from_parts`]).
+//! The witness can come from o1js's own dump ([`StepWitness::from_o1js_json`]) or be built in Rust:
+//! [`witness`] mirrors the o1js gadgets and Pickles' step circuit, and builds `land`'s witness
+//! ([`witness::land::land_witness`]) equal to o1js's; [`StepWitness::from_parts`] takes it.
 
 pub mod pins;
 pub mod verify;
+pub mod witness;
 
 use std::str::FromStr;
 

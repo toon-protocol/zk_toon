@@ -420,6 +420,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5353f36341f7451062466f0b755b96ac3a9547e4d7f6b70d603fc721a7d7896"
 dependencies = [
+ "sha2 0.10.8",
  "tinyvec",
 ]
 
@@ -3993,10 +3994,14 @@ dependencies = [
  "anyhow",
  "ark-ff",
  "base64",
+ "bs58 0.5.0",
  "flate2",
  "mina-curves",
  "mina-p2p-messages",
+ "mina-poseidon",
+ "mina-signer",
  "mina-tree",
+ "num-bigint",
  "rsexp",
  "serde_json",
 ]

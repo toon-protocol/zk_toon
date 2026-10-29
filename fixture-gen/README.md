@@ -17,3 +17,9 @@ Two things are pinned so a rerun is byte-identical: the fee payer (o1js picks a 
 the blinding of each account update's `callData` (`Fp.random`).
 
 The private keys in `prove-local.mjs` are toy scalars. Never use them for anything else.
+
+`trace-land.mjs` is a development tool for `zk-prover/src/witness`: it proves `land` as `prove-local.mjs`
+does and logs the calls into o1js's OCaml side (Poseidon, `scaleFastUnpack`, `truncateToBits16`) and the
+input of the account update hash, to `$SPIKE_DUMP/snarky-log.json`. The Rust witness mirrors were checked
+against that; the template of the account update's hash input (`src/witness/account_update.rs`) was
+dumped with it.
