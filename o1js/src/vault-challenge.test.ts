@@ -2,11 +2,12 @@
 // nullifier cancels it, and a raise at its current nullifier lifts its concession to
 // min(claimed, b, balance) (ADR 0004).
 import { beforeAll, describe, expect, it } from 'vitest';
-import { Mina, UInt64 } from 'o1js';
+import { Field, Mina, UInt64, verify } from 'o1js';
 import * as policy from './policy.js';
-import { PendingEscape, Vault, batchReducer } from './vault.js';
+import { PendingEscape, batchReducer } from './vault.js';
 import { balanceOf, now, vaultHarness } from './vault-harness.js';
-import { RequestProgram } from './request.js';
+import { PROOFS_ON } from './proofs-on.js';
+import { RequestProgram, RequestProof, RequestPublic } from './request.js';
 import { WithdrawalKind, WithdrawalProgram, type WithdrawalProof } from './withdrawal.js';
 
 const [SMALL] = policy.DEPOSIT_SIZES;
@@ -14,7 +15,7 @@ const [, , TOP_TIER] = policy.TIERS;
 const MINA = 1_000_000_000n;
 const { escape: ESCAPE } = WithdrawalKind;
 
-// Proofs off: the contract logic runs, but no circuit is proven.
+// Proofs off: the contract logic runs, but no circuit is proven, except where a test compiles one.
 const Local = await Mina.LocalBlockchain({ proofsEnabled: false });
 Mina.setActiveInstance(Local);
 WithdrawalProgram.setProofsEnabled(false);
@@ -98,6 +99,33 @@ describe('defeating an escape', () => {
     expect(h.mirror.pendingEscape(proof.publicInput.nullifier)).toBeUndefined();
     expect(h.vault.pendingEscapesRoot.get().toBigInt()).toBe(h.mirror.escapes.root.toBigInt());
   });
+});
+
+describe('defeating an escape with a real request proof', () => {
+  it(PROOFS_ON.defeat, async () => {
+    const { verificationKey } = await RequestProgram.compile({ proofsEnabled: true });
+    RequestProgram.setProofsEnabled(true);
+    try {
+      const h = await freshVault();
+      const { note, proof } = await recordedEscape(h, { step: 0 });
+      const evidence = await h.requestProof(note, { step: 1, balance: 4n * MINA, tier: TOP_TIER });
+      expect(await verify(evidence, verificationKey)).toBe(true);
+      // The proof is bound to its nullifier: moved to another, it no longer verifies.
+      const moved = new RequestProof({
+        ...evidence, publicInput: new RequestPublic({ ...evidence.publicInput, nullifier: Field(1) }),
+      });
+      expect(await verify(moved, verificationKey)).toBe(false);
+
+      const v = balanceOf(h.vault.address);
+      await h.defeat(proof.publicInput.nullifier, evidence);
+      await h.reduce();
+      expect(h.mirror.pendingEscape(proof.publicInput.nullifier)).toBeUndefined();
+      expect(h.vault.pendingEscapesRoot.get().toBigInt()).toBe(h.mirror.escapes.root.toBigInt());
+      expect(balanceOf(h.vault.address)).toBe(v);
+    } finally {
+      RequestProgram.setProofsEnabled(false);
+    }
+  }, 1_800_000);
 });
 
 describe('raising an escape', () => {
@@ -254,9 +282,6 @@ describe('challenge timing', () => {
   });
 });
 
-describe('the reduce with challenges', () => {
-  it('fits in one circuit', async () => {
-    const { reduce } = await Vault.analyzeMethods();
-    expect(reduce.rows).toBeLessThanOrEqual(2 ** 16);
-  });
-});
+// Whether the reduce with challenges fits in one circuit is checked by compiling the vault
+// (`PROOFS_ON.vault` in keys.test.ts): its method's row count leaves out the check of the batch proof,
+// so it passed at a batch of 5, which didn't compile.

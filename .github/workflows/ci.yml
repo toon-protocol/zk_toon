@@ -29,9 +29,29 @@ jobs:
         run: |
           cargo test --workspace -- --nocapture 2>&1 | tee rust.log
           grep -E 'vector cases run: [1-9][0-9]*' rust.log
+      # The JSON report feeds the proofs-on check below.
       - name: o1js vectors
         run: |
           cd o1js
           npm run typecheck
-          npm test 2>&1 | tee ../o1js.log
+          npm test -- --reporter=default --reporter=json --outputFile=../o1js-report.json 2>&1 | tee ../o1js.log
           grep -E 'vector cases run: [1-9][0-9]*' ../o1js.log
+      # The named proofs-on set (PROOFS_ON in o1js/src/proofs-on.ts): fails if any of its tests is
+      # missing, skipped or failed.
+      - name: Proofs-on set
+        run: |
+          cd o1js
+          npm run proofs-on -- ../o1js-report.json
+      # The published verification keys and vault code hash, rebuilt without o1js's key cache: the
+      # two builds must be identical.
+      - name: Verification keys
+        run: |
+          cd o1js
+          npm run keys -- ../verification-keys.json
+          npm run keys -- --no-cache ../verification-keys.rebuild.json
+          cmp ../verification-keys.json ../verification-keys.rebuild.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verification-keys
+          path: verification-keys.json
+          if-no-files-found: error

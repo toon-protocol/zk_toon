@@ -158,3 +158,21 @@ _Avoid_: Subsidy budget, fee address
 The o1js process that builds and proves vault transactions and request proofs for callers in Rust,
 which send it a note's secrets and get back a transaction ready to send or a proof.
 _Avoid_: Prover sidecar, o1js bridge
+
+### Building and publishing
+
+**Published keys**:
+The verification keys of the request proof, the withdrawal proof and the vault's batch reducer, with
+their hashes and the vault's code hash, that each build writes and the gate uploads. A zk edge's
+greeting pins are checked against them.
+_Avoid_: VK dump, key bundle
+
+**Vault code hash**:
+The hash of the vault's verification key: the key a deployed vault account carries, and so the only
+thing that names its code on chain.
+_Avoid_: Contract hash, bytecode hash
+
+**Proofs-on set**:
+The named tests that compile the circuits and prove for real: the request proof, the subsidised proof,
+mutual close, escape, defeat and the vault's compile. The gate fails unless each ran and passed.
+_Avoid_: Slow tests, integration tests

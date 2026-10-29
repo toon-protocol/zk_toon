@@ -26,10 +26,11 @@ export const ROOT_RING_LENGTH = 8;
 export const SLOT_MS = 90_000n;
 /**
  * Actions folded per reduce. A reduce sends two account updates per action (a close's two payouts),
- * so a full batch is 10 unsigned updates: 5 pairs, plus the fee payer and the vault, 7 of Mina's 16
- * segments per transaction.
+ * so a full batch is 8 unsigned updates: 4 pairs, plus the fee payer and the vault, 6 of Mina's 16
+ * segments per transaction. The proving cost binds first: at 5, the reduce plus the check of its batch
+ * proof needs more than 2^16 rows, and the vault doesn't compile (#16). `npm run keys` compiles it.
  */
-export const REDUCE_BATCH_SIZE = 5;
+export const REDUCE_BATCH_SIZE = 4;
 /** How long after its `requestTime` a mutual close may land: the connector's request-time window. */
 export const CLOSE_WINDOW_MS = policy.REQUEST_MAX_AGE_MS;
 /** The nullifier set holds up to 2^(height − 1) nullifiers. */

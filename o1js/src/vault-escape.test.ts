@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import { PROOFS_ON } from './proofs-on.js';
 import { AccountUpdate, Mina, Permissions, PrivateKey, UInt32, UInt64, VerificationKey, verify } from 'o1js';
 import * as policy from './policy.js';
 import { PendingEscape, SLOT_MS, batchReducer } from './vault.js';
@@ -250,7 +251,7 @@ describe('the vault has no pause', () => {
 });
 
 describe('vault escape with a real withdrawal proof', () => {
-  it('is bound to its destination, and pays it after the window', async () => {
+  it(PROOFS_ON.escape, async () => {
     const { verificationKey } = await WithdrawalProgram.compile({ proofsEnabled: true });
     WithdrawalProgram.setProofsEnabled(true);
     try {

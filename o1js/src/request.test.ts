@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
-import { Bool, Field, Group, PrivateKey, Provable, Scalar, Signature, verify } from 'o1js';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { Bool, Field, Group, PrivateKey, Provable, Scalar, Signature, VerificationKey, verify } from 'o1js';
 import { commit, rerandomise } from './balance.js';
 import { TIERS, expiryOf } from './policy.js';
 import { authTag, commitSecret, genesisAnchor, nextAnchor, nullifier, periodNullifier } from './primitives.js';
 import { RequestPrivate, RequestProgram, RequestPublic, checkSubsidised, checkUnsubsidised } from './request.js';
 import { VECTOR_SAMPLES, buildSample, defaultSample, requestVector, type SampleOptions } from './request-sample.js';
+import { PROOFS_ON } from './proofs-on.js';
 import { stateFields } from './state.js';
 
 // Proofs off: the constraints are checked, no proof is made.
@@ -243,13 +244,20 @@ describe('subsidised request proof constraints', () => {
 });
 
 describe('request proof', () => {
-  it('compiles, then proves and verifies a genesis and a signed request, and a subsidised one', async () => {
-    const { verificationKey } = await RequestProgram.compile();
+  let verificationKey: VerificationKey;
+  beforeAll(async () => {
+    ({ verificationKey } = await RequestProgram.compile());
+  }, 900_000);
+
+  it(PROOFS_ON.request, async () => {
     for (const s of [sample(), signedSample()]) {
       const { proof } = await RequestProgram.unsubsidised(s.pub, s.priv);
       expect(await verify(proof, verificationKey)).toBe(true);
       expect(proof.publicInput.nullifier.toString()).toBe(s.pub.nullifier.toString());
     }
+  }, 900_000);
+
+  it(PROOFS_ON.subsidised, async () => {
     const sub = signedSample({ tier: TIERS[0], subsidy: { vaultCreation: defaultSample().depositTime - 10n * 86_400_000n } });
     const { proof } = await RequestProgram.subsidised(sub.pub, sub.priv, sub.vaultCreation);
     expect(await verify(proof, verificationKey)).toBe(true);
