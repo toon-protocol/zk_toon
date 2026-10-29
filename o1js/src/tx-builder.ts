@@ -11,8 +11,8 @@ import { commit, rerandomise } from './balance.js';
 import { authTag, commitSecret, genesisAnchor, nextAnchor, nullifier } from './primitives.js';
 import { RequestPrivate, RequestProgram, RequestProof, RequestPublic } from './request.js';
 import { expiryOf } from './policy.js';
-import { Vault, batchReducer } from './vault.js';
-import { VaultKeeper, chainNow, vaultView } from './vault-view.js';
+import { PendingEscape, PendingEscapes, Vault, batchReducer } from './vault.js';
+import { VaultKeeper, chainNow, escapeEvents, pendingEscapesView, vaultView } from './vault-view.js';
 import type { VaultMirror } from './vault-mirror.js';
 import { WithdrawalKind, WithdrawalPrivate, WithdrawalProgram, WithdrawalPublic } from './withdrawal.js';
 
@@ -180,6 +180,8 @@ export async function createBuilder(options: BuilderOptions) {
     if (o.vault && Mina.getProofsEnabled() && !vaultCompiled) {
       await batchReducer.compile();
       if (!withdrawalCompiled) await WithdrawalProgram.compile();
+      // The vault's defeat and raise verify request proofs.
+      if (!requestVk) requestVk = (await RequestProgram.compile()).verificationKey;
       await Vault.compile();
       vaultCompiled = withdrawalCompiled = reducerCompiled = true;
     }
@@ -204,6 +206,39 @@ export async function createBuilder(options: BuilderOptions) {
     } catch (e) {
       throw new Failure('chainUnavailable', e instanceof Error ? e.message : String(e));
     }
+  }
+
+  /** The vault's pending escapes, rebuilt from its `escape` events and checked against its root. */
+  async function pendingEscapes(vault: Vault) {
+    try {
+      return await pendingEscapesView(vault, { localChain: options.local });
+    } catch (e) {
+      throw new Failure('chainUnavailable', e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * A defeat or raise of the escape pending at `p.escape`, with `p.evidence` (a request proof's
+   * `JsonProof`) as its evidence. Answers the transaction and its hash.
+   */
+  async function challenge(
+    p: Params, secrets: string[],
+    call: (vault: Vault, escape: PendingEscape, evidence: RequestProof, escapes: PendingEscapes) => Promise<void>
+  ) {
+    const payer = feePayer(p.feePayer, secrets);
+    const vault = await loadVault(p.vault, [payer.sender]);
+    const at = field(p.escape, 'escape');
+    let evidence: RequestProof;
+    try {
+      evidence = await RequestProof.fromJSON(obj(p.evidence, 'evidence') as never);
+    } catch {
+      throw bad('evidence: not a request proof');
+    }
+    const { escapes, records } = await pendingEscapes(vault);
+    const escape = records.get(at.toBigInt());
+    if (!escape) throw bad('escape: the vault holds no pending escape at this nullifier');
+    const zkappCommand = await transaction(payer, () => call(vault, escape, evidence, escapes.clone()));
+    return { zkappCommand, hash: await Mina.Transaction.hash(zkappCommand) };
   }
 
   /** A withdrawal proof of `kind` for the request's note and state. */
@@ -280,6 +315,17 @@ export async function createBuilder(options: BuilderOptions) {
     },
   };
 
+  ops.defeat = (p, secrets) =>
+    challenge(p, secrets, async (vault, escape, evidence, escapes) => {
+      await vault.defeat(escape, evidence, escapes);
+    });
+  ops.raise = (p, secrets) => {
+    const claimed = UInt64.from(u64(p.claimed, 'claimed'));
+    return challenge(p, secrets, async (vault, escape, evidence, escapes) => {
+      await vault.raise(escape, evidence, claimed, escapes);
+    });
+  };
+
   /** The unsubsidised request proof, with the vault's state key as the zk edge. */
   ops.requestProof = async (p, secrets) => {
     const vault = await loadVault(p.vault);
@@ -330,6 +376,8 @@ export async function createBuilder(options: BuilderOptions) {
     return { valid: await verify(proof, requestVk!) };
   };
 
+  /** Hashes of the commands `local.graphql` has landed. */
+  const landed: string[] = [];
   const localOps: Record<string, Op> = {
     async 'local.accounts'() {
       return {
@@ -384,6 +432,52 @@ export async function createBuilder(options: BuilderOptions) {
     },
     async 'local.balance'(p) {
       return { balance: Mina.getBalance(publicKey(p.publicKey, 'publicKey')).toBigInt().toString() };
+    },
+    /**
+     * The challenger adapter's GraphQL operations, answered from the local chain in the shapes the Mina
+     * daemon and the archive node API answer them (`challenger-mina/src/graphql.rs`). Every command sent
+     * lands at once, in a block of its own.
+     */
+    async 'local.graphql'(p) {
+      const request = obj(p.request, 'request');
+      const variables = obj(request.variables ?? {}, 'request.variables');
+      const time = { protocolState: { blockchainState: { utcDate: chainNow().toString() } } };
+      switch (`${p.endpoint}:${request.operationName}`) {
+        case 'mina:VaultState': {
+          const vault = publicKey(variables.vault, 'vault');
+          const zkappState = Mina.getAccount(vault).zkapp!.appState.map((f) => f.toString());
+          return { data: { account: { zkappState }, bestChain: [time] } };
+        }
+        case 'archive:EscapeEvents': {
+          const vault = new Vault(publicKey(variables.vault, 'vault'));
+          const { events } = await escapeEvents(vault, { localChain: true });
+          return {
+            data: {
+              events: events.map((e, i) => ({
+                blockInfo: { height: Number(e.height), chainStatus: 'canonical' },
+                eventData: [{ data: e.data, transactionInfo: { hash: `local-${i}`, status: 'applied' } }],
+              })),
+            },
+          };
+        }
+        case 'mina:SendChallenge': {
+          const command = obj(obj(variables.input, 'input').zkappCommand, 'zkappCommand');
+          try {
+            await Mina.Transaction.fromJSON(command as never).send();
+          } catch (e) {
+            return { errors: [{ message: e instanceof Error ? e.message : String(e) }] };
+          }
+          const hash = await Mina.Transaction.hash(command as never);
+          landed.push(hash);
+          return { data: { sendZkapp: { zkapp: { hash } } } };
+        }
+        case 'mina:ChallengeStatus': {
+          const zkappCommands = landed.map((hash) => ({ hash, failureReason: null }));
+          return { data: { bestChain: [{ transactions: { zkappCommands }, ...time }], pooledZkappCommands: [] } };
+        }
+        default:
+          throw bad(`local.graphql: no ${String(request.operationName)} on ${String(p.endpoint)}`);
+      }
     },
     async 'local.vaultState'(p) {
       const vault = new Vault(publicKey(p.vault, 'vault'));

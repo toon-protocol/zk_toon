@@ -178,6 +178,70 @@ impl Escape {
     }
 }
 
+/// Defeat the escape pending at nullifier `escape` with `evidence`, a request proof at its next
+/// nullifier. The builder reads the pending escape from the vault's `escape` events. The evidence
+/// carries no secret: it is what the zk edge recorded.
+#[derive(Clone, Debug)]
+pub struct Defeat {
+    pub vault: CompressedPubKey,
+    pub fee_payer: FeePayer,
+    /// The escaping state's (current) nullifier, which names the pending escape.
+    pub escape: Field,
+    /// o1js `JsonProof` of a request proof.
+    pub evidence: Value,
+}
+
+impl Defeat {
+    pub(crate) fn to_json(&self) -> Value {
+        json!({
+            "vault": self.vault.into_address(),
+            "feePayer": self.fee_payer.to_json(),
+            "escape": dec_field(self.escape),
+            "evidence": self.evidence,
+        })
+    }
+}
+
+/// Raise the concession of the escape pending at nullifier `escape` to `min(claimed, b, balance)`
+/// with `evidence`, a request proof of tier `b` at that nullifier (ADR 0004).
+#[derive(Clone, Debug)]
+pub struct Raise {
+    pub vault: CompressedPubKey,
+    pub fee_payer: FeePayer,
+    pub escape: Field,
+    pub evidence: Value,
+    /// Nanomina: the allowance's recorded charge, or `b` if it never closed.
+    pub claimed: u64,
+}
+
+impl Raise {
+    pub(crate) fn to_json(&self) -> Value {
+        json!({
+            "vault": self.vault.into_address(),
+            "feePayer": self.fee_payer.to_json(),
+            "escape": dec_field(self.escape),
+            "evidence": self.evidence,
+            "claimed": self.claimed.to_string(),
+        })
+    }
+}
+
+/// A defeat or raise transaction, and its hash as Mina reports it, so its outcome can be looked up
+/// even if sending it got no answer.
+#[derive(Clone, Debug)]
+pub struct Challenge {
+    pub transaction: Transaction,
+    /// Base58, as Mina GraphQL's `sendZkapp` and `bestChain` report a zkApp command's hash.
+    pub hash: String,
+}
+
+impl Challenge {
+    pub(crate) fn from_answer(mut answer: Value) -> Result<Self, Error> {
+        let hash = answer["hash"].as_str().ok_or_else(|| Error::Protocol("hash is not a string".into()))?.to_string();
+        Ok(Challenge { transaction: Transaction { zkapp_command: answer["zkappCommand"].take(), withdrawal: None }, hash })
+    }
+}
+
 /// An unsubsidised request proof that `note`'s current state covers `tier`, bound to one session
 /// key and expiry. The zk edge is the vault's state key.
 #[derive(Clone)]

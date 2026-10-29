@@ -6,6 +6,7 @@ import { Bool, Mina, UInt64 } from 'o1js';
 import * as policy from './policy.js';
 import { PendingEscape, Vault, batchReducer } from './vault.js';
 import { balanceOf, now, vaultHarness } from './vault-harness.js';
+import { pendingEscapesView } from './vault-view.js';
 import { RequestProgram, RequestProof, RequestPublic } from './request.js';
 import { WithdrawalKind, WithdrawalProgram, type WithdrawalProof } from './withdrawal.js';
 
@@ -240,6 +241,45 @@ describe('challenge timing', () => {
     advance(pending.deadline.toBigInt() - now());
     await expect(h.send(await h.raiseTx(pending, raiseEvidence, MINA))).rejects.toThrow(/Protocol_state_precondition_unsatisfied/);
     await expect(h.send(await h.defeatTx(pending, defeatEvidence))).rejects.toThrow(/Protocol_state_precondition_unsatisfied/);
+  });
+});
+
+describe("the vault's escape events", () => {
+  it('rebuild its pending escapes to its root, with each deadline and raise as the reduce recorded it', async () => {
+    const h = await freshVault();
+    const raised = await recordedEscape(h, { conceded: MINA / 100n });
+    const defeated = await recordedEscape(h, { step: 0 });
+    const finalized = await recordedEscape(h);
+    const raisedAt = raised.proof.publicInput.nullifier;
+    await h.raise(raisedAt, await h.requestProof(raised.note, { balance: raised.balance, tier: TOP_TIER }), MINA / 2n);
+    await h.defeat(
+      defeated.proof.publicInput.nullifier,
+      await h.requestProof(defeated.note, { step: 1, balance: 4n * MINA, tier: TOP_TIER })
+    );
+    await h.reduce();
+    await finalizeAfterWindow(h, finalized.proof);
+
+    const view = await pendingEscapesView(h.vault, { localChain: true });
+    expect(view.escapes.root.toBigInt()).toBe(h.vault.pendingEscapesRoot.get().toBigInt());
+    expect([...view.records.keys()]).toEqual([raisedAt.toBigInt()]);
+    const record = view.records.get(raisedAt.toBigInt())!;
+    expect(record.conceded.toBigInt()).toBe(MINA / 2n);
+    expect(PendingEscape.toJSON(record)).toEqual(PendingEscape.toJSON(h.mirror.pendingEscape(raisedAt)!));
+  });
+
+  it('rebuild escapes recorded together by one reduce, in the order it recorded them', async () => {
+    const h = await freshVault();
+    const notes = [await h.deposit(SMALL), await h.deposit(SMALL)];
+    await h.reduce();
+    for (const note of notes) {
+      await h.escape(await h.withdrawalProof(note, {
+        kind: ESCAPE, signed: true, step: 1, balance: 3n * MINA, conceded: 0n, destination: alice,
+      }));
+    }
+    await h.reduce();
+    const view = await pendingEscapesView(h.vault, { localChain: true });
+    expect(view.escapes.root.toBigInt()).toBe(h.vault.pendingEscapesRoot.get().toBigInt());
+    expect(view.records.size).toBe(2);
   });
 });
 

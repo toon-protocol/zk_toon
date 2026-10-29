@@ -67,6 +67,13 @@ impl LocalChain<'_> {
         parse_u64(&self.0.call("local.balance", json!({ "publicKey": account.into_address() }))?["balance"])
     }
 
+    /// Answers one of the challenger adapter's named GraphQL operations from the local chain, in the
+    /// shape the Mina daemon (`endpoint` `"mina"`) or the archive node API (`"archive"`) answers it.
+    /// A refused `sendZkapp` is a GraphQL error, as from a daemon.
+    pub fn graphql(&mut self, endpoint: &str, request: &Value) -> Result<Value, Error> {
+        self.0.call("local.graphql", json!({ "endpoint": endpoint, "request": request }))
+    }
+
     /// The vault's on-chain state, by field name, as decimal strings (keys as base58).
     pub fn vault_state(&mut self, vault: &CompressedPubKey) -> Result<Value, Error> {
         self.0.call("local.vaultState", json!({ "vault": vault.into_address() }))

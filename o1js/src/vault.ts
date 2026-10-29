@@ -93,6 +93,16 @@ export class PendingEscape extends Struct({
 }
 
 /**
+ * What a reduce did to one pending escape, emitted as the vault's `escape` event (its only event type,
+ * so its fields carry no type index): `record` is the escape as recorded or raised when `pending`, or
+ * the escape a finalize or defeat finished when not. Replaying these events in order rebuilds the
+ * pending escapes to `pendingEscapesRoot`, deadlines included, which the actions alone can't: a
+ * deadline is set by the reduce that records the escape. The fields, in order: `pending`, then
+ * `nullifier, nextNullifier, amount, conceded, size, destination.x, destination.isOdd, deadline`.
+ */
+export class EscapeUpdate extends Struct({ pending: Bool, record: PendingEscape }) {}
+
+/**
  * The vault's one fixed-width action. Each kind uses some fields and leaves the rest zero:
  * - a deposit: `commitment`, `size` and `time` (its deposit time);
  * - a mutual close: `nullifier`, `amount`, `size`, `destination` and `time` (its request time);
@@ -217,6 +227,8 @@ export class Vault extends SmartContract {
   treasury = State<PublicKey>();
   /** The root of the pending escapes. */
   pendingEscapesRoot = State<Field>();
+
+  events = { escape: EscapeUpdate };
 
   /** Deploys with the verification key, permissions and timing locked: the vault has no pause. */
   async deploy(args?: Parameters<SmartContract['deploy']>[0]) {
@@ -388,6 +400,7 @@ export class Vault extends SmartContract {
    * A close or escape with a nullifier already spent, in the set or earlier in the batch, and a finalize,
    * defeat or raise of an escape no longer pending as named, are skipped without paying and without failing.
    * So of a raise, a defeat and a finalize of one escape in one batch, only the first applies.
+   * Each change to a pending escape is emitted as an `escape` event ({@link EscapeUpdate}).
    *
    * `now` pins the block time to within a slot after it.
    */
@@ -450,7 +463,9 @@ export class Vault extends SmartContract {
       const stands = escapes.getOption(key).orElse(0n).equals(named);
       const finalizes = isFinalize.and(stands);
       const writes = recorded.or(isRaise.and(stands));
-      escapes.setIf(writes.or(finalizes).or(isDefeat.and(stands)), key, Provable.if(writes, recordHash, Field(0)));
+      const updates = writes.or(finalizes).or(isDefeat.and(stands));
+      escapes.setIf(updates, key, Provable.if(writes, recordHash, Field(0)));
+      this.emitEventIf(updates, 'escape', new EscapeUpdate({ pending: writes, record }));
 
       // A close pays its balance, a finalize its balance less the concession; other kinds pay nothing.
       const pays = closes.or(finalizes);

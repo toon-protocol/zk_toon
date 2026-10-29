@@ -1,8 +1,9 @@
 // The vault's off-chain state as the transaction builder needs it, read from the chain: the note tree and
-// the nullifier set, rebuilt by replaying the actions the vault has reduced. Also the local chain's keeper,
+// the nullifier set, rebuilt by replaying the actions the vault has reduced, and the pending escapes,
+// rebuilt by replaying its `escape` events. Also the local chain's keeper,
 // which reduces a vault's pending actions as a keeper would.
-import { Field, Mina, PublicKey, UInt64, Unconstrained } from 'o1js';
-import { Vault, VaultAction, batchReducer } from './vault.js';
+import { Field, Mina, PublicKey, TokenId, UInt64, Unconstrained } from 'o1js';
+import { EscapeUpdate, PendingEscape, PendingEscapes, Vault, VaultAction, batchReducer } from './vault.js';
 import { VaultMirror } from './vault-mirror.js';
 
 type Account = Awaited<ReturnType<typeof Mina.LocalBlockchain>>['testAccounts'][number];
@@ -29,6 +30,57 @@ export async function vaultView(vault: Vault): Promise<VaultMirror> {
     throw Error('rebuilt nullifier root is not the vault root');
   }
   return mirror;
+}
+
+/**
+ * The pending escapes of `vault`, rebuilt by replaying its `escape` events in order, and checked against
+ * its on-chain root. `records` holds every escape still pending, by its current nullifier. The archive
+ * lists events oldest block first.
+ *
+ * o1js's LocalBlockchain lists them newest first and reverses its stored list in place on every read, so
+ * a later block could land in the middle of it. On the local chain (`localChain`), every read here is
+ * followed by a second one, which leaves the stored list oldest first between reads.
+ */
+export async function pendingEscapesView(vault: Vault, o: { localChain: boolean }) {
+  return (await escapeEvents(vault, o)).view;
+}
+
+/**
+ * The vault's `escape` events, oldest first, each as its block height and its fields (decimal strings),
+ * and the pending escapes they rebuild. Throws unless they rebuild the vault's on-chain root.
+ */
+export async function escapeEvents(vault: Vault, o: { localChain: boolean }) {
+  let blocks = [...(await Mina.fetchEvents(vault.address, TokenId.default))];
+  if (o.localChain) {
+    await Mina.fetchEvents(vault.address, TokenId.default);
+    blocks = blocks.reverse();
+  }
+  // An account update lists its events newest first (o1js pushes each onto the front), so a reduce's
+  // events are reversed back into the order the reduce emitted them; as listed is the fallback.
+  const flat = (newestFirst: boolean) =>
+    blocks.flatMap((b) => {
+      const events = b.events.map((e) => ({ height: BigInt(b.blockHeight.toString()), data: e.data as string[] }));
+      return newestFirst ? events.reverse() : events;
+    });
+  const root = vault.pendingEscapesRoot.get();
+  for (const events of [flat(true), flat(false)]) {
+    const view = replay(events.map((e) => e.data));
+    if (view.escapes.root.equals(root).toBoolean()) return { events, view };
+  }
+  throw Error("the rebuilt pending escapes are not the vault's");
+}
+
+function replay(events: string[][]) {
+  const escapes = new PendingEscapes();
+  const records = new Map<bigint, PendingEscape>();
+  for (const data of events) {
+    const { pending, record } = EscapeUpdate.fromFields(data.map((f) => Field(f)));
+    const pendingNow = pending.toBoolean();
+    escapes.set(record.nullifier, pendingNow ? record.hash() : Field(0));
+    if (pendingNow) records.set(record.nullifier.toBigInt(), record);
+    else records.delete(record.nullifier.toBigInt());
+  }
+  return { escapes, records };
 }
 
 /** Reduces the vaults it tracks, keeping each one's full mirror, pending escapes included. */

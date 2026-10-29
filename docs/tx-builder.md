@@ -116,6 +116,26 @@ proof's public inputs, in the layout `zk_note::withdrawal` documents.
 
 Result: as for `mutualClose`. `publicInputFields[5]` is the next state's nullifier.
 
+### `defeat` and `raise`
+
+A challenge of a pending escape, with a request proof the zk edge recorded as its evidence. Neither
+takes a secret but the fee payer's key.
+
+| param | |
+|---|---|
+| `vault`, `feePayer` | as above |
+| `escape` | the escaping state's (current) nullifier, which names the pending escape |
+| `evidence` | the request proof's o1js `JsonProof`: at the escape's next nullifier for a defeat, at its nullifier for a raise |
+| `claimed` | `raise` only: what the raise claims, in nanomina (ADR 0004); the vault lifts the concession to `min(claimed, b, balance)` |
+
+The builder rebuilds the vault's pending escapes from its `escape` events (`EscapeUpdate` in
+`o1js/src/vault.ts`) and checks them against `pendingEscapesRoot`, so the caller passes only the
+nullifier. An escape that is not pending is a `badInput` failure; a refusal by the vault (evidence
+at the wrong nullifier, a raise that would not increase the concession, …) is `provingFailed`.
+
+Result: `{"zkappCommand": {…}, "hash": "<base58>"}`. `hash` is the command's hash as Mina GraphQL
+reports it, so a caller can look its outcome up even when sending it got no answer.
+
 ### `requestProof`
 
 An unsubsidised request proof for an allowance. The zk edge is the vault's state key.
@@ -152,6 +172,7 @@ These let tests show that the vault accepts what the builder builds.
 | `local.now` | | `{"now": <ms>}` |
 | `local.balance` | `publicKey` | `{"balance": <nanomina>}` |
 | `local.vaultState` | `vault` | the vault's roots, next leaf index, state key and treasury |
+| `local.graphql` | `endpoint` (`mina` or `archive`), `request` | the answer to one of the challenger adapter's named GraphQL operations (`VaultState`, `EscapeEvents`, `SendChallenge`, `ChallengeStatus`), shaped as the daemon or archive answers it; a refused send is a GraphQL error |
 
 ## Failure answers
 
@@ -178,7 +199,7 @@ In Rust, the types that hold them (`Note`, `NoteState`, `FeePayer`, `RequestProo
 
 ## Adding an operation
 
-Defeat and raise (#10, wired up by #15) are added the same way as the others:
+An operation is added the way `deposit` or `defeat` was:
 
 1. In `o1js/src/tx-builder.ts`, add an entry to `ops` that reads its params with the shared readers
    (`note`, `noteState`, `feePayer`…), proves inside `proving(…)`, and returns
@@ -187,6 +208,9 @@ Defeat and raise (#10, wired up by #15) are added the same way as the others:
    method that calls the op and decodes the answer with `Transaction::from_answer`.
 3. Document it here.
 
-Pending escapes are not rebuilt from actions, because an escape's deadline depends on when its reduce
-landed. A defeat or raise names its pending escape, so it must take the record from its caller, or
-the vault must emit it.
+## Pending escapes
+
+Pending escapes can't be rebuilt from actions, because an escape's deadline depends on when its reduce
+landed. So the reduce emits an `escape` event for every pending escape it records, raises or finishes,
+and the builder (`pendingEscapesView` in `o1js/src/vault-view.ts`) and the challenger's Mina adapter
+(`docs/challenger-mina.md`) replay those events, checked against the vault's root.

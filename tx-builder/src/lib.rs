@@ -163,6 +163,16 @@ impl TxBuilder {
         Transaction::from_answer(self.call("escape", e.to_json())?)
     }
 
+    /// A proved, signed defeat transaction.
+    pub fn defeat(&mut self, d: &Defeat) -> Result<Challenge, Error> {
+        Challenge::from_answer(self.call("defeat", d.to_json())?)
+    }
+
+    /// A proved, signed raise transaction.
+    pub fn raise(&mut self, r: &Raise) -> Result<Challenge, Error> {
+        Challenge::from_answer(self.call("raise", r.to_json())?)
+    }
+
     /// A request proof for an allowance.
     pub fn request_proof(&mut self, r: &RequestProofInput) -> Result<RequestProof, Error> {
         RequestProof::from_answer(self.call("requestProof", r.to_json())?)

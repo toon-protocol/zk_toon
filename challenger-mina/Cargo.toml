@@ -1,0 +1,19 @@
+[package]
+name = "zk-toon-challenger-mina"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "The challenger's Mina adapter: reads the vault through Mina GraphQL, submits through the o1js transaction builder"
+
+[dependencies]
+ark-ff = "0.5"
+mina-signer = { git = "https://github.com/o1-labs/proof-systems", tag = "0.7.0", default-features = false }
+serde_json = "1"
+ureq = { version = "2", default-features = false, features = ["tls", "socks-proxy"] }
+zk-note = { path = "../zk-note" }
+zk-toon-challenger = { path = "../challenger" }
+zk-toon-tx-builder = { path = "../tx-builder" }
+
+[dev-dependencies]
+mina-curves = { git = "https://github.com/o1-labs/proof-systems", tag = "0.7.0", default-features = false }
+sha2 = "0.10"
