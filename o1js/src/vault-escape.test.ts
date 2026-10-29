@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { PROOFS_ON } from './proofs-on.js';
-import { AccountUpdate, Mina, Permissions, PrivateKey, UInt32, UInt64, VerificationKey, verify } from 'o1js';
+import { AccountUpdate, Bool, Field, Mina, Permissions, PrivateKey, UInt32, UInt64, VerificationKey, verify } from 'o1js';
 import * as policy from './policy.js';
-import { PendingEscape, SLOT_MS, batchReducer } from './vault.js';
+import { PendingEscape, SLOT_MS, VAULT_URI, batchReducer } from './vault.js';
 import { balanceOf, now, vaultHarness } from './vault-harness.js';
 import { WithdrawalKind, WithdrawalProgram, WithdrawalProof, WithdrawalPublic } from './withdrawal.js';
 
@@ -227,12 +227,28 @@ describe('the vault has no pause', () => {
   it('refuses every owner change that could stop or delay an escape, and the escape still finalizes', async () => {
     const h = await freshVault();
     const { proof } = await escaped(h);
-    const owner = async (change: (u: AccountUpdate) => void) =>
-      h.send(await Mina.transaction(payer, async () => change(AccountUpdate.createSigned(h.vault.address))), [h.zkappKey]);
+    // A signed update by the upgrade key, replay-protected by the full commitment so that it increments no nonce.
+    const owner = async (change: (u: AccountUpdate) => void, incrementNonce = false) =>
+      h.send(await Mina.transaction(payer, async () => {
+        const u = AccountUpdate.createSigned(h.vault.address);
+        if (!incrementNonce) {
+          u.body.useFullCommitment = Bool(true);
+          u.body.incrementNonce = Bool(false);
+          u.body.preconditions.account.nonce.isSome = Bool(false);
+          u.body.preconditions.account.nonce.value.lower = UInt32.zero;
+          u.body.preconditions.account.nonce.value.upper = UInt32.MAXINT();
+        }
+        change(u);
+      }), [h.zkappKey]);
 
-    // The owner can still sign for the vault account, for what can't touch an escape.
-    await owner((u) => u.account.zkappUri.set('https://example.org/vault'));
-    await expect(owner((u) => u.account.verificationKey.set(VerificationKey.dummySync()))).rejects.toThrow();
+    // The upgrade key can change nothing that touches funds or state, and nothing but the delegate.
+    expect(Mina.getAccount(h.vault.address).zkapp!.zkappUri).toBe(VAULT_URI);
+    await expect(owner((u) => u.account.zkappUri.set('https://example.org/other'))).rejects.toThrow(/zkappUri/);
+    await expect(owner(() => {}, true)).rejects.toThrow(/incrementNonce/);
+    await expect(owner((u) => u.account.votingFor.set(Field(1)))).rejects.toThrow(/votingFor/);
+    await expect(owner((u) => u.account.tokenSymbol.set('X'))).rejects.toThrow(/tokenSymbol/);
+    await expect(owner((u) => AccountUpdate.setValue(u.body.update.appState[0], Field(1)))).rejects.toThrow();
+        await expect(owner((u) => u.account.verificationKey.set(VerificationKey.dummySync()))).rejects.toThrow();
     await expect(owner((u) => u.account.permissions.set(Permissions.allImpossible()))).rejects.toThrow();
     await expect(owner((u) => u.account.permissions.set(Permissions.default()))).rejects.toThrow();
     await expect(owner((u) => u.account.timing.set({
@@ -240,6 +256,10 @@ describe('the vault has no pause', () => {
       vestingPeriod: UInt32.one, vestingIncrement: UInt64.zero,
     }))).rejects.toThrow();
     await expect(owner((u) => u.send({ to: bob, amount: UInt64.from(MINA) }))).rejects.toThrow();
+
+    // Staking is deliberate: the upgrade key may delegate, which moves no funds.
+    await owner((u) => u.account.delegate.set(bob));
+    expect(Mina.getAccount(h.vault.address).delegate?.toBase58()).toBe(bob.toBase58());
 
     await h.reduce();
     const a = balanceOf(alice);

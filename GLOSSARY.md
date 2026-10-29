@@ -11,8 +11,18 @@ zk edge with zero-knowledge proofs instead of vouchers that name its channel.
 The Mina zkApp that holds every note's deposit and pays it back out on withdrawal. It has no pause:
 its deploy makes its permissions and timing unchangeable, and its verification key
 (`setVerificationKey: impossibleDuringCurrentVersion`) changeable only across a Mina hard fork, which
-changes the protocol version. No owner action can stop or delay an escape.
+changes the protocol version. No owner action can stop or delay an escape (ADR 0006).
 _Avoid_: Pool, mixer, contract (unqualified)
+
+**Upgrade key**:
+The vault account's own key. It signs for the vault account, but its permissions let it only delegate
+the vault's balance, and after a hard fork replace the vault's verification key (ADR 0006).
+_Avoid_: Vault key, owner key
+
+**Fork notice**:
+The operator's promise, made off chain at the vault's zkApp URI at least 14 days before a fork's stop
+slot, to publish the post-fork verification key with its source tag and a reproducible build. The vault
+doesn't enforce it (ADR 0006).
 
 **Keeper**:
 Whoever calls the vault's reduce, which anyone may. The zk edge operator is the natural keeper
