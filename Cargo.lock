@@ -1541,11 +1541,11 @@ dependencies = [
  "internal-tracing",
  "itertools 0.12.1",
  "log",
- "mina-curves 0.6.0",
- "mina-poseidon 0.6.0",
+ "mina-curves",
+ "mina-poseidon",
  "num-bigint",
  "num-integer",
- "o1-utils 0.6.0",
+ "o1-utils",
  "poly-commitment",
  "rand",
  "rand_core",
@@ -1682,8 +1682,8 @@ dependencies = [
  "lazy_static",
  "libp2p-identity",
  "md5",
- "mina-curves 0.6.0",
- "mina-hasher 0.6.0",
+ "mina-curves",
+ "mina-hasher",
  "mina-macros",
  "mina-p2p-messages",
  "multihash 0.18.1",
@@ -1718,40 +1718,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "mina-curves"
-version = "0.7.0"
-source = "git+https://github.com/o1-labs/proof-systems?tag=0.7.0#36a8b510cd34b9bd350e04989c87280f99e21e37"
-dependencies = [
- "ark-bn254",
- "ark-ec",
- "ark-ff",
- "ark-std",
- "num-bigint",
-]
-
-[[package]]
 name = "mina-hasher"
 version = "0.6.0"
 source = "git+https://github.com/o1-labs/proof-systems?rev=ab84160fa2c22290a8506a7742ac1378879fc386#ab84160fa2c22290a8506a7742ac1378879fc386"
 dependencies = [
  "ark-ff",
  "bitvec",
- "mina-curves 0.6.0",
- "mina-poseidon 0.6.0",
- "o1-utils 0.6.0",
- "serde",
-]
-
-[[package]]
-name = "mina-hasher"
-version = "0.7.0"
-source = "git+https://github.com/o1-labs/proof-systems?tag=0.7.0#36a8b510cd34b9bd350e04989c87280f99e21e37"
-dependencies = [
- "ark-ff",
- "bitvec",
- "mina-curves 0.7.0",
- "mina-poseidon 0.7.0",
- "o1-utils 0.7.0",
+ "mina-curves",
+ "mina-poseidon",
+ "o1-utils",
  "serde",
 ]
 
@@ -1782,12 +1757,12 @@ dependencies = [
  "graphannis-malloc_size_of_derive",
  "hex",
  "lazy_static",
- "mina-curves 0.6.0",
- "mina-hasher 0.6.0",
+ "mina-curves",
+ "mina-hasher",
  "mina-macros",
- "mina-signer 0.6.0",
+ "mina-signer",
  "num-bigint",
- "o1-utils 0.6.0",
+ "o1-utils",
  "poseidon",
  "rsexp",
  "rsexp-derive",
@@ -1810,25 +1785,8 @@ dependencies = [
  "ark-ff",
  "ark-poly",
  "ark-serialize",
- "mina-curves 0.6.0",
- "o1-utils 0.6.0",
- "rand",
- "rayon",
- "serde",
- "serde_with",
-]
-
-[[package]]
-name = "mina-poseidon"
-version = "0.7.0"
-source = "git+https://github.com/o1-labs/proof-systems?tag=0.7.0#36a8b510cd34b9bd350e04989c87280f99e21e37"
-dependencies = [
- "ark-ec",
- "ark-ff",
- "ark-poly",
- "ark-serialize",
- "mina-curves 0.7.0",
- "o1-utils 0.7.0",
+ "mina-curves",
+ "o1-utils",
  "rand",
  "rayon",
  "serde",
@@ -1846,31 +1804,10 @@ dependencies = [
  "blake2",
  "bs58 0.5.0",
  "hex",
- "mina-curves 0.6.0",
- "mina-hasher 0.6.0",
+ "mina-curves",
+ "mina-hasher",
  "num-bigint",
- "o1-utils 0.6.0",
- "rand",
- "serde",
- "sha2 0.10.8",
- "thiserror 2.0.11",
-]
-
-[[package]]
-name = "mina-signer"
-version = "0.7.0"
-source = "git+https://github.com/o1-labs/proof-systems?tag=0.7.0#36a8b510cd34b9bd350e04989c87280f99e21e37"
-dependencies = [
- "ark-ec",
- "ark-ff",
- "bitvec",
- "blake2",
- "bs58 0.5.0",
- "hex",
- "mina-curves 0.7.0",
- "mina-hasher 0.7.0",
- "num-bigint",
- "o1-utils 0.7.0",
+ "o1-utils",
  "rand",
  "serde",
  "sha2 0.10.8",
@@ -1903,14 +1840,14 @@ dependencies = [
  "lazy_static",
  "libc",
  "mina-core",
- "mina-curves 0.6.0",
- "mina-hasher 0.6.0",
+ "mina-curves",
+ "mina-hasher",
  "mina-macros",
  "mina-p2p-messages",
- "mina-poseidon 0.6.0",
- "mina-signer 0.6.0",
+ "mina-poseidon",
+ "mina-signer",
  "num-bigint",
- "o1-utils 0.6.0",
+ "o1-utils",
  "once_cell",
  "poly-commitment",
  "poseidon",
@@ -2125,27 +2062,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "o1-utils"
-version = "0.7.0"
-source = "git+https://github.com/o1-labs/proof-systems?tag=0.7.0#36a8b510cd34b9bd350e04989c87280f99e21e37"
-dependencies = [
- "ark-ff",
- "ark-poly",
- "ark-serialize",
- "bcs",
- "hex",
- "num-bigint",
- "num-integer",
- "rand",
- "rustversion",
- "serde",
- "serde_with",
- "sha2 0.10.8",
- "spin 0.10.1",
- "thiserror 2.0.11",
-]
-
-[[package]]
 name = "object"
 version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2290,10 +2206,10 @@ dependencies = [
  "hashbrown 0.15.2",
  "hex",
  "itertools 0.12.1",
- "mina-curves 0.6.0",
- "mina-poseidon 0.6.0",
+ "mina-curves",
+ "mina-poseidon",
  "num-bigint",
- "o1-utils 0.6.0",
+ "o1-utils",
  "rand",
  "rand_core",
  "rayon",
@@ -2322,8 +2238,8 @@ source = "git+https://github.com/toon-protocol/mina-rust?rev=6feeb3797fff6dba49f
 dependencies = [
  "ark-ff",
  "ark-serialize",
- "mina-curves 0.6.0",
- "o1-utils 0.6.0",
+ "mina-curves",
+ "o1-utils",
  "once_cell",
  "serde",
 ]
@@ -4061,11 +3977,11 @@ version = "0.1.0"
 dependencies = [
  "ark-ec",
  "ark-ff",
- "mina-curves 0.6.0",
- "mina-hasher 0.6.0",
- "mina-poseidon 0.6.0",
- "mina-signer 0.6.0",
- "o1-utils 0.6.0",
+ "mina-curves",
+ "mina-hasher",
+ "mina-poseidon",
+ "mina-signer",
+ "o1-utils",
  "serde",
  "serde_json",
 ]
@@ -4076,7 +3992,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flate2",
- "mina-curves 0.6.0",
+ "mina-curves",
  "mina-tree",
  "serde_json",
 ]
@@ -4094,8 +4010,8 @@ name = "zk-toon-challenger-mina"
 version = "0.1.0"
 dependencies = [
  "ark-ff",
- "mina-curves 0.7.0",
- "mina-signer 0.7.0",
+ "mina-curves",
+ "mina-signer",
  "serde_json",
  "sha2 0.10.8",
  "ureq",
@@ -4110,8 +4026,8 @@ version = "0.1.0"
 dependencies = [
  "ark-ec",
  "ark-ff",
- "mina-curves 0.7.0",
- "mina-signer 0.7.0",
+ "mina-curves",
+ "mina-signer",
  "serde_json",
  "zk-note",
 ]
