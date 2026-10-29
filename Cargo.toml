@@ -1,3 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["challenger", "zk-evidence", "zk-note"]
+members = ["challenger", "zk-evidence", "zk-note", "zk-prover"]
+
+# From mina-rust's workspace manifest (toon-protocol/mina-rust@6feeb37): a [patch] only counts at the root of the build.
+[patch.crates-io]
+num-bigint = { git = "https://github.com/openmina/num-bigint", branch = "rebase-onstack" }
+num-rational = { git = "https://github.com/openmina/num-rational", branch = "rebase-onstack" }
+
+[profile.test.package."*"]
+opt-level = 3
