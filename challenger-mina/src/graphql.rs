@@ -20,24 +20,6 @@ pub trait Graphql {
     fn post(&self, endpoint: Endpoint, request: &Value) -> Result<Value, String>;
 }
 
-impl<G: Graphql + ?Sized> Graphql for &G {
-    fn post(&self, endpoint: Endpoint, request: &Value) -> Result<Value, String> {
-        (**self).post(endpoint, request)
-    }
-}
-
-impl<G: Graphql + ?Sized> Graphql for std::sync::Arc<G> {
-    fn post(&self, endpoint: Endpoint, request: &Value) -> Result<Value, String> {
-        (**self).post(endpoint, request)
-    }
-}
-
-impl<G: Graphql + ?Sized> Graphql for std::rc::Rc<G> {
-    fn post(&self, endpoint: Endpoint, request: &Value) -> Result<Value, String> {
-        (**self).post(endpoint, request)
-    }
-}
-
 /// How many blocks back a submitted transaction is looked for: Mina's transition frontier, `k`.
 pub const FRONTIER_BLOCKS: u32 = 290;
 

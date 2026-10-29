@@ -4,8 +4,7 @@
 //! archive visible: the read fails rather than miss or invent an escape.
 use std::collections::HashMap;
 
-use ark_ff::PrimeField;
-use zk_note::{poseidon, Field};
+use zk_note::{field_to_bool, field_to_string, field_to_u64, poseidon, Field};
 
 /// Fields in one `escape` event: `pending`, then a pending escape's eight.
 pub const ESCAPE_EVENT_FIELDS: usize = 9;
@@ -17,9 +16,9 @@ pub const PENDING_ESCAPES_ROOT_INDEX: usize = 24;
 /// The height of the vault's `PendingEscapes` indexed Merkle map.
 const HEIGHT: usize = 32;
 
-/// A pending escape as the vault records it (`PendingEscape`).
+/// A pending escape as the vault records it (`PendingEscape` in `o1js/src/vault.ts`).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Record {
+pub struct PendingEscape {
     /// The escaping state's nullifier: the escape's key.
     pub nullifier: Field,
     pub next_nullifier: Field,
@@ -34,7 +33,7 @@ pub struct Record {
     pub deadline: u64,
 }
 
-impl Record {
+impl PendingEscape {
     pub fn to_fields(&self) -> [Field; 8] {
         [
             self.nullifier,
@@ -58,7 +57,7 @@ impl Record {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Update {
     pub pending: bool,
-    pub record: Record,
+    pub record: PendingEscape,
 }
 
 impl Update {
@@ -74,7 +73,7 @@ impl Update {
         }
         Ok(Update {
             pending: as_bool(f[0])?,
-            record: Record {
+            record: PendingEscape {
                 nullifier: f[1],
                 next_nullifier: f[2],
                 amount: as_u64(f[3])?,
@@ -89,26 +88,17 @@ impl Update {
 }
 
 fn as_u64(f: Field) -> Result<u64, String> {
-    let big = f.into_bigint();
-    let limbs = big.as_ref();
-    if limbs[1..].iter().any(|l| *l != 0) {
-        return Err(format!("{big} does not fit in 64 bits"));
-    }
-    Ok(limbs[0])
+    field_to_u64(f).ok_or_else(|| format!("{} does not fit in 64 bits", field_to_string(f)))
 }
 
 fn as_bool(f: Field) -> Result<bool, String> {
-    match as_u64(f)? {
-        0 => Ok(false),
-        1 => Ok(true),
-        n => Err(format!("{n} is not a boolean")),
-    }
+    field_to_bool(f).ok_or_else(|| format!("{} is not a boolean", field_to_string(f)))
 }
 
 /// The pending escapes `updates` rebuild, in order, and the root of the map they rebuild.
-pub fn replay(updates: &[Update]) -> (Field, Vec<Record>) {
+pub fn replay(updates: &[Update]) -> (Field, Vec<PendingEscape>) {
     let mut map = IndexedMap::new();
-    let mut pending: Vec<Record> = Vec::new();
+    let mut pending: Vec<PendingEscape> = Vec::new();
     for u in updates {
         let key = u.record.nullifier;
         map.set(key, if u.pending { u.record.hash() } else { Field::from(0u64) });
@@ -172,24 +162,47 @@ impl IndexedMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
     use std::str::FromStr;
 
-    fn f(n: u64) -> Field {
-        Field::from(n)
+    /// The `pendingEscapes` section of the shared vectors, which o1js computes for the vault's
+    /// `PendingEscape` and `PendingEscapes`.
+    fn vectors() -> Value {
+        let v: Value = serde_json::from_str(zk_note::VECTORS_JSON).unwrap();
+        v["pendingEscapes"].clone()
     }
 
-    /// Roots o1js 3.1.0 computes for the vault's `PendingEscapes`.
-    #[test]
-    fn the_map_root_is_o1js_root() {
-        let empty = "9137763517866771359044650373850135743137646204083611425983907660214991747507";
-        assert_eq!(IndexedMap::new().root(), Field::from_str(empty).unwrap());
+    fn f(v: &Value) -> Field {
+        Field::from_str(v.as_str().unwrap()).unwrap()
+    }
 
-        // set(5, 7); set(3, 9); set(5, 0): an insert, an insert below it, and an update.
+    #[test]
+    fn a_pending_escapes_hash_is_o1js_hash() {
+        let records = vectors()["records"].as_array().unwrap().clone();
+        assert!(!records.is_empty());
+        println!("vector cases run: {}", records.len());
+        for r in records {
+            let fields: Vec<Field> = r["fields"].as_array().unwrap().iter().map(f).collect();
+            // An `escape` event is `pending` followed by the record's fields.
+            let event: Vec<Field> = std::iter::once(Field::from(1u64)).chain(fields.iter().copied()).collect();
+            let record = Update::from_fields(&event).unwrap().record;
+            assert_eq!(record.to_fields().to_vec(), fields);
+            assert_eq!(record.hash(), f(&r["hash"]));
+        }
+    }
+
+    #[test]
+    fn the_map_root_is_o1js_root_after_each_insert_and_update() {
+        let v = vectors();
+        assert_eq!(v["height"].as_u64(), Some(HEIGHT as u64));
         let mut m = IndexedMap::new();
-        m.set(f(5), f(7));
-        m.set(f(3), f(9));
-        m.set(f(5), f(0));
-        let three = "18315625071029396185792180401267874511677914559847106317105467246156793966878";
-        assert_eq!(m.root(), Field::from_str(three).unwrap());
+        assert_eq!(m.root(), f(&v["emptyRoot"]));
+        let updates = v["updates"].as_array().unwrap();
+        assert!(!updates.is_empty());
+        println!("vector cases run: {}", updates.len());
+        for u in updates {
+            m.set(f(&u["key"]), f(&u["value"]));
+            assert_eq!(m.root(), f(&u["root"]));
+        }
     }
 }

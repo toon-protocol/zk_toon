@@ -20,9 +20,10 @@ use zk_note::policy::{DEPOSIT_SIZES, TIERS};
 use zk_note::state::{sign_state, StateMessage};
 use zk_note::{commit_secret, genesis_anchor, next_anchor, nullifier, Field};
 use zk_toon_challenger::{EscapeId, PortError, VaultChainPort};
-use zk_toon_challenger_mina::{nullifier_of_field, Endpoint, Graphql, MinaChain, RequestProofs, Settings};
+use zk_toon_challenger_mina::{nullifier_of_field, Endpoint, Graphql, MinaChain, RequestProofs, Settings, TxSource};
 use zk_toon_tx_builder::{
-    node_command, Deposit, Escape, FeePayer, Note, NoteState, RequestProofInput, SignedState, TxBuilder,
+    node_command, Challenge, Defeat, Deposit, Escape, FeePayer, Note, NoteState, Raise, RequestProofInput,
+    SignedState, TxBuilder,
 };
 
 const SMALL: u64 = DEPOSIT_SIZES[0];
@@ -36,7 +37,8 @@ struct LocalGraphql {
     recorded: RefCell<HashMap<String, Value>>,
 }
 
-impl Graphql for LocalGraphql {
+/// The adapter borrows the GraphQL, so the test can read what it recorded.
+impl Graphql for &LocalGraphql {
     fn post(&self, endpoint: Endpoint, request: &Value) -> Result<Value, String> {
         let endpoint = match endpoint {
             Endpoint::Mina => "mina",
@@ -46,6 +48,18 @@ impl Graphql for LocalGraphql {
         let op = request["operationName"].as_str().unwrap_or("").to_string();
         self.recorded.borrow_mut().insert(op, response.clone());
         Ok(response)
+    }
+}
+
+/// The builder as the adapter's transaction source, shared with the GraphQL stand-in and the test.
+struct SharedTxs(Shared);
+
+impl TxSource for SharedTxs {
+    fn defeat(&mut self, d: &Defeat) -> Result<Challenge, zk_toon_tx_builder::Error> {
+        self.0.borrow_mut().defeat(d)
+    }
+    fn raise(&mut self, r: &Raise) -> Result<Challenge, zk_toon_tx_builder::Error> {
+        self.0.borrow_mut().raise(r)
     }
 }
 
@@ -174,7 +188,7 @@ fn a_defeat_and_a_raise_through_the_adapter_are_accepted_by_the_vault() {
 
     let graphql = LocalGraphql { builder: builder.clone(), recorded: RefCell::default() };
     let settings = Settings { vault: c.vault.clone(), fee_payer: c.payer.clone(), poll: Duration::from_millis(50) };
-    let mut port = MinaChain::new(settings, &graphql, builder.clone(), &evidence).unwrap();
+    let mut port = MinaChain::new(settings, &graphql, SharedTxs(builder.clone()), &evidence).unwrap();
 
     let mut ids: Vec<EscapeId> = port.escapes().unwrap().iter().map(|e| e.id).collect();
     ids.sort();

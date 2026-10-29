@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use zk_note::Field;
 use zk_toon_challenger::{Escape, EscapeId, Millis, PortError};
-use zk_toon_challenger_mina::escapes::{replay, Record, Update, PENDING_ESCAPES_ROOT_INDEX};
+use zk_toon_challenger_mina::escapes::{replay, PendingEscape, Update, PENDING_ESCAPES_ROOT_INDEX};
 use zk_toon_challenger_mina::{
     field_of_nullifier, Endpoint, Graphql, MinaChain, RequestProofs, Settings, TxSource,
 };
@@ -21,7 +21,7 @@ use zk_toon_tx_builder::{Challenge, Defeat, FeePayer, Raise, Transaction};
 
 pub const FIXTURE: &str = include_str!("../fixtures/recorded-vault.json");
 /// SHA-256 of `fixtures/recorded-vault.json`. A changed recording must change this too.
-pub const FIXTURE_SHA256: &str = "aad20125daee85c11a0f748300b67c542eec691eab9698d3413a85d652e3e9bd";
+pub const FIXTURE_SHA256: &str = "90f83499f1135acdca4bf2fd351ede7081ec3ee9807399bfe7ff80524c7d5285";
 
 pub fn fixture() -> Value {
     let digest: String = Sha256::digest(FIXTURE.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
@@ -69,8 +69,8 @@ pub struct State {
 #[derive(Clone, Default)]
 pub struct Scripted(pub Rc<RefCell<State>>);
 
-pub fn record(e: &Escape) -> Record {
-    Record {
+pub fn record(e: &Escape) -> PendingEscape {
+    PendingEscape {
         nullifier: field_of_nullifier(&e.id).expect("a canonical nullifier"),
         next_nullifier: field_of_nullifier(&e.next_nullifier).expect("a canonical nullifier"),
         amount: e.balance,
@@ -97,7 +97,7 @@ impl Scripted {
         s
     }
 
-    fn pending(&self, at: Field) -> Option<Record> {
+    fn pending(&self, at: Field) -> Option<PendingEscape> {
         replay(&self.0.borrow().updates).1.into_iter().find(|r| r.nullifier == at)
     }
 

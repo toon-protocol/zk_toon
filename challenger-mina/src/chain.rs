@@ -5,11 +5,12 @@ use std::time::Duration;
 
 use mina_signer::{CompressedPubKey, Keypair, SecKey};
 use serde_json::Value;
+use zk_note::request::RequestPublic;
 use zk_note::Field;
 use zk_toon_challenger::{Escape, EscapeId, Millis, PortError, VaultChainPort};
 use zk_toon_tx_builder::{Challenge, Defeat, FailureKind, FeePayer, Raise};
 
-use crate::escapes::{replay, Record, Update, PENDING_ESCAPES_ROOT_INDEX};
+use crate::escapes::{replay, PendingEscape, Update, PENDING_ESCAPES_ROOT_INDEX};
 use crate::graphql::{self, data, decimal, Endpoint, Graphql};
 use crate::nullifier::{field_of_nullifier, nullifier_of_field};
 
@@ -25,15 +26,6 @@ impl TxSource for zk_toon_tx_builder::TxBuilder {
     }
     fn raise(&mut self, r: &Raise) -> Result<Challenge, zk_toon_tx_builder::Error> {
         zk_toon_tx_builder::TxBuilder::raise(self, r)
-    }
-}
-
-impl<T: TxSource> TxSource for std::rc::Rc<std::cell::RefCell<T>> {
-    fn defeat(&mut self, d: &Defeat) -> Result<Challenge, zk_toon_tx_builder::Error> {
-        self.borrow_mut().defeat(d)
-    }
-    fn raise(&mut self, r: &Raise) -> Result<Challenge, zk_toon_tx_builder::Error> {
-        self.borrow_mut().raise(r)
     }
 }
 
@@ -75,7 +67,7 @@ pub struct MinaChain<G, T, P> {
 /// The vault as read: the chain time and the pending escapes, deadlines included.
 struct VaultView {
     now: Millis,
-    pending: Vec<Record>,
+    pending: Vec<PendingEscape>,
 }
 
 impl<G: Graphql, T: TxSource, P: RequestProofs> MinaChain<G, T, P> {
@@ -118,7 +110,7 @@ impl<G: Graphql, T: TxSource, P: RequestProofs> MinaChain<G, T, P> {
     }
 
     /// The pending escape `id` names, if it is still open.
-    fn open(&self, id: &EscapeId) -> Result<(VaultView, Record), PortError> {
+    fn open(&self, id: &EscapeId) -> Result<(VaultView, PendingEscape), PortError> {
         let view = self.view()?;
         let record = view
             .pending
@@ -249,9 +241,15 @@ fn escape_updates(events: &Value) -> Result<[Vec<Update>; 2], String> {
     Ok([decode(reversed)?, decode(listed.iter().map(|(_, _, f)| f).collect())?])
 }
 
-/// A request proof's public input `i` (`RequestPublic` order: 4 is the tier, 9 subsidised).
-fn public_input(proof: &Value, i: usize) -> Option<u64> {
-    decimal(&proof["publicInput"][i])
+/// A recorded request proof's public inputs, decoded from its `publicInput`; `None` if they aren't a
+/// request proof's.
+fn request_public(proof: &Value) -> Option<RequestPublic> {
+    let fields = proof["publicInput"]
+        .as_array()?
+        .iter()
+        .map(|f| f.as_str().and_then(|s| Field::from_str(s).ok()))
+        .collect::<Option<Vec<_>>>()?;
+    RequestPublic::from_fields(&fields).ok()
 }
 
 fn builder_error(e: zk_toon_tx_builder::Error) -> PortError {
@@ -302,10 +300,11 @@ impl<G: Graphql, T: TxSource, P: RequestProofs> VaultChainPort for MinaChain<G, 
         let evidence = self.evidence(id, |proofs| {
             proofs
                 .iter()
-                .filter(|p| public_input(p, 9) == Some(0))
-                .max_by_key(|p| public_input(p, 4).unwrap_or(0))
-                .filter(|p| public_input(p, 4).unwrap_or(0) >= to)
-                .cloned()
+                .filter_map(|p| Some((request_public(p)?, p)))
+                .filter(|(public, _)| !public.subsidised)
+                .max_by_key(|(public, _)| public.tier)
+                .filter(|(public, _)| public.tier >= to)
+                .map(|(_, p)| p.clone())
         })?;
         let raise = Raise { vault: self.settings.vault.clone(), fee_payer: self.settings.fee_payer.clone(), escape, evidence, claimed: to };
         let challenge = self.txs.raise(&raise).map_err(builder_error)?;
