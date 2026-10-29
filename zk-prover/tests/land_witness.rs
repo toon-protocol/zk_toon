@@ -68,23 +68,49 @@ fn call_site(index: usize) -> String {
     found
 }
 
+/// The first variable in which `aux` differs from o1js's witness, with its o1js call site.
+fn first_difference(aux: &[Fp]) -> Option<String> {
+    let o1js = o1js_witness();
+    for (i, (rust, theirs)) in aux.iter().zip(&o1js[1..]).enumerate() {
+        if rust != theirs {
+            return Some(format!(
+                "first differing variable: {} (aux index {}), made by {}",
+                i + 1,
+                i,
+                call_site(i + 1)
+            ));
+        }
+    }
+    (aux.len() != o1js.len() - 1)
+        .then(|| format!("{} variables, o1js {}", aux.len(), o1js.len() - 1))
+}
+
 #[test]
 fn rust_witness_equals_o1js_at_every_index() {
     let w = land_witness(&land_inputs()).unwrap();
-    let o1js = o1js_witness();
-    assert_eq!(w.primary, vec![o1js[0]], "public input");
-    let n = w.aux.len().min(o1js.len() - 1);
-    for i in 0..n {
-        assert_eq!(
-            w.aux[i],
-            o1js[i + 1],
-            "first differing variable: {} (aux index {}), made by {}",
-            i + 1,
-            i,
-            call_site(i + 1)
-        );
-    }
-    assert_eq!(w.aux.len(), o1js.len() - 1, "number of variables");
+    assert_eq!(w.primary, vec![o1js_witness()[0]], "public input");
+    assert_eq!(first_difference(&w.aux), None);
+}
+
+/// A changed input is reported at the first variable it changes, with the o1js call site that
+/// makes it.
+#[test]
+fn a_mismatch_names_the_variable_and_its_call_site() {
+    // the token id argument is witnessed at variable 92 and read by nothing else
+    let mut inputs = land_inputs();
+    inputs.token_id = Fp::from(2u64);
+    let w = land_witness(&inputs).unwrap();
+    let report = first_difference(&w.aux).expect("a different token id changes the witness");
+    assert!(report.starts_with("first differing variable: 92 "), "{report}");
+    assert!(report.contains("main:zkprogram.js:503"), "{report}");
+
+    // the app state, variable 1, is the account update hash, which the blinding value changes
+    let mut inputs = land_inputs();
+    inputs.blinding = Fp::from(5u64);
+    let w = land_witness(&inputs).unwrap();
+    let report = first_difference(&w.aux).expect("a different blinding changes the witness");
+    assert!(report.starts_with("first differing variable: 1 "), "{report}");
+    assert!(report.ends_with("(OCaml)"), "{report}");
 }
 
 #[test]
@@ -96,7 +122,7 @@ fn kimchi_proves_cs003_from_the_rust_witness() {
     )
     .unwrap();
     let w = land_witness(&land_inputs()).unwrap();
-    let witness = StepWitness::from_parts(w.primary, w.aux);
+    let witness = StepWitness::from(w);
     check_step::<StepLand>(&circuit, &witness).unwrap();
     let proof = prove_step::<StepLand>(&circuit, &witness).unwrap();
     assert_eq!(proof.public_input.len(), 1);

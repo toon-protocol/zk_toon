@@ -17,13 +17,8 @@ pub fn range_check0_helper(cs: &mut Cs, x: &Field) -> (Field, Field) {
     (x64, x76)
 }
 
-/// The inputs of the `rangeCheck1` gate: the highest limbs of `x` and `y` and the value `z` to
-/// check.
-pub struct RangeCheck1 {
-    pub z: Field,
-}
-
-/// `rangeCheck1Helper`: the limbs of `z` for the current and the next row.
+/// `rangeCheck1Helper`: the limbs of `z` for the current and the next row. (The gate also takes
+/// the highest limbs `rangeCheck0Helper` returned, which are existing variables.)
 pub fn range_check1_helper(cs: &mut Cs, z: &Field) {
     let zz = z.value();
     let s = |start, len| bit_slice(&zz, start, len);

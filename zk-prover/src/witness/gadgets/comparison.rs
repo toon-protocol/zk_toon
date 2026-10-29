@@ -9,7 +9,7 @@ use super::range_check::{multi_range_check, range_check_n_64};
 use crate::witness::{bit_slice, Bool, Cs, Field};
 
 /// The modulus of Pallas's base field, as a bigint.
-pub(crate) fn fp_modulus() -> BigInt {
+pub fn fp_modulus() -> BigInt {
     fp_to_big(&-Fp::one()) + 1
 }
 

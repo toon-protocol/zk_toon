@@ -12,3 +12,8 @@ pub const PROOF_SYSTEMS_REV: &str = "ab84160fa2c22290a8506a7742ac1378879fc386";
 
 /// The o1js version the fixtures were dumped from.
 pub const O1JS_VERSION: &str = "3.1.0";
+
+/// The Mina commit o1js 3.1.0 builds on (its `src/mina` submodule). The witness mirrors in
+/// `witness` follow that commit's `src/lib/crypto/pickles` and snarky sources; they differ from
+/// the fork's older copies, e.g. in `Scalar_challenge.endo`'s `inv` (see `witness::pickles`).
+pub const MINA_REV_OF_O1JS: &str = "228c409a1696669d963425162f12e88d41231c6d";

@@ -58,6 +58,13 @@ pub struct LandWitness {
     pub aux: Vec<Fp>,
 }
 
+impl From<LandWitness> for crate::StepWitness {
+    /// The witness in the form [`crate::prove_step`] and [`crate::check_step`] take.
+    fn from(w: LandWitness) -> Self {
+        crate::StepWitness::from_parts(w.primary, w.aux)
+    }
+}
+
 /// The method name `land` as `Encoding.stringToFields` makes it: bytes, then the stop byte `1`.
 fn string_to_field(s: &str) -> Fp {
     assert!(s.len() < 31);
@@ -181,7 +188,7 @@ fn method_and_wrapper(cs: &mut Cs, inputs: &LandInputs) -> anyhow::Result<Fp> {
 }
 
 /// Pickles: the verification key index, hashed with the app state into the public input.
-fn step_statement_hash(cs: &mut Cs, inputs: &LandInputs) -> anyhow::Result<Fp> {
+pub fn step_statement_hash(cs: &mut Cs, inputs: &LandInputs) -> anyhow::Result<Fp> {
     let vk = crate::verify::load_vk(&inputs.vk)?;
     let start = cs.next_var();
     let ((), aux) = from_fork(|w: &mut Witness<Fp>| {

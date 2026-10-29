@@ -13,12 +13,12 @@ pub type Field3 = [Field; 3];
 /// Bits per limb.
 pub const L: usize = 88;
 
-pub(crate) fn fp_to_big(x: &Fp) -> BigInt {
+pub fn fp_to_big(x: &Fp) -> BigInt {
     BigInt::from_bytes_le(Sign::Plus, &x.into_bigint().to_bytes_le())
 }
 
 /// A bigint (possibly negative) as a field element, reduced mod p.
-pub(crate) fn big_to_fp(x: &BigInt) -> Fp {
+pub fn big_to_fp(x: &BigInt) -> Fp {
     let (sign, bytes) = x.to_bytes_le();
     let v = Fp::from_le_bytes_mod_order(&bytes);
     if sign == Sign::Minus {

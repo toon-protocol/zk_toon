@@ -10,7 +10,7 @@
 //! The template was dumped from o1js 3.1.0 by `fixture-gen/trace-land.mjs`, which logs the
 //! `toInput` of the account update that `AccountUpdate.hash` hashes inside the circuit.
 
-use ark_ff::{Field as _, Zero};
+use ark_ff::Field as _;
 use mina_curves::pasta::Fp;
 use std::str::FromStr;
 
@@ -126,9 +126,4 @@ pub fn pack_to_fields(fields: Vec<Field>, packed: Vec<(Field, u32)>) -> Vec<Fiel
     packed_fields.push(current);
     out.extend(packed_fields);
     out
-}
-
-#[allow(dead_code)]
-fn _unused() -> Fp {
-    Fp::zero()
 }

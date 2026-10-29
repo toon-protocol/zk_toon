@@ -7,7 +7,7 @@ use mina_curves::pasta::{Fp, Fq};
 use num_bigint::BigInt;
 
 use super::comparison::is_odd_and_high;
-use super::foreign_field::{big_to_fp, fp_to_big};
+use super::foreign_field::big_to_fp;
 use crate::witness::{pickles::from_fork, Bool, Cs, Field};
 
 /// A curve point: `Group` in o1js, `{ x, y }` in the native-curve gadgets.
@@ -186,7 +186,7 @@ pub fn scale_shifted(cs: &mut Cs, p: &Point, t: &ShiftedScalar, num_high_bits: u
 }
 
 /// The scalar field's modulus `q`, the order of the Pallas group.
-pub(crate) fn fq_modulus() -> BigInt {
+pub fn fq_modulus() -> BigInt {
     fp_to_big_fq(&-Fq::from(1u64)) + 1
 }
 
@@ -200,11 +200,6 @@ fn fq_neg_2_pow_255() -> BigInt {
     let q = fq_modulus();
     let two255 = BigInt::from(1) << 255u32;
     (&q - (two255 % &q)) % &q
-}
-
-#[allow(dead_code)]
-fn unused(_: &Fp) -> BigInt {
-    fp_to_big(&Fp::zero())
 }
 
 /// `Group.isZero`: only the zero element has `x = 0`.
