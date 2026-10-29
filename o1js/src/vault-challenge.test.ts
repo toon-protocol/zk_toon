@@ -162,6 +162,22 @@ describe('raising an escape', () => {
     expect(balanceOf(alice)).toBe(a + balance - TOP_TIER);
   });
 
+  it("caps the concession at the note's balance when more is claimed, and finalize pays the destination nothing", async () => {
+    // A request proof needs balance ≥ b, so the balance binds min(claimed, b, balance) only when it
+    // equals the tier: here both are 1 MINA, and the claim is more.
+    const { note, proof, balance } = await recordedEscape(h, { balance: TOP_TIER });
+    expect(proof.publicInput.amount.toBigInt()).toBe(TOP_TIER);
+    const evidence = await h.requestProof(note, { balance, tier: TOP_TIER });
+    await h.raise(proof.publicInput.nullifier, evidence, 5n * MINA);
+    await h.reduce();
+    expect(h.mirror.pendingEscape(proof.publicInput.nullifier)!.conceded.toBigInt()).toBe(balance);
+
+    const [a, t] = [balanceOf(alice), balanceOf(h.treasury)];
+    await finalizeAfterWindow(h, proof);
+    expect(balanceOf(alice)).toBe(a);
+    expect(balanceOf(h.treasury)).toBe(t + SMALL);
+  });
+
   it('refuses a raise that would not increase the concession', async () => {
     const { note, proof, balance } = await recordedEscape(h, { conceded: MINA / 2n });
     const evidence = await h.requestProof(note, { balance, tier: TOP_TIER });
