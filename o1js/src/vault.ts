@@ -12,8 +12,10 @@
 // of the expired notes it passes, and dispatches a sweep; the reduce pays the treasury what those notes
 // left in the vault, `expired − claimed − swept`, without learning which note was withdrawn (ADR 0005).
 //
-// The vault has no pause: its deploy makes its verification key, permissions and timing unchangeable, so
-// no owner action can stop or delay an escape.
+// The vault has no pause: its deploy makes its permissions and timing unchangeable, and its verification
+// key changeable only across a Mina hard fork (`impossibleDuringCurrentVersion`: the key may be reset
+// once the protocol version changes, so a vault can survive a fork's new proof system). No owner action
+// can stop or delay an escape.
 import {
   AccountUpdate, Bool, Experimental, Field, IndexedMerkleMap, Permissions, Poseidon, Provable, PublicKey, Signature,
   SmartContract, State, Struct, UInt32, UInt64, Unconstrained, declareMethods, declareState,

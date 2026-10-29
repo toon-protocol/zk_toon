@@ -8,8 +8,16 @@ zk edge with zero-knowledge proofs instead of vouchers that name its channel.
 ### Notes and the vault
 
 **Vault**:
-The Mina zkApp that holds every note's deposit and pays it back out on withdrawal.
+The Mina zkApp that holds every note's deposit and pays it back out on withdrawal. It has no pause:
+its deploy makes its permissions and timing unchangeable, and its verification key
+(`setVerificationKey: impossibleDuringCurrentVersion`) changeable only across a Mina hard fork, which
+changes the protocol version. No owner action can stop or delay an escape.
 _Avoid_: Pool, mixer, contract (unqualified)
+
+**Keeper**:
+Whoever calls the vault's reduce, which anyone may. The zk edge operator is the natural keeper
+(ADR 0002).
+_Avoid_: Reducer (that's o1js's), operator (unqualified)
 
 **zk note**:
 One deposit in the vault, spendable only by whoever knows its secret, and carrying a balance that
@@ -64,8 +72,12 @@ _Avoid_: Treasury, rewards pool, incentive fund
 
 **Subsidy period**:
 The span of time in which each zk note may claim at most one subsidised allowance. Periods are whole
-weeks counted from the vault's creation time. A subsidised request proof publishes its period, and
-the zk edge checks it against the vault's creation time and the proof's request time.
+weeks counted from the vault's creation time. A subsidised request proof publishes its period, but
+the circuit checks it only against a creation time the payer supplies, since it can't read the vault.
+So the zk edge must check every request proof's period against the vault's creation time and the
+proof's request time (`RequestPublic::check_subsidy_period` in zk-note, `subsidyPeriodHolds` in
+o1js) before it trusts the per-period nullifier. Without that check, a payer could forge the creation
+time, prove another period, and claim twice in one week.
 _Avoid_: Epoch, round, claim window
 
 **Per-period nullifier**:
@@ -142,6 +154,11 @@ or `b` if it never closed. Refused unless it increases the concession, and never
 proof.
 _Avoid_: Penalty, top-up, dispute
 
+**Challenge**:
+A defeat or a raise: a challenger's answer to an escape within its challenge window, carrying a
+request proof the zk edge recorded as evidence.
+_Avoid_: Dispute, contest
+
 **Ownership proof**:
 A proof, shown only to the zk edge, that the payer holds a zk note's current state. The vault
 refuses it.
@@ -160,7 +177,9 @@ _Avoid_: Expiry pointer, watermark
 
 **Treasury**:
 The zk edge operator's address, which receives what a closed or expired note's balance leaves of its
-deposit.
+deposit. Like a close's or an escape's destination, its account must already exist: setup, a close
+and an escape refuse a missing one, because a payout to it would fail the reduce, and a failed
+reduce blocks every action queued behind it (ADR 0002).
 _Avoid_: Subsidy budget, fee address
 
 ### Building transactions

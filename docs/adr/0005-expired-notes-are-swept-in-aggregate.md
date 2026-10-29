@@ -53,7 +53,7 @@ to a slot old. A note that expires later than the next one holds that one back b
 ## Consequences
 
 - The vault adds four state fields (`sweepCursor`, `expiredTotal`, `claimedTotal`, `sweptTotal`, 29 of
-  32) and action kind 7. The reduce grows to about 55.4k rows of 65,536 at a batch of 5. The sweep is
-  its own method, of about 6.7k rows for a walk of 16 notes.
+  32) and action kind 7. The reduce grows to about 45.3k rows of 65,536 at its batch of 4
+  (`REDUCE_BATCH_SIZE`). The sweep is its own method, of about 6.7k rows for a walk of 16 notes.
 - The formula relies on every close and finalize paying out exactly its note's size. A change to what
   they pay has to change what they add to `claimedTotal`.
