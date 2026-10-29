@@ -1,0 +1,11 @@
+zk-prover
+Copyright (c) 2026 TOON Protocol Contributors
+
+src/verify.rs is derived from toon-protocol/zk-note-vectors
+rust/mesa-toon-1512/src/main.rs at commit
+384a0907078edb50ff840805a7011cae055c28b8, which builds on mina-rust
+(https://github.com/o1-labs/mina-rust, Apache-2.0) through the fork
+toon-protocol/mina-rust at rev 6feeb3797fff6dba49fd848cb2d6decd63fee1b4.
+
+Derived files are licensed under the Apache License, Version 2.0; see
+LICENSE-APACHE.
