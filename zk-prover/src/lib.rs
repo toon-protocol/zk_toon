@@ -9,6 +9,7 @@
 
 pub mod pins;
 pub mod verify;
+pub mod witness;
 
 use std::str::FromStr;
 
