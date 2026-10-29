@@ -2,3 +2,6 @@ target/
 node_modules/
 rust.log
 o1js.log
+o1js-report.json
+verification-keys.json
+verification-keys.rebuild.json

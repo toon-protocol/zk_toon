@@ -10,8 +10,16 @@ pub trait Harness {
     fn port(now: Millis, escapes: Vec<Escape>) -> Self::Port;
 }
 
+/// A nullifier for tests. Nullifiers are Pallas field elements as 32 canonical little-endian bytes, so
+/// every one here is: its top byte is zero, which keeps it below the modulus.
+fn id(n: u8) -> Nullifier {
+    let mut id = [n; 32];
+    id[31] = 0;
+    id
+}
+
 fn esc(n: u8, conceded: u64, balance: u64, deadline: Millis) -> Escape {
-    Escape { id: [n; 32], next_nullifier: [n + 100; 32], conceded, balance, deadline }
+    Escape { id: id(n), next_nullifier: id(n + 100), conceded, balance, deadline }
 }
 
 pub fn run<H: Harness>() {
@@ -36,28 +44,28 @@ fn hides_escapes_past_their_deadline<H: Harness>() {
 
 fn defeat_closes_the_escape<H: Harness>() {
     let mut port = H::port(10, vec![esc(1, 5, 50, 1_000), esc(2, 5, 50, 1_000)]);
-    port.submit_defeat(&[1; 32]).unwrap();
+    port.submit_defeat(&id(1)).unwrap();
     let left = port.escapes().unwrap();
     assert_eq!(left.len(), 1);
-    assert_eq!(left[0].id, [2; 32]);
-    assert!(matches!(port.submit_defeat(&[1; 32]), Err(PortError::Refused(_))));
+    assert_eq!(left[0].id, id(2));
+    assert!(matches!(port.submit_defeat(&id(1)), Err(PortError::Refused(_))));
 }
 
 fn raise_lifts_the_concession<H: Harness>() {
     let mut port = H::port(10, vec![esc(1, 5, 50, 1_000)]);
-    port.submit_raise(&[1; 32], 20).unwrap();
+    port.submit_raise(&id(1), 20).unwrap();
     assert_eq!(port.escapes().unwrap()[0].conceded, 20);
 }
 
 fn raise_must_exceed_concession_and_fit_balance<H: Harness>() {
     let mut port = H::port(10, vec![esc(1, 5, 50, 1_000)]);
-    assert!(matches!(port.submit_raise(&[1; 32], 5), Err(PortError::Refused(_))));
-    assert!(matches!(port.submit_raise(&[1; 32], 51), Err(PortError::Refused(_))));
+    assert!(matches!(port.submit_raise(&id(1), 5), Err(PortError::Refused(_))));
+    assert!(matches!(port.submit_raise(&id(1), 51), Err(PortError::Refused(_))));
     assert_eq!(port.escapes().unwrap()[0].conceded, 5);
 }
 
 fn refuses_unknown_escapes<H: Harness>() {
     let mut port = H::port(10, vec![]);
-    assert!(matches!(port.submit_defeat(&[9; 32]), Err(PortError::Refused(_))));
-    assert!(matches!(port.submit_raise(&[9; 32], 1), Err(PortError::Refused(_))));
+    assert!(matches!(port.submit_defeat(&id(9)), Err(PortError::Refused(_))));
+    assert!(matches!(port.submit_raise(&id(9), 1), Err(PortError::Refused(_))));
 }

@@ -22,6 +22,7 @@ export const emptyNoteRoot = () => new MerkleTree(NOTE_TREE_HEIGHT).getRoot();
 export class NoteTree {
   private tree = new MerkleTree(NOTE_TREE_HEIGHT);
   private count = 0n;
+  private deposits: DepositLike[] = [];
 
   get root(): Field {
     return this.tree.getRoot();
@@ -33,7 +34,14 @@ export class NoteTree {
   append(d: DepositLike): bigint {
     const index = this.count++;
     this.tree.setLeaf(index, depositLeaf(Field(index), d));
+    this.deposits.push(d);
     return index;
+  }
+  /** The deposit the leaf at `index` was made from. */
+  depositAt(index: bigint): DepositLike {
+    const d = this.deposits[Number(index)];
+    if (!d) throw Error('no note at that index');
+    return d;
   }
   leafAt(index: bigint): Field {
     return this.tree.getNode(0, index);

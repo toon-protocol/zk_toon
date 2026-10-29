@@ -1,142 +1,176 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { Bool, Field, PrivateKey, Provable, Signature, verify } from 'o1js';
-import { expiryOf } from './policy.js';
-import { nullifier } from './primitives.js';
+import { DEPOSIT_SIZES, expiryOf } from './policy.js';
+import { nextAnchor, nullifier } from './primitives.js';
 import { RequestProgram } from './request.js';
-import { stateFields } from './state.js';
-import {
-  KIND_ESCAPE, KIND_MUTUAL_CLOSE, KIND_OWNERSHIP, WithdrawalPrivate, WithdrawalProgram, WithdrawalPublic,
-  checkWithdrawal,
-} from './withdrawal.js';
-import {
-  WITHDRAWAL_SAMPLES, buildWithdrawal, defaultWithdrawal, withdrawalVector, type WithdrawalOptions,
-} from './withdrawal-sample.js';
+import { WithdrawalKind, WithdrawalPrivate, WithdrawalProgram, WithdrawalPublic, checkWithdrawal } from './withdrawal.js';
+import { WITHDRAWAL_VECTOR_SAMPLES, withdrawalSample, withdrawalVector } from './withdrawal-sample.js';
 
 // Proofs off: the constraints are checked, no proof is made.
-const holds = async (kind: number, pub: WithdrawalPublic, priv: WithdrawalPrivate) => {
+const holds = async (kind: WithdrawalKind, pub: WithdrawalPublic, priv: WithdrawalPrivate) => {
   try {
     await Provable.runAndCheck(() => {
-      checkWithdrawal(kind, Provable.witness(WithdrawalPublic, () => pub), Provable.witness(WithdrawalPrivate, () => priv));
+      const p = Provable.witness(WithdrawalPublic, () => pub);
+      const w = Provable.witness(WithdrawalPrivate, () => priv);
+      checkWithdrawal(kind, p, w);
     });
     return true;
   } catch {
     return false;
   }
 };
-const sample = (kind: number, o: Partial<WithdrawalOptions> = {}) => buildWithdrawal({ ...defaultWithdrawal(kind), ...o });
 const withPub = (s: { pub: WithdrawalPublic }, over: Partial<WithdrawalPublic>) => new WithdrawalPublic({ ...s.pub, ...over });
-const withPriv = (s: { priv: WithdrawalPrivate }, over: Partial<WithdrawalPrivate>) => new WithdrawalPrivate({ ...s.priv, ...over });
 
-describe('withdrawal constraints', () => {
-  it.each([KIND_MUTUAL_CLOSE, KIND_OWNERSHIP])('hold for kind %i on a genesis and on a signed state', async (kind) => {
-    for (const signed of [false, true]) {
-      const s = sample(kind, { signed });
-      expect(await holds(kind, s.pub, s.priv)).toBe(true);
+const { mutualClose, escape, ownership } = WithdrawalKind;
+
+describe('withdrawal proof constraints', () => {
+  it('hold for a mutual close and an ownership proof, of a genesis and a signed state', async () => {
+    for (const kind of [mutualClose, ownership]) {
+      for (const signed of [false, true]) {
+        const s = withdrawalSample({ kind, signed });
+        expect(await holds(kind, s.pub, s.priv)).toBe(true);
+      }
     }
   });
 
-  it('are bound to the method kind', async () => {
-    const s = sample(KIND_MUTUAL_CLOSE);
-    expect(await holds(KIND_OWNERSHIP, s.pub, s.priv)).toBe(false);
-    for (const kind of [0, KIND_ESCAPE, 4]) {
-      expect(await holds(KIND_MUTUAL_CLOSE, withPub(s, { kind: Field(kind) }), s.priv)).toBe(false);
+  it('fix the kind to the method', async () => {
+    const close = withdrawalSample({ kind: mutualClose });
+    expect(await holds(ownership, close.pub, close.priv)).toBe(false);
+    const own = withdrawalSample({ kind: ownership });
+    expect(await holds(mutualClose, own.pub, own.priv)).toBe(false);
+    for (const kind of [0, WithdrawalKind.escape]) {
+      expect(await holds(mutualClose, withPub(close, { kind: Field(kind) }), close.priv)).toBe(false);
     }
   });
 
-  it('require a zero nextNullifier and validUntil', async () => {
-    for (const kind of [KIND_MUTUAL_CLOSE, KIND_OWNERSHIP]) {
-      const s = sample(kind);
+  it('enforce zero nextNullifier, validUntil and conceded', async () => {
+    for (const kind of [mutualClose, ownership]) {
+      const s = withdrawalSample({ kind });
       expect(await holds(kind, withPub(s, { nextNullifier: Field(1) }), s.priv)).toBe(false);
       expect(await holds(kind, withPub(s, { validUntil: Field(1) }), s.priv)).toBe(false);
+      expect(await holds(kind, withPub(s, { conceded: Field(1) }), s.priv)).toBe(false);
     }
   });
 
-  it('make amount the state balance: no other amount can be proven', async () => {
-    const s = sample(KIND_MUTUAL_CLOSE, { signed: true });
-    const amount = s.pub.amount;
-    expect(await holds(KIND_MUTUAL_CLOSE, withPub(s, { amount: amount.sub(1) }), s.priv)).toBe(false);
-    expect(await holds(KIND_MUTUAL_CLOSE, withPub(s, { amount: amount.add(1) }), s.priv)).toBe(false);
-    const g = sample(KIND_MUTUAL_CLOSE);
-    expect(await holds(KIND_MUTUAL_CLOSE, withPub(g, { amount: g.pub.amount.sub(1) }), g.priv)).toBe(false);
+  it('bind amount to the state balance and size to the deposit size', async () => {
+    const s = withdrawalSample({ signed: true, balance: 4_000_000_000n });
+    expect(await holds(mutualClose, withPub(s, { amount: s.pub.amount.add(1) }), s.priv)).toBe(false);
+    expect(await holds(mutualClose, withPub(s, { amount: s.pub.amount.sub(1) }), s.priv)).toBe(false);
+    expect(await holds(mutualClose, withPub(s, { size: Field(DEPOSIT_SIZES[1]) }), s.priv)).toBe(false);
+    // A genesis state's balance is the deposit size.
+    const g = withdrawalSample();
+    expect(g.pub.amount.toBigInt()).toBe(DEPOSIT_SIZES[0]);
   });
 
-  it('require amount ≤ size, and size to be the note deposit size', async () => {
-    // A signed state whose balance exceeds the deposit.
-    const over = sample(KIND_MUTUAL_CLOSE, { signed: true, balance: defaultWithdrawal().size + 1n });
-    expect(await holds(KIND_MUTUAL_CLOSE, over.pub, over.priv)).toBe(false);
-    const full = sample(KIND_MUTUAL_CLOSE, { signed: true, balance: defaultWithdrawal().size });
-    expect(await holds(KIND_MUTUAL_CLOSE, full.pub, full.priv)).toBe(true);
-    const s = sample(KIND_MUTUAL_CLOSE, { signed: true });
-    expect(await holds(KIND_MUTUAL_CLOSE, withPub(s, { size: s.pub.size.add(1) }), s.priv)).toBe(false);
+  it('refuse a signed balance above the deposit size, even one the zk edge signed', async () => {
+    const at = withdrawalSample({ signed: true, balance: DEPOSIT_SIZES[0] });
+    expect(await holds(mutualClose, at.pub, at.priv)).toBe(true);
+    const above = withdrawalSample({ signed: true, balance: DEPOSIT_SIZES[0] + 1n });
+    expect(await holds(mutualClose, above.pub, above.priv)).toBe(false);
+    const zero = withdrawalSample({ signed: true, balance: 0n });
+    expect(await holds(mutualClose, zero.pub, zero.priv)).toBe(true);
   });
 
-  it('fail for an expired note', async () => {
-    const expiry = expiryOf(defaultWithdrawal().depositTime);
-    const last = sample(KIND_MUTUAL_CLOSE, { requestTime: expiry - 1n });
-    expect(await holds(KIND_MUTUAL_CLOSE, last.pub, last.priv)).toBe(true);
-    for (const requestTime of [expiry, expiry + 1n]) {
-      const s = sample(KIND_MUTUAL_CLOSE, { requestTime });
-      expect(await holds(KIND_MUTUAL_CLOSE, s.pub, s.priv)).toBe(false);
-    }
+  it('refuse an expired note', async () => {
+    const expiry = expiryOf(1_700_000_000_000n);
+    const last = withdrawalSample({ requestTime: expiry - 1n });
+    expect(await holds(mutualClose, last.pub, last.priv)).toBe(true);
+    const s = withdrawalSample({ requestTime: expiry });
+    expect(await holds(mutualClose, s.pub, s.priv)).toBe(false);
   });
 
-  it('fail for a root the note is not in, and for a nullifier of another state', async () => {
-    const s = sample(KIND_MUTUAL_CLOSE);
-    expect(await holds(KIND_MUTUAL_CLOSE, withPub(s, { root: s.pub.root.add(1) }), s.priv)).toBe(false);
-    expect(await holds(KIND_MUTUAL_CLOSE, withPub(s, { nullifier: nullifier(s.priv.secret, Field(5)) }), s.priv)).toBe(false);
-  });
-
-  it('fail for a state signed by another key, and for a signed state flagged as genesis', async () => {
-    const s = sample(KIND_MUTUAL_CLOSE, { signed: true });
-    const other = PrivateKey.fromBigInt(2n);
-    const sig = Signature.create(other, stateFields({
-      vault: s.pub.vault, commitment: s.note.stateCommitment, anchor: s.priv.anchor,
-    }));
-    expect(await holds(KIND_MUTUAL_CLOSE, s.pub, withPriv(s, { signature: sig }))).toBe(false);
-    expect(await holds(KIND_MUTUAL_CLOSE, s.pub, withPriv(s, { isGenesis: Bool(true) }))).toBe(false);
+  it('refuse a state signed by another key, a root the note is not in, and another nullifier', async () => {
+    const s = withdrawalSample({ signed: true });
+    const other = Signature.create(PrivateKey.fromBigInt(2n), [Field(0)]);
+    expect(await holds(mutualClose, s.pub, new WithdrawalPrivate({ ...s.priv, signature: other }))).toBe(false);
+    expect(await holds(mutualClose, withPub(s, { root: s.pub.root.add(1) }), s.priv)).toBe(false);
+    expect(await holds(mutualClose, withPub(s, { nullifier: nullifier(s.priv.secret, s.priv.prevAnchor) }), s.priv)).toBe(false);
+    // A signed state flagged as genesis.
+    expect(await holds(mutualClose, s.pub, new WithdrawalPrivate({ ...s.priv, isGenesis: Bool(true) }))).toBe(false);
   });
 
   it('bind the destination only as a public input', async () => {
-    const s = sample(KIND_OWNERSHIP);
+    const s = withdrawalSample({ kind: ownership });
     const other = PrivateKey.fromBigInt(99n).toPublicKey();
-    expect(await holds(KIND_OWNERSHIP, withPub(s, { destination: other }), s.priv)).toBe(true);
+    expect(await holds(ownership, withPub(s, { destination: other }), s.priv)).toBe(true);
     expect(s.pub.destination.equals(other).toBoolean()).toBe(false);
   });
 });
 
-describe('withdrawal proof', () => {
-  it('compiles to a verification key different from the request proof’s, and proves both kinds', async () => {
-    const { verificationKey } = await WithdrawalProgram.compile();
-    const request = await RequestProgram.compile();
-    expect(verificationKey.hash.toString()).not.toBe(request.verificationKey.hash.toString());
-    expect(verificationKey.data).not.toBe(request.verificationKey.data);
+describe('escape proof constraints', () => {
+  const hour = 3_600_000n;
+  const esc = (over: Parameters<typeof withdrawalSample>[0] = {}) =>
+    withdrawalSample({ kind: escape, signed: true, balance: 4_000_000_000n, conceded: 10_000_000n, ...over });
 
-    const close = sample(KIND_MUTUAL_CLOSE, { signed: true });
+  it('hold for an escape of a genesis and a signed state, publishing the next state nullifier', async () => {
+    for (const signed of [false, true]) {
+      const s = esc({ signed });
+      expect(await holds(escape, s.pub, s.priv)).toBe(true);
+      // The next state's anchor is derived from this state's nullifier.
+      const next = nullifier(s.priv.secret, nextAnchor(s.pub.nullifier));
+      expect(s.pub.nextNullifier.toBigInt()).toBe(next.toBigInt());
+    }
+    const s = esc();
+    expect(await holds(mutualClose, s.pub, s.priv)).toBe(false);
+  });
+
+  it('refuse a next nullifier other than the derived one', async () => {
+    const s = esc();
+    for (const nextNullifier of [Field(0), s.pub.nextNullifier.add(1), s.pub.nullifier]) {
+      expect(await holds(escape, withPub(s, { nextNullifier }), s.priv)).toBe(false);
+    }
+  });
+
+  it('bound the concession by the balance', async () => {
+    expect(await holds(escape, esc({ conceded: 4_000_000_000n }).pub, esc({ conceded: 4_000_000_000n }).priv)).toBe(true);
+    expect(await holds(escape, esc({ conceded: 0n }).pub, esc({ conceded: 0n }).priv)).toBe(true);
+    const over = esc({ conceded: 4_000_000_001n });
+    expect(await holds(escape, over.pub, over.priv)).toBe(false);
+  });
+
+  it('require requestTime ≤ validUntil < expiry', async () => {
+    const expiry = expiryOf(1_700_000_000_000n);
+    const requestTime = expiry - 2n * hour;
+    for (const [validUntil, ok] of [
+      [requestTime, true], [expiry - 1n, true], [requestTime - 1n, false], [expiry, false],
+    ] as const) {
+      const s = esc({ requestTime, validUntil });
+      expect(await holds(escape, s.pub, s.priv)).toBe(ok);
+    }
+  });
+});
+
+describe('withdrawal proof vectors', () => {
+  const file = JSON.parse(readFileSync(new URL('../../test-vectors/zk-note.json', import.meta.url), 'utf8'));
+  it('cover an ownership proof, a mutual close and an escape, are reproduced, and satisfy the constraints', async () => {
+    expect(file.withdrawalProofs.map((v: any) => Number(v.public.kind))).toEqual([ownership, mutualClose, escape]);
+    for (const [i, sample] of WITHDRAWAL_VECTOR_SAMPLES.entries()) {
+      expect(withdrawalVector(sample)).toEqual(file.withdrawalProofs[i]);
+      const { pub, priv, options } = withdrawalSample(sample.options, sample.before);
+      expect(await holds(options.kind, pub, priv)).toBe(true);
+    }
+    console.log(`vector cases run: ${WITHDRAWAL_VECTOR_SAMPLES.length}`);
+  });
+});
+
+describe('withdrawal proof', () => {
+  it('compiles to its own verification key, then proves and verifies a mutual close and an ownership proof', async () => {
+    const request = await RequestProgram.compile();
+    const { verificationKey } = await WithdrawalProgram.compile();
+    expect(verificationKey.hash.toString()).not.toBe(request.verificationKey.hash.toString());
+
+    const close = withdrawalSample({ kind: mutualClose, signed: true });
     const { proof } = await WithdrawalProgram.mutualClose(close.pub, close.priv);
     expect(await verify(proof, verificationKey)).toBe(true);
-    expect(proof.publicInput.kind.toString()).toBe('1');
-    expect(proof.publicInput.nullifier.toString()).toBe(close.pub.nullifier.toString());
+    expect(proof.publicInput.kind.toBigInt()).toBe(BigInt(mutualClose));
 
-    const own = sample(KIND_OWNERSHIP);
+    const own = withdrawalSample({ kind: ownership });
     const owned = await WithdrawalProgram.ownership(own.pub, own.priv);
     expect(await verify(owned.proof, verificationKey)).toBe(true);
-    expect(owned.proof.publicInput.kind.toString()).toBe('3');
+    expect(owned.proof.publicInput.kind.toBigInt()).toBe(BigInt(ownership));
 
     // A proof of one kind cannot be made for the other method.
     await expect(WithdrawalProgram.ownership(close.pub, close.priv)).rejects.toThrow();
   }, 1_800_000);
-});
-
-describe('withdrawal vectors', () => {
-  const file = JSON.parse(readFileSync(new URL('../../test-vectors/zk-note.json', import.meta.url), 'utf8'));
-  it('are reproduced, and satisfy the constraints', async () => {
-    expect(file.withdrawalProofs.length).toBe(WITHDRAWAL_SAMPLES.length);
-    for (const [i, o] of WITHDRAWAL_SAMPLES.entries()) {
-      const s = buildWithdrawal(o);
-      expect(withdrawalVector(s, o)).toEqual(file.withdrawalProofs[i]);
-      expect(await holds(o.kind, s.pub, s.priv)).toBe(true);
-    }
-    console.log(`vector cases run: ${WITHDRAWAL_SAMPLES.length}`);
-  });
 });

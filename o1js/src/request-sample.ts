@@ -2,9 +2,11 @@
 import { Bool, Field, Group, PrivateKey, Scalar, Signature } from 'o1js';
 import { commit, rerandomise } from './balance.js';
 import { NoteTree } from './note-tree.js';
-import { DEPOSIT_SIZES, TIERS, expiryOf } from './policy.js';
-import { authTag, commitSecret, genesisAnchor, nextAnchor, nullifier, type RequestContext } from './primitives.js';
-import { RequestPrivate, RequestPublic } from './request.js';
+import { DEPOSIT_SIZES, TIERS, expiryOf, subsidyPeriod } from './policy.js';
+import {
+  authTag, commitSecret, genesisAnchor, nextAnchor, nullifier, periodNullifier, type RequestContext,
+} from './primitives.js';
+import { RequestPrivate, RequestPublic, subsidyPeriodHolds } from './request.js';
 import { stateFields } from './state.js';
 
 export interface SampleOptions {
@@ -17,6 +19,8 @@ export interface SampleOptions {
   tier: bigint;
   /** A signed state; otherwise the note is at genesis. */
   signed: boolean;
+  /** A signed state's place in the note's chain of states: 1 (the default) is genesis's successor. */
+  step?: number;
   /** Balance and blinding of a signed state; a genesis state's balance is the deposit size. */
   balance: bigint;
   blinding: bigint;
@@ -24,6 +28,8 @@ export interface SampleOptions {
   vaultSecret: bigint;
   /** The edge is the vault key's x-coordinate, the key the zk edge signs state under. */
   ctx: { sessionKeyX: bigint; sessionKeyIsOdd: boolean; expiry: bigint };
+  /** A subsidised request, in a vault created at `vaultCreation`; otherwise unsubsidised. */
+  subsidy?: { vaultCreation: bigint };
 }
 
 export const defaultSample = (): SampleOptions => {
@@ -47,50 +53,60 @@ export interface Sample {
   vaultKey: PrivateKey;
   stateCommitment: Group;
   context: RequestContext;
+  /** The vault's creation time, the subsidised method's extra private input; zero when unsubsidised. */
+  vaultCreation: Field;
 }
 
 /**
- * `existing` is a tree that already holds the note, at `index` (a vault's own); otherwise a tree is built
- * with `o.before` other deposits ahead of the note.
+ * The anchor of a note's state `step` steps after genesis, and the nullifier and anchor of the state
+ * before it (zero at genesis): each state's anchor follows from the nullifier its predecessor spent.
  */
-export function buildSample(o: SampleOptions, existing?: { tree: NoteTree; index: bigint }): Sample {
-  const secret = F(o.secret);
-  const commitment = commitSecret(secret);
-  const tree = existing?.tree ?? new NoteTree();
-  let index = existing?.index ?? 0n;
-  if (!existing) {
-    for (let i = 0; i < o.before; i++) {
-      tree.append({ commitment: commitSecret(F(BigInt(i + 1))), size: F(DEPOSIT_SIZES[0]), depositTime: F(o.depositTime) });
-    }
-    index = tree.append({ commitment, size: F(o.size), depositTime: F(o.depositTime) });
+export function stateChain(secret: Field, step: number) {
+  let anchor = genesisAnchor(commitSecret(secret));
+  let prevNullifier = F(0n);
+  let prevAnchor = F(0n);
+  for (let i = 0; i < step; i++) {
+    prevAnchor = anchor;
+    prevNullifier = nullifier(secret, prevAnchor);
+    anchor = nextAnchor(prevNullifier);
   }
+  return { anchor, prevNullifier, prevAnchor };
+}
 
+export function buildSample(o: SampleOptions): Sample {
+  const tree = new NoteTree();
+  for (let i = 0; i < o.before; i++) {
+    tree.append({ commitment: commitSecret(F(BigInt(i + 1))), size: F(DEPOSIT_SIZES[0]), depositTime: F(o.depositTime) });
+  }
+  const index = tree.append({ commitment: commitSecret(F(o.secret)), size: F(o.size), depositTime: F(o.depositTime) });
+  return buildRequest(tree, index, o);
+}
+
+/** Inputs for the note at `index` of `tree`, which must hold that note; `o.before` is ignored. */
+export function buildRequest(tree: NoteTree, index: bigint, o: SampleOptions): Sample {
+  const secret = F(o.secret);
   const vaultKey = PrivateKey.fromBigInt(o.vaultSecret);
   const vault = vaultKey.toPublicKey();
-  const genesis = genesisAnchor(commitment);
   const balance = o.signed ? o.balance : o.size;
   const stateCommitment = commit(sc(balance), sc(o.blinding));
 
-  let anchor = genesis;
-  let prevNullifier = F(0n);
-  let prevAnchor = F(0n);
-  let signature = Signature.create(vaultKey, [F(0n)]);
-  if (o.signed) {
-    prevAnchor = genesis;
-    prevNullifier = nullifier(secret, prevAnchor);
-    anchor = nextAnchor(prevNullifier);
-    signature = Signature.create(vaultKey, stateFields({ vault, commitment: stateCommitment, anchor }));
-  }
+  const { anchor, prevNullifier, prevAnchor } = stateChain(secret, o.signed ? o.step ?? 1 : 0);
+  const signature = o.signed
+    ? Signature.create(vaultKey, stateFields({ vault, commitment: stateCommitment, anchor }))
+    : Signature.create(vaultKey, [F(0n)]);
 
   const context: RequestContext = {
     edge: vault.x, sessionKeyX: F(o.ctx.sessionKeyX), sessionKeyIsOdd: Bool(o.ctx.sessionKeyIsOdd),
     tier: F(o.tier), expiry: F(o.ctx.expiry),
   };
   const n = nullifier(secret, anchor);
+  // A request before the vault's creation has no period; the sample still builds, and fails to prove.
+  const period = o.subsidy ? subsidyPeriod(o.subsidy.vaultCreation, o.requestTime) ?? 0n : 0n;
   const pub = new RequestPublic({
     vault, root: tree.root, requestTime: F(o.requestTime), tier: F(o.tier), nullifier: n,
     tag: authTag(n, context), commitment: rerandomise(stateCommitment, sc(o.rerandom)),
-    subsidised: Bool(false), period: F(0n), periodNullifier: F(0n),
+    subsidised: Bool(o.subsidy !== undefined), period: F(period),
+    periodNullifier: o.subsidy ? periodNullifier(secret, F(index), F(period)) : F(0n),
   });
   const priv = new RequestPrivate({
     secret, index: F(index), size: F(o.size), depositTime: F(o.depositTime), expiry: F(expiryOf(o.depositTime)),
@@ -99,11 +115,27 @@ export function buildSample(o: SampleOptions, existing?: { tree: NoteTree; index
     edge: context.edge, sessionKeyX: context.sessionKeyX, sessionKeyIsOdd: context.sessionKeyIsOdd,
     requestExpiry: context.expiry,
   });
-  return { pub, priv, tree, vaultKey, stateCommitment, context };
+  const vaultCreation = F(o.subsidy?.vaultCreation ?? 0n);
+  return { pub, priv, tree, vaultKey, stateCommitment, context, vaultCreation };
 }
 
-/** The samples the shared vector file pins: one genesis state and one signed state. */
-export const VECTOR_SAMPLES: SampleOptions[] = [defaultSample(), { ...defaultSample(), signed: true, before: 5 }];
+/** The vault creation time of the subsidised vector samples: 10 days before the default deposit. */
+const VECTOR_VAULT_CREATION = defaultSample().depositTime - 10n * 86_400_000n;
+
+/**
+ * The samples the shared vector file pins: one genesis state and one signed state, unsubsidised; then
+ * subsidised, a genesis state in period 2 and a signed state of the same note in period 3.
+ */
+export const VECTOR_SAMPLES: SampleOptions[] = [
+  defaultSample(),
+  { ...defaultSample(), signed: true, before: 5 },
+  { ...defaultSample(), tier: TIERS[0], subsidy: { vaultCreation: VECTOR_VAULT_CREATION } },
+  {
+    ...defaultSample(), tier: TIERS[0], signed: true, step: 2, subsidy: { vaultCreation: VECTOR_VAULT_CREATION },
+    requestTime: VECTOR_VAULT_CREATION + 3n * 7n * 86_400_000n,
+    ctx: { ...defaultSample().ctx, expiry: VECTOR_VAULT_CREATION + 3n * 7n * 86_400_000n + 60_000n },
+  },
+];
 
 /** A sample's public inputs, and the private values Rust needs to recompute the derived ones. */
 export function requestVector(s: Sample, o: SampleOptions) {
@@ -130,6 +162,39 @@ export function requestVector(s: Sample, o: SampleOptions) {
         sessionKeyIsOdd: str(s.context.sessionKeyIsOdd.toField()), tier: str(s.context.tier), expiry: str(s.context.expiry),
       },
       stateCommitment: pt(s.stateCommitment),
+      // The subsidised method's extra private input; absent for an unsubsidised request.
+      ...(o.subsidy ? { vaultCreation: o.subsidy.vaultCreation.toString() } : {}),
     },
+  };
+}
+
+/**
+ * Subsidised claims by one note, all in the vault's real period 2 (`VECTOR_VAULT_CREATION`), each
+ * proven with the creation time `provenWith`: the honest one, and two forged earlier so that each
+ * proves another period and so another per-period nullifier. The circuit accepts all three; only the
+ * honest one passes the zk edge's period check (`subsidyPeriodHolds`).
+ */
+export const SUBSIDY_PERIOD_SAMPLES: { vaultCreation: bigint; options: SampleOptions }[] = (() => {
+  const DAY = 86_400_000n;
+  const claim = (requestTime: bigint, provenWith: bigint): SampleOptions => ({
+    ...defaultSample(), tier: TIERS[0], requestTime, subsidy: { vaultCreation: provenWith },
+    ctx: { ...defaultSample().ctx, expiry: requestTime + 60_000n },
+  });
+  const { depositTime } = defaultSample();
+  return [
+    { vaultCreation: VECTOR_VAULT_CREATION, options: claim(depositTime + 8n * DAY, VECTOR_VAULT_CREATION) },
+    { vaultCreation: VECTOR_VAULT_CREATION, options: claim(depositTime + 8n * DAY, VECTOR_VAULT_CREATION - 7n * DAY) },
+    { vaultCreation: VECTOR_VAULT_CREATION, options: claim(depositTime + 10n * DAY, VECTOR_VAULT_CREATION - 14n * DAY) },
+  ];
+})();
+
+/** A subsidised claim's public input, the vault's real creation time, and whether the period check passes it. */
+export function subsidyPeriodVector(c: { vaultCreation: bigint; options: SampleOptions }) {
+  const s = buildSample(c.options);
+  return {
+    vaultCreation: c.vaultCreation.toString(),
+    provenWith: c.options.subsidy!.vaultCreation.toString(),
+    publicInput: RequestPublic.toFields(s.pub).map((f) => f.toString()),
+    passes: subsidyPeriodHolds(s.pub, c.vaultCreation),
   };
 }

@@ -3,7 +3,7 @@ import { AccountUpdate, Field, Mina, PrivateKey, UInt64, Unconstrained } from 'o
 import * as policy from './policy.js';
 import { commitSecret, leaf } from './primitives.js';
 import { DepositLike, NoteTree, emptyNoteRoot, reduceWitnesses } from './note-tree.js';
-import { REDUCE_BATCH_SIZE, ROOT_RING_LENGTH, SLOT_MS, NullifierMap, Vault, batchReducer } from './vault.js';
+import { NullifierSet, PendingEscapes, REDUCE_BATCH_SIZE, ROOT_RING_LENGTH, SLOT_MS, Vault, batchReducer } from './vault.js';
 
 const [SMALL, MEDIUM] = policy.DEPOSIT_SIZES;
 
@@ -17,7 +17,6 @@ describe('vault deposit path', () => {
   const vault = new Vault(zkappKey.toPublicKey());
   let deployTime: bigint;
   const tree = new NoteTree();
-  const nullifiers = new NullifierMap();
   const queue: DepositLike[] = [];
   let secret = 1n;
   let lastDeposit: DepositLike;
@@ -51,7 +50,8 @@ describe('vault deposit path', () => {
       const witnesses = reduceWitnesses(tree, deposits, REDUCE_BATCH_SIZE);
       await send(
         await Mina.transaction(payer, async () => {
-          await vault.reduce(batch, proof, Unconstrained.from(witnesses), nullifiers);
+          // Deposits only: the nullifier set and pending escapes stay empty.
+          await vault.reduce(batch, proof, Unconstrained.from(witnesses), new NullifierSet(), new PendingEscapes(), UInt64.from(now()));
         })
       );
     }
