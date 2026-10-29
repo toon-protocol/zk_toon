@@ -81,8 +81,16 @@ fn first_difference(aux: &[Fp]) -> Option<String> {
             ));
         }
     }
-    (aux.len() != o1js.len() - 1)
-        .then(|| format!("{} variables, o1js {}", aux.len(), o1js.len() - 1))
+    // a matching prefix: the first variable only one side has
+    let (ours, theirs) = (aux.len(), o1js.len() - 1);
+    (ours != theirs).then(|| {
+        let first = ours.min(theirs) + 1;
+        format!(
+            "{ours} variables, o1js {theirs}: first differing variable: {first} (aux index {}), made by {}",
+            first - 1,
+            call_site(first)
+        )
+    })
 }
 
 #[test]
@@ -111,6 +119,12 @@ fn a_mismatch_names_the_variable_and_its_call_site() {
     let report = first_difference(&w.aux).expect("a different blinding changes the witness");
     assert!(report.starts_with("first differing variable: 1 "), "{report}");
     assert!(report.ends_with("(OCaml)"), "{report}");
+
+    // a witness that stops early is reported at the first variable it lacks
+    let w = land_witness(&land_inputs()).unwrap();
+    let report = first_difference(&w.aux[..91]).expect("a short witness differs");
+    assert!(report.contains("first differing variable: 92 "), "{report}");
+    assert!(report.contains("main:zkprogram.js:503"), "{report}");
 }
 
 #[test]

@@ -14,6 +14,13 @@ pub struct PublicKey {
     pub is_odd: Bool,
 }
 
+/// `Provable.witness(PublicKey, ...)`: the two fields, and the check on the parity.
+pub fn witness_public_key(cs: &mut Cs, x: Fp, is_odd: bool) -> PublicKey {
+    let [x, odd] = cs.exists([x, Fp::from(is_odd as u64)]);
+    let is_odd = odd.assert_bool(cs);
+    PublicKey { x, is_odd }
+}
+
 /// A Schnorr signature `(r, s)`, with `s` in the shifted representation.
 #[derive(Clone, Debug)]
 pub struct Signature {

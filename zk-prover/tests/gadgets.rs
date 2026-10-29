@@ -10,6 +10,7 @@ use zk_prover::witness::{
         native_curve::{self, Point, ShiftedScalar},
         poseidon, range_check,
         signature::{self, PublicKey, Signature},
+        state,
     },
     pickles, Cs, Field,
 };
@@ -337,4 +338,143 @@ fn step_statement_hash() {
     let public_input = zk_prover::witness::land::step_statement_hash(&mut cs, &inputs).unwrap();
     check(&cs, 12923, 17963);
     assert_eq!(public_input, o1js()[0]);
+}
+
+/// `rangeCheck0Helper` of the first limb in `multiRangeCheck`.
+#[test]
+fn range_check0_helper_first_limb() {
+    let mut cs = resume(203);
+    let x = var(&cs, 199);
+    range_check::range_check0_helper(&mut cs, &x);
+    check(&cs, 203, 217);
+}
+
+/// `rangeCheck1Helper` of the third limb in `multiRangeCheck`.
+#[test]
+fn range_check1_helper_third_limb() {
+    let mut cs = resume(231);
+    let z = var(&cs, 201);
+    range_check::range_check1_helper(&mut cs, &z);
+    check(&cs, 231, 255);
+}
+
+/// `Snarky.field.truncateToBits16(4, cumulative)`, the first part of `rangeCheckN(64, x)`.
+#[test]
+fn truncate_to_bits16_cumulative() {
+    let mut cs = resume(94);
+    let x = var(&cs, 93);
+    let n = range_check::truncate_to_bits16(&mut cs, 4, &x);
+    check(&cs, 94, 138);
+    assert_eq!(n.value(), x.value());
+}
+
+/// `ForeignField.sum([0, x], [-1], f)`, which `negate` is.
+#[test]
+fn foreign_field_sum() {
+    use num_bigint::BigInt;
+    let mut cs = resume(257);
+    let zero = foreign_field::field3_constant(&BigInt::from(0));
+    let x = [var(&cs, 199), var(&cs, 200), var(&cs, 201)];
+    let p = comparison::fp_modulus();
+    foreign_field::sum(&mut cs, &zero, &x, -1, &(((p + 1) >> 1u32) - BigInt::from(1)));
+    check(&cs, 257, 333);
+}
+
+/// `Field.assertLessThan((p + 1) / 2)` in `isOddAndHigh`.
+#[test]
+fn field_assert_less_than_half() {
+    use num_bigint::BigInt;
+    let mut cs = resume(199);
+    let z = var(&cs, 197);
+    let half = foreign_field::big_to_fp(&((comparison::fp_modulus() + BigInt::from(1)) >> 1u32));
+    comparison::field_assert_less_than(&mut cs, &z, half);
+    check(&cs, 199, 333);
+}
+
+/// `add` of `native-curve.js`, the first step of `Group.add` in `Signature.verify`.
+#[test]
+fn native_curve_add() {
+    let mut cs = resume(4094);
+    let this = Point { x: var(&cs, 2441), y: var(&cs, 2446).neg() };
+    let g = Point { x: var(&cs, 4088), y: var(&cs, 4092) };
+    native_curve::add(&mut cs, &this, &g);
+    check(&cs, 4094, 4103);
+}
+
+/// `Group.isZero` of both operands of `Group.add` in `Signature.verify`.
+#[test]
+fn group_is_zero_operands() {
+    let mut cs = resume(4103);
+    let this = Point { x: var(&cs, 2441), y: var(&cs, 2446).neg() };
+    let g = Point { x: var(&cs, 4088), y: var(&cs, 4092) };
+    native_curve::group_is_zero(&mut cs, &g);
+    native_curve::group_is_zero(&mut cs, &this);
+    check(&cs, 4103, 4113);
+}
+
+/// `Provable.switch` of `Group.add` in `Signature.verify`, after the `Bool.and` and `Bool.or` that
+/// make its mask.
+#[test]
+fn switch_point_group_add() {
+    let mut cs = resume(4113);
+    let this = Point { x: var(&cs, 2441), y: var(&cs, 2446).neg() };
+    let g = Point { x: var(&cs, 4088), y: var(&cs, 4092) };
+    let result = Point { x: var(&cs, 4099), y: var(&cs, 4100) };
+    let (is_negation, g_is_zero, this_is_zero) =
+        (Bool(var(&cs, 4095)), Bool(var(&cs, 4103)), Bool(var(&cs, 4108)));
+    let only_this_is_zero = this_is_zero.and(&mut cs, &g_is_zero.not());
+    let any = g_is_zero.or(&mut cs, &only_this_is_zero).or(&mut cs, &is_negation);
+    native_curve::switch_point(
+        &mut cs,
+        &[g_is_zero, only_this_is_zero, is_negation, any.not()],
+        &[this, g, Point::zero(), result],
+    );
+    check(&cs, 4113, 4130);
+}
+
+/// `addNonZero(R, -P)` in `scaleField`.
+#[test]
+fn add_non_zero_scale_field() {
+    let mut cs = resume(2420);
+    let r = Point { x: var(&cs, 2418), y: var(&cs, 2419) };
+    let p = Point { x: var(&cs, 143), y: var(&cs, 339) };
+    native_curve::add_non_zero(&mut cs, &r, &p.neg());
+    check(&cs, 2420, 2429);
+}
+
+/// `Provable.if(tLo, Group, R, R - P)` in `scaleField`.
+#[test]
+fn if_point_scale_field() {
+    let mut cs = resume(2429);
+    let r = Point { x: var(&cs, 2418), y: var(&cs, 2419) };
+    let r_minus_p = Point { x: var(&cs, 2425), y: var(&cs, 2426) };
+    let t_lo = Bool(var(&cs, 682));
+    native_curve::if_point(&mut cs, &t_lo, &r, &r_minus_p);
+    check(&cs, 2429, 2437);
+}
+
+/// `payer.getAndRequireEquals()`.
+#[test]
+fn get_and_require_equals_public_key_payer() {
+    let mut cs = resume(143);
+    let (x, is_odd) = (o1js()[143], o1js()[144] == Fp::from(1u64));
+    state::get_and_require_equals_public_key(&mut cs, x, is_odd);
+    check(&cs, 143, 146);
+}
+
+/// `landed.getAndRequireEquals()`.
+#[test]
+fn get_and_require_equals_uint64_landed() {
+    let mut cs = resume(146);
+    state::get_and_require_equals_uint64(&mut cs, 0);
+    check(&cs, 146, 191);
+}
+
+/// `setKind`: the verification key hash of the proof authorization.
+#[test]
+fn set_kind_verification_key_hash() {
+    let v: serde_json::Value = serde_json::from_slice(&fixture("inputs.json")).unwrap();
+    let mut cs = resume(5008);
+    state::set_kind(&mut cs, Fp::from_str(v["vkHash"].as_str().unwrap()).unwrap());
+    check(&cs, 5008, 5009);
 }

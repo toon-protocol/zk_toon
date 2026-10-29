@@ -6,3 +6,4 @@ pub mod native_curve;
 pub mod poseidon;
 pub mod range_check;
 pub mod signature;
+pub mod state;

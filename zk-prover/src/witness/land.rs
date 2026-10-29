@@ -24,7 +24,8 @@ use super::{
         native_curve::{fq_modulus, Point, ShiftedScalar},
         poseidon::{self, Sponge},
         range_check::range_check_n_64,
-        signature::{self, PublicKey, Signature},
+        signature::{self, witness_public_key, Signature},
+        state::{get_and_require_equals_public_key, get_and_require_equals_uint64, set_kind},
     },
     pickles::{self, from_fork},
     Cs, Field,
@@ -90,8 +91,7 @@ fn signature(sig: &str) -> anyhow::Result<(Fp, Fq)> {
 fn shifted_scalar(s: &Fq) -> (Fp, Fp) {
     let q = fq_modulus();
     let s = BigInt::from_bytes_le(num_bigint::Sign::Plus, &s.into_bigint().to_bytes_le());
-    let t = (s - (BigInt::from(1) << 255u32)).modpow(&BigInt::from(1), &q);
-    let t = ((t % &q) + &q) % &q;
+    let t = ((s - (BigInt::from(1) << 255u32)) % &q + &q) % &q;
     (big_to_fp(&(&t & BigInt::from(1))), big_to_fp(&(t >> 1u32)))
 }
 
@@ -104,13 +104,6 @@ fn generator() -> Point {
         )
         .unwrap(),
     )
-}
-
-/// `Provable.witness(PublicKey, ...)`: the two fields, and the check on the parity.
-fn witness_public_key(cs: &mut Cs, x: Fp, is_odd: bool) -> PublicKey {
-    let [x, odd] = cs.exists([x, Fp::from(is_odd as u64)]);
-    let is_odd = odd.assert_bool(cs);
-    PublicKey { x, is_odd }
 }
 
 /// The witness of `land`.
@@ -149,9 +142,8 @@ fn method_and_wrapper(cs: &mut Cs, inputs: &LandInputs) -> anyhow::Result<Fp> {
 
     // `land`
     let (px, podd) = public_key(&inputs.payer)?;
-    let payer = witness_public_key(cs, px, podd); // payer.getAndRequireEquals()
-    let landed = cs.exists_one(Fp::from(inputs.landed)); // landed.getAndRequireEquals()
-    range_check_n_64(cs, &landed);
+    let payer = get_and_require_equals_public_key(cs, px, podd);
+    let landed = get_and_require_equals_uint64(cs, inputs.landed);
     let prefix = poseidon::salted_state("CodaSignature*******");
     let ok = signature::verify(cs, &sig, &payer, &[cumulative.clone()], prefix, &generator());
     ok.assert_true(cs);
@@ -171,12 +163,12 @@ fn method_and_wrapper(cs: &mut Cs, inputs: &LandInputs) -> anyhow::Result<Fp> {
     ];
     let call_data = poseidon::hash(cs, &call_data_fields);
     // setKind: the proof authorization carries the verification key hash
-    let verification_key_hash = cs.exists_one(inputs.vk_hash);
+    let verification_key_hash = set_kind(cs, inputs.vk_hash);
     // the account update hash
     let body = Body {
         public_key_x: zkapp.x.clone(),
         public_key_is_odd: zkapp.is_odd.to_field(),
-        app_state0: cumulative.clone(),
+        app_state0: cumulative.clone(), // landed.set(cumulative)
         call_data,
         state_preconditions: [landed.clone(), payer.x.clone(), payer.is_odd.to_field()],
         verification_key_hash,

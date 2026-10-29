@@ -10,6 +10,6 @@ num-rational = { git = "https://github.com/openmina/num-rational", branch = "reb
 [profile.test.package."*"]
 opt-level = 3
 
-# zk-prover builds a 18k-value witness and proves a 1.4k-row circuit; unoptimised that takes minutes.
+# zk-prover builds an 18k-value witness and proves a 1.4k-row circuit; unoptimised that takes minutes.
 [profile.test.package.zk-prover]
 opt-level = 3
