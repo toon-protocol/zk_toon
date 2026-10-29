@@ -23,6 +23,7 @@ import { verifyClearance } from './clearance.js';
 import { type NoteTree, NoteWitness, depositLeaf, emptyNoteRoot } from './note-tree.js';
 import { RequestProof, type RequestPublic } from './request.js';
 import { WithdrawalKind, WithdrawalProof, type WithdrawalPublic } from './withdrawal.js';
+import { tagToBigint } from './primitives.js';
 
 /** How many recent note-tree roots the vault remembers. */
 export const ROOT_RING_LENGTH = 8;
@@ -205,6 +206,21 @@ export class SweptNote extends Struct({ commitment: Field, size: UInt64, deposit
   }
 }
 
+const SETUP_TAG = 'toon.zk.vault-setup.v1';
+/** What the vault account signs to set the state key and treasury, once. */
+export const setupFields = (vault: PublicKey, stateKey: PublicKey, treasury: PublicKey) => [
+  Field(tagToBigint(SETUP_TAG)),
+  vault.x, vault.isOdd.toField(), stateKey.x, stateKey.isOdd.toField(), treasury.x, treasury.isOdd.toField(),
+];
+
+/**
+ * Precondition on a payee: its account exists, so a payout to it opens no account and cannot fail for want
+ * of the fee. A failing reduce would stall every action queued behind it (ADR 0002).
+ */
+function requireAccountExists(address: PublicKey) {
+  AccountUpdate.create(address).account.isNew.requireEquals(Bool(false));
+}
+
 /** The accepted deposit sizes, as on-chain state. */
 export class DepositSizes extends Struct({ a: UInt64, b: UInt64, c: UInt64 }) {
   static fromPolicy() {
@@ -305,11 +321,15 @@ export class Vault extends SmartContract {
     this.sweptTotal.set(UInt64.zero);
   }
 
-  /** Once, signed by the vault account: names the state key and the treasury. */
-  async setup(stateKey: PublicKey, treasury: PublicKey) {
-    this.stateKey.getAndRequireEquals().isEmpty().assertTrue('vault already set up');
-    stateKey.isEmpty().assertFalse('empty state key');
-    AccountUpdate.createSigned(this.address);
+  /**
+   * One-time: records the state key and the treasury. The vault account must have signed them
+   * (`setupFields`), it is refused once a state key is set, and the treasury's account must exist.
+   */
+  async setup(stateKey: PublicKey, treasury: PublicKey, signature: Signature) {
+    this.stateKey.getAndRequireEquals().isEmpty().assertTrue('already set up');
+    stateKey.isEmpty().assertFalse('no state key');
+    signature.verify(this.address, setupFields(this.address, stateKey, treasury)).assertTrue('not signed by the vault');
+    requireAccountExists(treasury);
     this.stateKey.set(stateKey);
     this.treasury.set(treasury);
   }
@@ -332,16 +352,18 @@ export class Vault extends SmartContract {
     pub.kind.assertEquals(WithdrawalKind.mutualClose, 'not a mutual close');
 
     const stateKey = this.stateKey.getAndRequireEquals();
-    stateKey.isEmpty().assertFalse('vault not set up');
-    pub.vault.equals(stateKey).assertTrue('not the vault state key');
+    stateKey.isEmpty().assertFalse('setup has not run');
+    pub.vault.equals(stateKey).assertTrue('not the state key');
     new RootRing(this.rootRing.getAndRequireEquals()).contains(pub.root).assertTrue('root not in the ring');
     // `pub.vault` is the stored state key, and unlike an unset one a valid point, so a close before
     // setup fails on the assertion above rather than inside the signature check.
     verifyClearance(clearance, { stateKey: pub.vault, nullifier: pub.nullifier, destination: pub.destination })
-      .assertTrue('clearance not valid');
+      .assertTrue('bad clearance');
 
     const action = VaultAction.mutualClose(pub);
     this.network.timestamp.requireBetween(action.time, action.time.add(UInt64.from(CLOSE_WINDOW_MS)));
+    // A payout to an account that does not exist would fail the reduce, and stall every action queued behind it.
+    requireAccountExists(pub.destination);
 
     nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
     nullifiers.assertNotIncluded(pub.nullifier, 'nullifier spent');
@@ -359,12 +381,14 @@ export class Vault extends SmartContract {
     pub.kind.assertEquals(WithdrawalKind.escape, 'not an escape');
 
     const stateKey = this.stateKey.getAndRequireEquals();
-    stateKey.isEmpty().assertFalse('vault not set up');
-    pub.vault.equals(stateKey).assertTrue('not the vault state key');
+    stateKey.isEmpty().assertFalse('setup has not run');
+    pub.vault.equals(stateKey).assertTrue('not the state key');
     new RootRing(this.rootRing.getAndRequireEquals()).contains(pub.root).assertTrue('root not in the ring');
 
     const action = VaultAction.escape(pub);
     this.network.timestamp.requireBetween(action.time, action.validUntil);
+    // Finalizing pays the destination, so it must exist, as for a close.
+    requireAccountExists(pub.destination);
 
     nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
     nullifiers.assertNotIncluded(pub.nullifier, 'nullifier spent');
@@ -426,7 +450,7 @@ export class Vault extends SmartContract {
    * expiring later than the one after it holds that one back until it expires too.
    */
   async sweepExpired(count: UInt32, notes: Unconstrained<SweptNote[]>, now: UInt64) {
-    this.treasury.getAndRequireEquals().isEmpty().assertFalse('vault not set up');
+    this.treasury.getAndRequireEquals().isEmpty().assertFalse('setup has not run');
     this.network.timestamp.requireBetween(now, UInt64.MAXINT());
     const root = this.noteRoot.getAndRequireEquals();
     let cursor = this.sweepCursor.getAndRequireEquals();
@@ -459,8 +483,8 @@ export class Vault extends SmartContract {
   private checkEvidence(evidence: RequestProof) {
     evidence.verify();
     const stateKey = this.stateKey.getAndRequireEquals();
-    stateKey.isEmpty().assertFalse('vault not set up');
-    evidence.publicInput.vault.equals(stateKey).assertTrue('not the vault state key');
+    stateKey.isEmpty().assertFalse('setup has not run');
+    evidence.publicInput.vault.equals(stateKey).assertTrue('not the state key');
   }
 
   /** `escape` is pending as named, and the block time is before its deadline. */
@@ -598,7 +622,7 @@ export class Vault extends SmartContract {
 
 // declareMethods' argument type is looser than the types it accepts.
 declareMethods(Vault, {
-  setup: [PublicKey, PublicKey],
+  setup: [PublicKey, PublicKey, Signature],
   deposit: [Field, UInt64, UInt64],
   mutualClose: [WithdrawalProof, Signature, NullifierSet],
   escape: [WithdrawalProof, NullifierSet],

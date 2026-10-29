@@ -171,7 +171,7 @@ describe('vault escape refusals', () => {
     const h = await freshVault({ setup: false });
     const note = await h.deposit(SMALL);
     await h.reduce();
-    await expect(h.escape(await h.withdrawalProof(note, { kind: ESCAPE }))).rejects.toThrow(/not set up/);
+    await expect(h.escape(await h.withdrawalProof(note, { kind: ESCAPE }))).rejects.toThrow(/setup has not run/);
   });
 
   it('refuses another kind of proof, another state key, and a root not in the ring', async () => {

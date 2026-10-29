@@ -97,3 +97,37 @@ fn request_proof_samples_are_recomputed() {
     assert!(genesis_seen && signed_seen);
     assert!(subsidised_periods.len() >= 2, "subsidised samples in two periods");
 }
+
+#[test]
+fn public_input_array_decodes_to_the_structured_public_values() {
+    use zk_note::request::{RequestPublic, RequestPublicError};
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../test-vectors/zk-note.json");
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let entries = v["requestProofs"].as_array().unwrap();
+    assert!(!entries.is_empty());
+    println!("vector cases run: {}", entries.len());
+    for e in entries {
+        let flat: Vec<Field> = e["publicInput"].as_array().unwrap().iter().map(f).collect();
+        let r = RequestPublic::from_fields(&flat).unwrap();
+        let p = &e["public"];
+        assert_eq!(r.vault_x, f(&p["vault"]["x"]));
+        assert_eq!(r.vault_is_odd, s(&p["vault"]["isOdd"]) == "1");
+        assert_eq!(r.root, f(&p["root"]));
+        assert_eq!(r.request_time, u(&p["requestTime"]));
+        assert_eq!(r.tier, u(&p["tier"]));
+        assert_eq!(r.nullifier, f(&p["nullifier"]));
+        assert_eq!(r.tag, f(&p["tag"]));
+        assert_eq!((r.commitment.x, r.commitment.y), (f(&p["commitment"]["x"]), f(&p["commitment"]["y"])));
+        assert_eq!(r.subsidised, p["subsidised"].as_bool().unwrap());
+        assert_eq!(r.period, f(&p["period"]));
+        assert_eq!(r.period_nullifier, f(&p["periodNullifier"]));
+
+        assert_eq!(RequestPublic::from_fields(&flat[1..]), Err(RequestPublicError::Length(11)));
+        let mut bad = flat.clone();
+        bad[9] = Field::from(2u64);
+        assert_eq!(RequestPublic::from_fields(&bad), Err(RequestPublicError::NotBool("subsidised")));
+        let mut bad = flat.clone();
+        bad[4] = -Field::from(1u64);
+        assert_eq!(RequestPublic::from_fields(&bad), Err(RequestPublicError::NotU64("tier")));
+    }
+}

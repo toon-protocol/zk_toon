@@ -5,7 +5,9 @@ import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, Signature, UInt32, U
 import * as policy from './policy.js';
 import { signClearance } from './clearance.js';
 import { commitSecret } from './primitives.js';
-import { CLOSE_WINDOW_MS, PendingEscape, SWEEP_BATCH_SIZE, SweptNote, Vault, VaultAction, batchReducer } from './vault.js';
+import {
+  CLOSE_WINDOW_MS, PendingEscape, SWEEP_BATCH_SIZE, SweptNote, Vault, VaultAction, batchReducer, setupFields,
+} from './vault.js';
 import { VaultMirror } from './vault-mirror.js';
 import { WithdrawalKind, WithdrawalProgram, WithdrawalProof, WithdrawalPublic } from './withdrawal.js';
 import { buildWithdrawal } from './withdrawal-sample.js';
@@ -94,12 +96,14 @@ export function vaultHarness(Local: Local) {
 
     const h = {
       vault, zkappKey, stateKey, treasury, mirror, send, clearance, closeTx, escapeTx, finalizeTx, defeatTx, raiseTx, sweepTx,
-      async setup(keys = [zkappKey]) {
+      /** Sets the vault up, by default signed by the vault account (`signer`) with the harness's treasury. */
+      async setup(o: { signer?: PrivateKey; treasury?: PublicKey; key?: PublicKey } = {}) {
+        const [key, to] = [o.key ?? stateKey.toPublicKey(), o.treasury ?? treasury];
+        const signature = Signature.create(o.signer ?? zkappKey, setupFields(vault.address, key, to));
         await send(
           await Mina.transaction(payer, async () => {
-            await vault.setup(stateKey.toPublicKey(), treasury);
-          }),
-          keys
+            await vault.setup(key, to, signature);
+          })
         );
       },
       /** Deposits a note, by default named at the current block time, and returns it. */

@@ -258,6 +258,6 @@ describe('the sweep', () => {
     const note = await h.deposit(SMALL);
     await h.reduce();
     advanceTo(sweepableAt(note));
-    await expect(h.sweepTx(1)).rejects.toThrow(/not set up/);
+    await expect(h.sweepTx(1)).rejects.toThrow(/setup has not run/);
   });
 });

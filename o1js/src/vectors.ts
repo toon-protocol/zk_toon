@@ -1,11 +1,11 @@
 // Builds test-vectors/zk-note.json, the one file the Rust primitives and the o1js code both reproduce.
-import { Bool, Field, Group, Poseidon, PrivateKey, Scalar, Signature } from 'o1js';
+import { Bool, Field, Group, Poseidon, PrivateKey, PublicKey, Scalar, Signature } from 'o1js';
 import * as p from './primitives.js';
 import * as policy from './policy.js';
 import * as bal from './balance.js';
 import { VECTOR_SAMPLES, buildSample, requestVector } from './request-sample.js';
 import { stateFields, type StateMessage } from './state.js';
-import { clearanceFields, signClearance, type ClearanceMessage } from './clearance.js';
+import { clearanceFields, signClearance } from './clearance.js';
 import { WITHDRAWAL_VECTOR_SAMPLES, withdrawalVector } from './withdrawal-sample.js';
 
 const s = (f: Field) => f.toString();
@@ -226,35 +226,38 @@ export function buildVectors() {
   })();
   const stateSignatures = { networkId: 'devnet', cases: stateCases, mainnetState };
 
-  const requestProofs = VECTOR_SAMPLES.map((o) => requestVector(buildSample(o), o));
-
-  // Clearances: the state keys of the state cases, over chain nullifiers, to two destinations.
-  const destinations = [7n, 8n].map((d) => PrivateKey.fromBigInt(d).toPublicKey());
-  const clearanceCases = [
-    { secret: VAULT_SECRETS[0], nullifier: F(chain[0].nullifier), destination: destinations[0] },
-    { secret: VAULT_SECRETS[0], nullifier: F(chain[0].nullifier), destination: destinations[1] },
-    { secret: VAULT_SECRETS[1], nullifier: F(chain[1].nullifier), destination: destinations[0] },
-  ].map((c) => {
-    const key = PrivateKey.fromBigInt(c.secret);
-    const msg: ClearanceMessage = { stateKey: key.toPublicKey(), nullifier: c.nullifier, destination: c.destination };
-    const fields = clearanceFields(msg);
-    const sig = signClearance(key, msg);
+  // Clearances: the state key signs one nullifier and one destination, under the devnet ID.
+  const CLEARANCE_CASES = [
+    { stateSecret: 1n, nullifier: F(chain[0].nullifier), destinationSecret: 77n },
+    { stateSecret: 1n, nullifier: F(chain[1].nullifier), destinationSecret: 77n },
+    { stateSecret: 1n, nullifier: F(chain[0].nullifier), destinationSecret: 78n },
+    { stateSecret: VAULT_SECRETS[1], nullifier: F(chain[2].nullifier), destinationSecret: 78n },
+  ];
+  const key = (k: PublicKey) => ({ x: s(k.x), isOdd: s(k.isOdd.toField()) });
+  const clearanceCases = CLEARANCE_CASES.map((c) => {
+    const stateKey = PrivateKey.fromBigInt(c.stateSecret);
+    const msg = {
+      stateKey: stateKey.toPublicKey(), nullifier: c.nullifier,
+      destination: PrivateKey.fromBigInt(c.destinationSecret).toPublicKey(),
+    };
+    const sig = signClearance(stateKey, msg);
     return {
-      secret: c.secret.toString(),
-      stateKey: { x: s(msg.stateKey.x), isOdd: s(msg.stateKey.isOdd.toField()) },
-      nullifier: s(c.nullifier),
-      destination: { x: s(c.destination.x), isOdd: s(c.destination.isOdd.toField()) },
-      fields: fields.map(s), signature: { r: s(sig.r), s: sig.s.toBigInt().toString() },
+      stateSecret: c.stateSecret.toString(), stateKey: key(msg.stateKey), nullifier: s(c.nullifier),
+      destination: key(msg.destination), fields: clearanceFields(msg).map(s),
+      signature: { r: s(sig.r), s: sig.s.toBigInt().toString() },
     };
   });
+  // The first case signed under the mainnet ID, which a clearance never is: both sides refuse it.
   const mainnetClearance = (() => {
     const base = clearanceCases[0];
-    const sig = signMainnet(BigInt(base.secret), base.fields.map(F));
+    const sig = signMainnet(BigInt(base.stateSecret), base.fields.map(F));
     return { ...base, signature: { r: s(sig.r), s: sig.s.toString() }, networkId: 'mainnet' };
   })();
   const clearances = { networkId: 'devnet', cases: clearanceCases, mainnetClearance };
 
   const withdrawalProofs = WITHDRAWAL_VECTOR_SAMPLES.map(withdrawalVector);
+
+  const requestProofs = VECTOR_SAMPLES.map((o) => requestVector(buildSample(o), o));
 
   return {
     description:

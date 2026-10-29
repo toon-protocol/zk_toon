@@ -1,5 +1,4 @@
-//! The clearance: the zk edge's signature, under the state key, agreeing that one state's nullifier
-//! may close to one destination. Mirrors `o1js/src/clearance.ts`.
+//! The clearance the zk edge signs under the state key: one state's nullifier may close to one destination.
 //!
 //! # Message layout
 //!
@@ -9,48 +8,55 @@
 //! [clearanceTag, stateKey.x, stateKey.isOdd, nullifier, destination.x, destination.isOdd]
 //! ```
 //!
-//! `clearanceTag` is [`tags::CLEARANCE`] read as a field element ([`tag_to_field`]), so a clearance
-//! never passes as a state message. Keys are Mina public keys `(x, isOdd)`, `isOdd` 1 or 0. The
-//! clearance does not carry the amount: the withdrawal proof binds it.
-//!
-//! # Signing
-//!
-//! The state message's rule ([`crate::state`]): Mina Schnorr under the **devnet** network ID with
-//! the chunked nonce, which o1js 3.1.0 and the vault circuit use.
+//! `clearanceTag` is the field of [`crate::tags::CLEARANCE`], so a clearance never passes as a state
+//! message. Keys are Mina public keys `(x, isOdd)`, `isOdd` hashed as 0 or 1. The clearance does not
+//! carry the amount. It is signed like the state message: Mina Schnorr under the **devnet** network
+//! ID with the o1js-compatible chunked nonce.
 use mina_signer::{CompressedPubKey, Keypair, NetworkId, NonceMode, PubKey, Signature, Signer};
 
 use crate::state::Fields;
 use crate::{tag_to_field, tags, Field};
 
-/// What the zk edge signs under the state key to clear a mutual close.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug)]
 pub struct ClearanceMessage {
-    pub state_key: CompressedPubKey,
+    pub state_key_x: Field,
+    pub state_key_is_odd: bool,
     pub nullifier: Field,
-    pub destination: CompressedPubKey,
+    pub destination_x: Field,
+    pub destination_is_odd: bool,
 }
 
 impl ClearanceMessage {
     pub fn new(state_key: &CompressedPubKey, nullifier: Field, destination: &CompressedPubKey) -> Self {
-        Self { state_key: state_key.clone(), nullifier, destination: destination.clone() }
+        Self {
+            state_key_x: state_key.x,
+            state_key_is_odd: state_key.is_odd,
+            nullifier,
+            destination_x: destination.x,
+            destination_is_odd: destination.is_odd,
+        }
     }
 
     /// The six field elements that are signed.
     pub fn to_fields(&self) -> Vec<Field> {
         vec![
             tag_to_field(tags::CLEARANCE),
-            self.state_key.x,
-            Field::from(self.state_key.is_odd as u64),
+            self.state_key_x,
+            Field::from(self.state_key_is_odd as u64),
             self.nullifier,
-            self.destination.x,
-            Field::from(self.destination.is_odd as u64),
+            self.destination_x,
+            Field::from(self.destination_is_odd as u64),
         ]
     }
 }
 
 /// Sign a clearance under the devnet network ID.
 pub fn sign_clearance(keypair: &Keypair, msg: &ClearanceMessage) -> Signature {
-    mina_signer::create_kimchi::<Fields>(NetworkId::TESTNET).sign(keypair, &Fields(msg.to_fields()), NonceMode::Chunked)
+    mina_signer::create_kimchi::<Fields>(NetworkId::TESTNET).sign(
+        keypair,
+        &Fields(msg.to_fields()),
+        NonceMode::Chunked,
+    )
 }
 
 /// Verify a clearance under the devnet network ID. `state_key` must be the key the message names.
@@ -61,7 +67,8 @@ pub fn verify_clearance(sig: &Signature, state_key: &PubKey, msg: &ClearanceMess
 /// Verify under an explicit network ID. Only tests and diagnostics need this: clearances are always
 /// devnet-signed.
 pub fn verify_clearance_on(network: NetworkId, sig: &Signature, state_key: &PubKey, msg: &ClearanceMessage) -> bool {
-    if state_key.into_compressed() != msg.state_key {
+    let named = state_key.into_compressed();
+    if (named.x, named.is_odd) != (msg.state_key_x, msg.state_key_is_odd) {
         return false;
     }
     mina_signer::create_kimchi::<Fields>(network).verify(sig, state_key, &Fields(msg.to_fields()))

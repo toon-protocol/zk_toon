@@ -5,7 +5,7 @@ use mina_curves::pasta::Pallas;
 use mina_signer::{CompressedPubKey, Signature};
 use serde_json::{json, Value};
 use zk_note::balance::Scalar;
-use zk_note::withdrawal::{WithdrawalKind, WithdrawalPublic};
+use zk_note::withdrawal::{WithdrawalPublic, KIND_ESCAPE, KIND_MUTUAL_CLOSE, KIND_OWNERSHIP};
 use zk_note::Field;
 
 use crate::{dec_field, dec_scalar, parse_field, parse_u64, sig_json, Error};
@@ -370,15 +370,21 @@ fn withdrawal_public(f: &[Field]) -> Result<WithdrawalPublic, Error> {
     if f.len() != 13 {
         return Err(Error::Protocol(format!("a withdrawal has 13 public inputs, not {}", f.len())));
     }
+    let kind = u64_of(f[0])?;
+    if ![KIND_MUTUAL_CLOSE, KIND_ESCAPE, KIND_OWNERSHIP].contains(&kind) {
+        return Err(Error::Protocol(format!("withdrawal kind {kind}")));
+    }
     Ok(WithdrawalPublic {
-        kind: WithdrawalKind::try_from(u64_of(f[0])?).map_err(|k| Error::Protocol(format!("withdrawal kind {k}")))?,
-        vault: key_of(f[1], f[2])?,
+        kind,
+        vault_x: f[1],
+        vault_is_odd: bool_of(f[2])?,
         root: f[3],
         nullifier: f[4],
         next_nullifier: f[5],
         amount: u64_of(f[6])?,
         size: u64_of(f[7])?,
-        destination: key_of(f[8], f[9])?,
+        destination_x: f[8],
+        destination_is_odd: bool_of(f[9])?,
         valid_until: u64_of(f[10])?,
         request_time: u64_of(f[11])?,
         conceded: u64_of(f[12])?,

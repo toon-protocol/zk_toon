@@ -64,19 +64,30 @@ describe('clearance', () => {
 
 describe('clearance vectors', () => {
   const message = (c: any): ClearanceMessage => ({
-    stateKey: PrivateKey.fromBigInt(BigInt(c.secret)).toPublicKey(),
+    stateKey: PrivateKey.fromBigInt(BigInt(c.stateSecret)).toPublicKey(),
     nullifier: Field(c.nullifier),
     destination: PublicKey.from({ x: Field(c.destination.x), isOdd: Bool(c.destination.isOdd === '1') }),
   });
   const sig = (c: any) => Signature.fromJSON({ r: c.signature.r, s: c.signature.s });
 
-  it('are signed under the devnet ID and verify inside a circuit', async () => {
+  it('are reproduced, signed under the devnet ID, and verify inside a circuit', async () => {
     expect(file.clearances.networkId).toBe('devnet');
-    expect(file.clearances.cases.length).toBeGreaterThan(0);
-    for (const c of file.clearances.cases) {
+    const cases = file.clearances.cases;
+    expect(cases.length).toBeGreaterThan(0);
+    for (const c of cases) {
       expect(clearanceFields(message(c)).map(String)).toEqual(c.fields);
+      const signed = signClearance(PrivateKey.fromBigInt(BigInt(c.stateSecret)), message(c));
+      expect({ r: signed.r.toString(), s: signed.s.toBigInt().toString() }).toEqual(c.signature);
       expect(await inCircuit(sig(c), message(c))).toBe(true);
     }
+    console.log(`vector cases run: ${cases.length}`);
+  });
+
+  it('each cover one nullifier, one destination and one key', async () => {
+    const [a, otherNullifier, otherDestination, otherKey] = file.clearances.cases;
+    expect(await inCircuit(sig(a), { ...message(a), nullifier: Field(otherNullifier.nullifier) })).toBe(false);
+    expect(await inCircuit(sig(a), { ...message(a), destination: message(otherDestination).destination })).toBe(false);
+    expect(await inCircuit(sig(a), { ...message(a), stateKey: message(otherKey).stateKey })).toBe(false);
   });
 
   it('are refused when signed under the mainnet ID', async () => {

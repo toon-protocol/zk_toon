@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { Field, PrivateKey, Provable, Signature, verify } from 'o1js';
+import { Bool, Field, PrivateKey, Provable, Signature, verify } from 'o1js';
 import { DEPOSIT_SIZES, expiryOf } from './policy.js';
 import { nextAnchor, nullifier } from './primitives.js';
 import { RequestProgram } from './request.js';
@@ -86,6 +86,15 @@ describe('withdrawal proof constraints', () => {
     expect(await holds(mutualClose, s.pub, new WithdrawalPrivate({ ...s.priv, signature: other }))).toBe(false);
     expect(await holds(mutualClose, withPub(s, { root: s.pub.root.add(1) }), s.priv)).toBe(false);
     expect(await holds(mutualClose, withPub(s, { nullifier: nullifier(s.priv.secret, s.priv.prevAnchor) }), s.priv)).toBe(false);
+    // A signed state flagged as genesis.
+    expect(await holds(mutualClose, s.pub, new WithdrawalPrivate({ ...s.priv, isGenesis: Bool(true) }))).toBe(false);
+  });
+
+  it('bind the destination only as a public input', async () => {
+    const s = withdrawalSample({ kind: ownership });
+    const other = PrivateKey.fromBigInt(99n).toPublicKey();
+    expect(await holds(ownership, withPub(s, { destination: other }), s.priv)).toBe(true);
+    expect(s.pub.destination.equals(other).toBoolean()).toBe(false);
   });
 });
 
@@ -134,13 +143,14 @@ describe('escape proof constraints', () => {
 
 describe('withdrawal proof vectors', () => {
   const file = JSON.parse(readFileSync(new URL('../../test-vectors/zk-note.json', import.meta.url), 'utf8'));
-  it('cover a mutual close, an ownership proof and an escape, are reproduced, and satisfy the constraints', async () => {
-    expect(file.withdrawalProofs.map((v: any) => v.kind)).toEqual(['mutualClose', 'ownership', 'escape']);
+  it('cover an ownership proof, a mutual close and an escape, are reproduced, and satisfy the constraints', async () => {
+    expect(file.withdrawalProofs.map((v: any) => Number(v.public.kind))).toEqual([ownership, mutualClose, escape]);
     for (const [i, sample] of WITHDRAWAL_VECTOR_SAMPLES.entries()) {
       expect(withdrawalVector(sample)).toEqual(file.withdrawalProofs[i]);
       const { pub, priv, options } = withdrawalSample(sample.options, sample.before);
       expect(await holds(options.kind, pub, priv)).toBe(true);
     }
+    console.log(`vector cases run: ${WITHDRAWAL_VECTOR_SAMPLES.length}`);
   });
 });
 
@@ -159,5 +169,8 @@ describe('withdrawal proof', () => {
     const owned = await WithdrawalProgram.ownership(own.pub, own.priv);
     expect(await verify(owned.proof, verificationKey)).toBe(true);
     expect(owned.proof.publicInput.kind.toBigInt()).toBe(BigInt(ownership));
+
+    // A proof of one kind cannot be made for the other method.
+    await expect(WithdrawalProgram.ownership(close.pub, close.priv)).rejects.toThrow();
   }, 1_800_000);
 });

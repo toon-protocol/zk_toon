@@ -4,7 +4,7 @@ import { Field, Mina, PrivateKey, Provable, Signature, verify } from 'o1js';
 import * as policy from './policy.js';
 import { signClearance } from './clearance.js';
 import { commitSecret } from './primitives.js';
-import { NullifierSet, VaultAction, batchReducer } from './vault.js';
+import { NullifierSet, REDUCE_BATCH_SIZE, VaultAction, batchReducer } from './vault.js';
 import { balanceOf, now, vaultHarness } from './vault-harness.js';
 import { VaultMirror } from './vault-mirror.js';
 import { WithdrawalKind, WithdrawalProgram } from './withdrawal.js';
@@ -12,6 +12,7 @@ import { buildWithdrawal } from './withdrawal-sample.js';
 
 const [SMALL, MEDIUM] = policy.DEPOSIT_SIZES;
 const MINUTE = policy.MS_PER_MINUTE;
+const MINA = 1_000_000_000n;
 
 // Proofs off: the contract logic runs, but no circuit is proven. The withdrawal program runs its
 // constraints on constants and returns a dummy proof, except where a test compiles it.
@@ -28,12 +29,17 @@ beforeAll(async () => {
 describe('vault setup', () => {
   it('records the state key and treasury once, with the vault account signature', async () => {
     const h = await freshVault({ setup: false });
-    await expect(h.setup([])).rejects.toThrow();
+    await expect(h.setup({ signer: payer.key })).rejects.toThrow(/not signed by the vault/);
+    await expect(h.setup({ signer: h.stateKey })).rejects.toThrow(/not signed by the vault/);
+    // A treasury that has no account would fail every payout to it.
+    await expect(h.setup({ treasury: PrivateKey.random().toPublicKey() })).rejects.toThrow();
     expect(h.vault.stateKey.get().isEmpty().toBoolean()).toBe(true);
     await h.setup();
     expect(h.vault.stateKey.get().toBase58()).toBe(h.stateKey.toPublicKey().toBase58());
     expect(h.vault.treasury.get().toBase58()).toBe(h.treasury.toBase58());
-    await expect(h.setup()).rejects.toThrow(/set up/);
+    await expect(h.setup()).rejects.toThrow(/already set up/);
+    // A second state key is refused too.
+    await expect(h.setup({ key: PrivateKey.random().toPublicKey() })).rejects.toThrow(/already set up/);
   });
 
   it('refuses a mutual close before setup', async () => {
@@ -41,7 +47,7 @@ describe('vault setup', () => {
     const note = await h.deposit();
     await h.reduce();
     const proof = await h.withdrawalProof(note);
-    await expect(h.close(proof)).rejects.toThrow(/not set up/);
+    await expect(h.close(proof)).rejects.toThrow(/setup has not run/);
   });
 });
 
@@ -136,6 +142,23 @@ describe('vault mutual close', () => {
     expect(balanceOf(bob)).toBe(b + SMALL);
   });
 
+  it('pays a full batch of closes in one reduce', async () => {
+    const notes = [];
+    for (let i = 0; i < REDUCE_BATCH_SIZE; i++) notes.push(await h.deposit(SMALL));
+    await h.reduce();
+    const dests = [alice, bob];
+    const proofs = [];
+    for (const [i, note] of notes.entries()) {
+      proofs.push(await h.withdrawalProof(note, { signed: true, balance: BigInt(i + 1) * MINA, destination: dests[i % 2] }));
+    }
+    const before = dests.map(balanceOf);
+    for (const p of proofs) await h.close(p);
+    await h.reduce();
+    const paid = [0n, 0n];
+    proofs.forEach((p, i) => (paid[i % 2] += p.publicInput.amount.toBigInt()));
+    dests.forEach((d, i) => expect(balanceOf(d)).toBe(before[i] + paid[i]));
+  });
+
   it('refuses a missing clearance, or one by another key, over another nullifier or destination', async () => {
     const note = await h.deposit(SMALL);
     await h.reduce();
@@ -147,10 +170,10 @@ describe('vault mutual close', () => {
       h.clearance(pub, { nullifier: pub.nullifier.add(1) }),
       h.clearance(pub, { destination: bob }),
     ];
-    for (const c of refused) await expect(h.close(proof, c)).rejects.toThrow(/clearance/);
+    for (const c of refused) await expect(h.close(proof, c)).rejects.toThrow(/bad clearance/);
     // A proof bound to another destination is refused under the clearance the zk edge gave.
     const elsewhere = await h.withdrawalProof(note, { destination: bob });
-    await expect(h.close(elsewhere, h.clearance(pub))).rejects.toThrow(/clearance/);
+    await expect(h.close(elsewhere, h.clearance(pub))).rejects.toThrow(/bad clearance/);
   });
 
   it('refuses an ownership proof', async () => {
@@ -171,14 +194,14 @@ describe('vault mutual close', () => {
       requestTime: now(), signed: false, balance: 0n, blinding: 1n, stateKey: h.stateKey, destination: alice,
     });
     const { proof } = await WithdrawalProgram.mutualClose(pub, priv);
-    await expect(h.close(proof)).rejects.toThrow(/root/);
+    await expect(h.close(proof)).rejects.toThrow(/root not in the ring/);
 
     // A state signed under another key: the proof names that key as `vault`.
     const other = PrivateKey.random();
     const foreign = await h.withdrawalProof(note, { signed: true, balance: 1n, key: other });
     await expect(h.close(foreign, signClearance(other, {
       stateKey: other.toPublicKey(), nullifier: foreign.publicInput.nullifier, destination: alice,
-    }))).rejects.toThrow(/state key/);
+    }))).rejects.toThrow(/not the state key/);
   });
 
   it('refuses an expired note', async () => {
@@ -207,6 +230,17 @@ describe('vault mutual close timing', () => {
       const proof = await h.withdrawalProof(note, { requestTime });
       await h.send(await h.closeTx(proof, h.clearance(proof.publicInput)));
     }
+  });
+});
+
+// Its own vault, since LocalBlockchain records the actions of a transaction its preconditions reject.
+describe('vault mutual close destination', () => {
+  it('refuses a destination that has no account, which would fail the reduce', async () => {
+    const h = await freshVault();
+    const note = await h.deposit(SMALL);
+    await h.reduce();
+    const proof = await h.withdrawalProof(note, { destination: PrivateKey.random().toPublicKey() });
+    await expect(h.send(await h.closeTx(proof, h.clearance(proof.publicInput)))).rejects.toThrow();
   });
 });
 

@@ -6,7 +6,7 @@ use common::*;
 use zk_note::clearance::{sign_clearance, ClearanceMessage};
 use zk_note::balance::Scalar;
 use zk_note::policy::{DEPOSIT_SIZES, TIERS};
-use zk_note::withdrawal::WithdrawalKind;
+use zk_note::withdrawal::{KIND_ESCAPE, KIND_MUTUAL_CLOSE};
 use zk_note::{commit_secret, Field};
 use zk_toon_tx_builder::{
     Defeat, Deposit, Error, Escape, FailureKind, MutualClose, Note, NoteState, Raise, RequestProof, RequestProofInput,
@@ -66,8 +66,8 @@ fn a_mutual_close_is_accepted_and_pays_at_the_reduce() {
         })
         .unwrap();
     let public = tx.withdrawal.clone().unwrap();
-    assert_eq!((public.kind, public.nullifier, public.amount, public.size), (WithdrawalKind::MutualClose, n, balance, SMALL));
-    assert_eq!(public.destination, chain.alice);
+    assert_eq!((public.kind, public.nullifier, public.amount, public.size), (KIND_MUTUAL_CLOSE, n, balance, SMALL));
+    assert_eq!((public.destination_x, public.destination_is_odd), (chain.alice.x, chain.alice.is_odd));
 
     let alice = b.local().balance(&chain.alice).unwrap();
     let treasury = b.local().balance(&chain.treasury).unwrap();
@@ -97,7 +97,7 @@ fn an_escape_is_accepted_and_spends_both_nullifiers_at_the_reduce() {
 
     let tx = b.escape(&escape).unwrap();
     let public = tx.withdrawal.clone().unwrap();
-    assert_eq!((public.kind, public.nullifier, public.conceded), (WithdrawalKind::Escape, n, MINA / 10));
+    assert_eq!((public.kind, public.nullifier, public.conceded), (KIND_ESCAPE, n, MINA / 10));
     assert_eq!(public.next_nullifier, public.escape_next_nullifier(note.secret));
 
     let before = chain.vault_state(&mut b);

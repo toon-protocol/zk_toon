@@ -8,12 +8,14 @@
 
 pub mod contract;
 pub mod core;
+pub mod evidence_file;
 pub mod fake;
 pub mod journal;
 pub mod ports;
 pub mod types;
 
 pub use crate::core::{decide, Challenger, Config};
+pub use evidence_file::{FileEvidence, ProofVerifier};
 pub use journal::{FileJournal, Journal, MemoryJournal};
 pub use ports::{EvidencePort, PortError, VaultChainPort};
 pub use types::*;

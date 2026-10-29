@@ -52,14 +52,17 @@ export class NoteTree {
 }
 
 /**
- * The witnesses one reduce batch needs: for each deposit, the empty slot it fills, in order. Appends the
+ * The witnesses one reduce batch needs: for each action, the empty slot a deposit fills, in order; an action
+ * that is not a deposit (`undefined`) leaves the tree as it is. Appends the
  * deposits to `tree` as the reduce will, and pads to `batchSize` with the next empty slot's witness: the
  * reduce checks every slot, dummies included, against an empty slot at the next index.
  */
-export function reduceWitnesses(tree: NoteTree, deposits: DepositLike[], batchSize: number): NoteWitness[] {
+export function reduceWitnesses(
+  tree: NoteTree, deposits: (DepositLike | undefined)[], batchSize: number
+): NoteWitness[] {
   const out = deposits.map((d) => {
     const w = tree.witness(tree.nextIndex);
-    tree.append(d);
+    if (d) tree.append(d);
     return w;
   });
   while (out.length < batchSize) out.push(tree.witness(tree.nextIndex));

@@ -10,7 +10,8 @@
     "tx-builder": "tsx src/tx-builder-main.ts",
     "typecheck": "tsc --noEmit",
     "keys": "tsx src/keys-main.ts",
-    "proofs-on": "tsx src/proofs-on-main.ts"
+    "proofs-on": "tsx src/proofs-on-main.ts",
+    "test:lightnet": "vitest run --config vitest.lightnet.config.ts"
   },
   "dependencies": { "o1js": "3.1.0" },
   "devDependencies": { "tsx": "^4.19.0", "typescript": "^5.6.0", "vitest": "^2.1.0", "@types/node": "^22.0.0" }

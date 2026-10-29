@@ -256,7 +256,7 @@ describe('evidence at another nullifier', () => {
     const { note, proof, balance } = await recordedEscape(h);
     const pending = h.mirror.pendingEscape(proof.publicInput.nullifier)!;
     const foreign = await h.requestProof(note, { balance, tier: TOP_TIER, foreignKey: true });
-    await expect(h.raiseTx(pending, foreign, MINA)).rejects.toThrow(/not the vault state key/);
+    await expect(h.raiseTx(pending, foreign, MINA)).rejects.toThrow(/not the state key/);
     const evidence = await h.requestProof(note, { balance, tier: TOP_TIER });
     const misnamed = new PendingEscape({ ...pending, conceded: UInt64.from(1n) });
     await expect(h.raiseTx(misnamed, evidence, MINA)).rejects.toThrow(/no such pending escape/);

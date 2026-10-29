@@ -30,8 +30,9 @@ pub struct Evidence {
     pub nullifier: Nullifier,
     /// The tier `b` the allowance was opened at.
     pub tier: u64,
-    /// What the state actually owed.
-    pub charge: u64,
+    /// What the state actually owed, from the close record. `None` when the allowance never
+    /// closed, and the challenger claims the tier (ADR 0004).
+    pub charge: Option<u64>,
     /// Whether the proof states it is subsidised.
     pub subsidised: bool,
     /// Whether the proof verifies against the published verification key.

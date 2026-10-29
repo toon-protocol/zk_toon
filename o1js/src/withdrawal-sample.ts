@@ -6,7 +6,6 @@ import { DEPOSIT_SIZES, expiryOf } from './policy.js';
 import { commitSecret, nextAnchor, nullifier } from './primitives.js';
 import { stateFields } from './state.js';
 import { WithdrawalKind, WithdrawalPrivate, WithdrawalPublic } from './withdrawal.js';
-import { clearanceFields, signClearance } from './clearance.js';
 import { stateChain } from './request-sample.js';
 
 export interface WithdrawalOptions {
@@ -89,12 +88,15 @@ export function withdrawalSample(over: Partial<Omit<WithdrawalOptions, 'index'>>
 }
 
 /**
- * The samples the shared vector file pins: a mutual close of a signed state, an ownership proof at
- * genesis, and an escape of a signed state conceding part of its balance.
+ * The samples the shared vector file pins, in its order: an ownership proof at genesis and a mutual close
+ * of a signed state (#8), then an escape of a signed state conceding part of its balance (#9).
  */
 export const WITHDRAWAL_VECTOR_SAMPLES: { options: Omit<WithdrawalOptions, 'index'>; before: number }[] = [
-  { options: { ...defaultWithdrawal(WithdrawalKind.mutualClose), signed: true }, before: 5 },
-  { options: { ...defaultWithdrawal(WithdrawalKind.ownership), destination: PrivateKey.fromBigInt(8n).toPublicKey() }, before: 3 },
+  { options: { ...defaultWithdrawal(WithdrawalKind.ownership), destination: PrivateKey.fromBigInt(77n).toPublicKey() }, before: 3 },
+  {
+    options: { ...defaultWithdrawal(WithdrawalKind.mutualClose), signed: true, destination: PrivateKey.fromBigInt(78n).toPublicKey() },
+    before: 5,
+  },
   {
     options: {
       ...defaultWithdrawal(WithdrawalKind.escape), signed: true, conceded: 10_000_000n,
@@ -105,35 +107,23 @@ export const WITHDRAWAL_VECTOR_SAMPLES: { options: Omit<WithdrawalOptions, 'inde
 ];
 
 /**
- * A sample's public inputs, their field layout, and the private values Rust needs to recompute them.
- * A mutual close also carries the clearance the zk edge signs for it.
+ * A sample's public inputs, and the private values Rust needs to recompute the nullifier. `conceded`,
+ * appended by the escape, is listed for an escape only, so the entries made before it keep their bytes.
  */
 export function withdrawalVector(sample: { options: Omit<WithdrawalOptions, 'index'>; before: number }) {
   const { pub, priv, options: o } = withdrawalSample(sample.options, sample.before);
   const str = (f: Field) => f.toString();
   const key = (k: PublicKey) => ({ x: str(k.x), isOdd: str(k.isOdd.toField()) });
-  const clearance = (() => {
-    if (o.kind !== WithdrawalKind.mutualClose) return null;
-    const m = { stateKey: pub.vault, nullifier: pub.nullifier, destination: pub.destination };
-    const sig = signClearance(o.stateKey, m);
-    return { fields: clearanceFields(m).map(str), signature: { r: str(sig.r), s: sig.s.toBigInt().toString() } };
-  })();
   return {
-    kind: WithdrawalKind[o.kind],
     public: {
       kind: str(pub.kind), vault: key(pub.vault), root: str(pub.root), nullifier: str(pub.nullifier),
       nextNullifier: str(pub.nextNullifier), amount: str(pub.amount), size: str(pub.size),
       destination: key(pub.destination), validUntil: str(pub.validUntil), requestTime: str(pub.requestTime),
-      conceded: str(pub.conceded),
+      ...(o.kind === WithdrawalKind.escape ? { conceded: str(pub.conceded) } : {}),
     },
-    fields: WithdrawalPublic.toFields(pub).map(str),
     private: {
-      stateKeySecret: o.stateKey.toBigInt().toString(),
-      secret: str(priv.secret), index: str(priv.index), depositTime: str(priv.depositTime), expiry: str(priv.expiry),
-      blinding: o.blinding.toString(), anchor: str(priv.anchor), isGenesis: priv.isGenesis.toBoolean(),
-      signature: { r: str(priv.signature.r), s: priv.signature.s.toBigInt().toString() },
-      prevNullifier: str(priv.prevNullifier), prevAnchor: str(priv.prevAnchor),
+      secret: str(priv.secret), anchor: str(priv.anchor), isGenesis: priv.isGenesis.toBoolean(),
+      depositTime: str(priv.depositTime), expiry: str(priv.expiry),
     },
-    clearance,
   };
 }
