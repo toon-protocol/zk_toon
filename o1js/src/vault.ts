@@ -14,7 +14,7 @@
 //
 // The vault has no pause: its deploy fixes its account's permissions (ADR 0006, "The vault's account
 // permissions"). The upgrade key can change nothing that touches funds or state while the protocol version
-// stays the same, and its verification key is replaceable only after a Mina hard fork
+// stays the same, and the vault's verification key is replaceable only after a Mina hard fork
 // (`impossibleDuringCurrentVersion`), after a fork notice. No owner action can stop or delay an escape.
 import {
   AccountUpdate, Bool, Experimental, Field, IndexedMerkleMap, Permissions, Poseidon, Provable, PublicKey, Signature,

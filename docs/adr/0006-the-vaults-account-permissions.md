@@ -21,7 +21,7 @@ gives no way to leave it out, so the permissions fence it in.
 | `receive` | `none` | Unchanged. Anyone may credit the vault |
 
 `access` stays `none` because two things conflict. The first design had `access: proof`, so that every update to the
-vault's account runs one of its own methods. It also lets the operator to be able to stake the vault's
+vault's account runs one of its own methods. The same design lets the operator stake the vault's
 balance, and a delegation is an update authorised by the upgrade key's signature. `access` gates every update
 to the account, whatever field it changes, so `proof` would refuse the delegation. Delegation is kept; the
 fields an update could change are what is fenced, and an update that changes none of them can do nothing.
@@ -37,12 +37,12 @@ nonce increment (replay protection comes from the fee payer's nonce).
 
 ## After a hard fork
 
-`impossibleDuringCurrentVersion` is a verification-key permission. o1js documents it as `impossible`
-while the account's transaction version is the current protocol version, and as `signature` once a hard
-fork raises the version
-(`Permissions.VerificationKey.impossibleDuringCurrentVersion`, with `impossibleDuringCurrentVersion` in
-o1js's `Permissions` docs). That is deliberate: a fork changes the proof system, every verification key goes
-stale, and without a way to replace it the vault would freeze every deposit.
+`impossibleDuringCurrentVersion` is a verification-key permission. o1js's doc comment on `Permissions`
+(`lib/mina/v1/account-update.d.ts`) says it is not upgradable "_as long as_ the current transaction version
+is the same as the one on the permission", and: "Once the current transaction version is higher than the
+one on the permission, the permission is treated as `signature`, and the zkApp can be redeployed with a
+signature of the original account owner." That is deliberate: a fork changes the proof system, every
+verification key goes stale, and without a way to replace it the vault would freeze every deposit.
 
 So after a fork the upgrade key can install any verification key, including one that drains the vault.
 The vault can't stop that. The fork notice limits the damage.
