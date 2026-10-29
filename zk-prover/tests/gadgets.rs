@@ -150,3 +150,17 @@ fn signature_verify() {
     signature::verify(&mut cs, &sig, &payer, &msg, prefix, &generator());
     check(&cs, 191, 4286);
 }
+
+#[test]
+fn salted_prefix_states() {
+    let s = poseidon::salted_state("CodaSignature*******");
+    assert_eq!(
+        s[0],
+        Fp::from_str("6547874669265470003564181123405173756111990160585052594027544303901364349512").unwrap()
+    );
+    let s = poseidon::salted_state("TestnetZkappBody****");
+    assert_eq!(
+        s[0],
+        Fp::from_str("20037733640875789833090442509053816933966165101372309054048970230906793051053").unwrap()
+    );
+}

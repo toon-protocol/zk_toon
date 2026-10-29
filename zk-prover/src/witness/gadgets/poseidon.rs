@@ -5,7 +5,7 @@
 //! fields each, with the gate's input state copied into the first. Adding an input into the state
 //! first `seal`s it, which creates a variable only when the sum is not already one.
 
-use ark_ff::{Field as _, One, Zero};
+use ark_ff::{AdditiveGroup as _, Field as _, One, Zero};
 use mina_curves::pasta::Fp;
 use mina_poseidon::pasta::fp_kimchi::static_params;
 
@@ -142,4 +142,48 @@ impl Default for Sponge {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The permutation on constants (`PoseidonBigint.update`'s core), for the salted initial states
+/// o1js computes outside the circuit.
+fn permutation(state: [Fp; 3]) -> [Fp; 3] {
+    *round_table(state).last().unwrap()
+}
+
+/// `Poseidon.update` on constants.
+pub fn update_constant(state: [Fp; 3], input: &[Fp]) -> [Fp; 3] {
+    if input.is_empty() {
+        return permutation(state);
+    }
+    let mut state = state;
+    for block in input.chunks(2) {
+        for (i, x) in block.iter().enumerate() {
+            state[i] += x;
+        }
+        state = permutation(state);
+    }
+    state
+}
+
+/// `prefixToField`: the bits of the prefix's characters, least significant first, as a field
+/// element (`Random_oracle.prefix_to_field`).
+pub fn prefix_to_field(prefix: &str) -> Fp {
+    assert!(prefix.len() * 8 < 255, "prefix too long");
+    let mut acc = Fp::zero();
+    let mut two_k = Fp::one();
+    for byte in prefix.bytes() {
+        assert!(byte < 128, "only ASCII characters are supported");
+        for j in 0..8 {
+            if (byte >> j) & 1 == 1 {
+                acc += two_k;
+            }
+            two_k.double_in_place();
+        }
+    }
+    acc
+}
+
+/// `salt`/`hashWithPrefix`'s state: `update([0, 0, 0], [prefixToField(prefix)])`.
+pub fn salted_state(prefix: &str) -> [Fp; 3] {
+    update_constant([Fp::zero(); 3], &[prefix_to_field(prefix)])
 }

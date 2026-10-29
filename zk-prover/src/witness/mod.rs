@@ -23,6 +23,7 @@ use ark_ff::{BigInteger, BigInteger256, Field as _, One, PrimeField, Zero};
 use mina_curves::pasta::Fp;
 
 pub mod gadgets;
+pub mod account_update;
 pub mod land;
 pub mod pickles;
 

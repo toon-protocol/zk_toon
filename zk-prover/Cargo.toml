@@ -9,9 +9,11 @@ license = "Apache-2.0"
 anyhow = "1"
 ark-ff = "0.5.0"
 base64 = "0.22"
+bs58 = { version = "0.5", features = ["check"] }
 ledger = { git = "https://github.com/toon-protocol/mina-rust", rev = "6feeb3797fff6dba49fd848cb2d6decd63fee1b4", package = "mina-tree" }
 mina-curves = { git = "https://github.com/o1-labs/proof-systems", rev = "ab84160fa2c22290a8506a7742ac1378879fc386" }
 mina-poseidon = { git = "https://github.com/o1-labs/proof-systems", rev = "ab84160fa2c22290a8506a7742ac1378879fc386" }
+mina-signer = { git = "https://github.com/o1-labs/proof-systems", rev = "ab84160fa2c22290a8506a7742ac1378879fc386" }
 mina-p2p-messages = { git = "https://github.com/toon-protocol/mina-rust", rev = "6feeb3797fff6dba49fd848cb2d6decd63fee1b4" }
 num-bigint = "0.4"
 rsexp = "0.2.3"
