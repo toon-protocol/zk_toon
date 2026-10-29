@@ -1036,6 +1036,18 @@ name = "zk-toon-challenger"
 version = "0.1.0"
 
 [[package]]
+name = "zk-toon-tx-builder"
+version = "0.1.0"
+dependencies = [
+ "ark-ec",
+ "ark-ff",
+ "mina-curves",
+ "mina-signer",
+ "serde_json",
+ "zk-note",
+]
+
+[[package]]
 name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
