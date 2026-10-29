@@ -50,7 +50,7 @@ This word means two different things in TOON, so be careful which one is meant:
 
 | Piece | What it does | Written in | Lives in |
 |---|---|---|---|
-| **Vault zkApp** | Holds deposits; deposit, mutual close, escape, raise, defeat, expiry | o1js. Mina zkApps can only be written in o1js. | this repo |
+| **Vault zkApp** | Holds deposits; deposit, mutual close, escape, raise, defeat, expiry sweep (ADR 0005) | o1js. Mina zkApps can only be written in o1js. | this repo |
 | **Circuits** | The request proof (with the optional age statement) and the withdrawal proof | o1js | this repo |
 | **zk-note primitives** | Domain-separated Poseidon hashes, nullifiers and anchors, balance commitments, the signed state message, the per-period nullifier | Rust (`proof-systems`: curves, Poseidon, hasher, signer) | this repo, used by the connector |
 | **Allowances and state advance** | The `zk-note` claim, allowances, the `ZkNoteVault` port, who pays a charge | Rust | connector, #1511 |
