@@ -63,8 +63,16 @@ What a zk edge chooses to spend, each period, on paying for subsidised allowance
 _Avoid_: Treasury, rewards pool, incentive fund
 
 **Subsidy period**:
-The span of time in which each zk note may claim at most one subsidised allowance.
+The span of time in which each zk note may claim at most one subsidised allowance. Periods are whole
+weeks counted from the vault's creation time. A subsidised request proof publishes its period, and
+the zk edge checks it against the vault's creation time and the proof's request time.
 _Avoid_: Epoch, round, claim window
+
+**Per-period nullifier**:
+The value a subsidised request proof publishes so a zk edge can refuse a second claim by one note in
+one subsidy period: derived from the note's secret, index and period, so it is the same for every
+state of the note within a period and different in the next.
+_Avoid_: Claim nullifier, subsidy tag
 
 **Charge**:
 What an allowance actually cost the zk note that opened it, known when the allowance closes. It is

@@ -2,11 +2,11 @@
 // nullifier cancels it, and a raise at its current nullifier lifts its concession to
 // min(claimed, b, balance) (ADR 0004).
 import { beforeAll, describe, expect, it } from 'vitest';
-import { Bool, Mina, UInt64 } from 'o1js';
+import { Mina, UInt64 } from 'o1js';
 import * as policy from './policy.js';
 import { PendingEscape, Vault, batchReducer } from './vault.js';
 import { balanceOf, now, vaultHarness } from './vault-harness.js';
-import { RequestProgram, RequestProof, RequestPublic } from './request.js';
+import { RequestProgram } from './request.js';
 import { WithdrawalKind, WithdrawalProgram, type WithdrawalProof } from './withdrawal.js';
 
 const [SMALL] = policy.DEPOSIT_SIZES;
@@ -31,9 +31,13 @@ beforeAll(async () => {
  * A reduced note, escaped from its state at `step` (0 is genesis) with `balance`, conceding `conceded`
  * to `destination`, and the escape recorded by a reduce.
  */
-async function recordedEscape(h: Harness, o: { step?: number; balance?: bigint; conceded?: bigint } = {}) {
+async function recordedEscape(
+  h: Harness, o: { step?: number; balance?: bigint; conceded?: bigint; oldEnoughForSubsidy?: boolean } = {}
+) {
   const note = await h.deposit(SMALL);
   await h.reduce();
+  // Old enough for a subsidised allowance before it escapes, so the challenge window is still open.
+  if (o.oldEnoughForSubsidy) advance(policy.MIN_SUBSIDY_AGE_MS);
   const step = o.step ?? 1;
   const balance = step === 0 ? SMALL : o.balance ?? 3n * MINA;
   const proof = await h.withdrawalProof(note, {
@@ -86,8 +90,9 @@ describe('defeating an escape', () => {
   });
 
   it('accepts a subsidised request proof at the next nullifier (ADR 0001)', async () => {
-    const { note, proof } = await recordedEscape(h);
-    const evidence = subsidised(await h.requestProof(note, { step: 2, tier: policy.TIERS[0] }));
+    const { note, proof } = await recordedEscape(h, { oldEnoughForSubsidy: true });
+    const evidence = await h.requestProof(note, { step: 2, tier: policy.TIERS[0], subsidised: true });
+    expect(evidence.publicInput.subsidised.toBoolean()).toBe(true);
     await h.defeat(proof.publicInput.nullifier, evidence);
     await h.reduce();
     expect(h.mirror.pendingEscape(proof.publicInput.nullifier)).toBeUndefined();
@@ -142,10 +147,16 @@ describe('raising an escape', () => {
   });
 
   it('refuses a raise from a subsidised request proof (ADR 0001)', async () => {
-    const { note, proof, balance } = await recordedEscape(h);
-    const evidence = subsidised(await h.requestProof(note, { balance, tier: policy.TIERS[0] }));
+    const { note, proof, balance } = await recordedEscape(h, { oldEnoughForSubsidy: true });
+    const evidence = await h.requestProof(note, { balance, tier: policy.TIERS[0], subsidised: true });
+    expect(evidence.publicInput.subsidised.toBoolean()).toBe(true);
+    // The same state, unsubsidised at the same tier, raises.
+    const paid = await h.requestProof(note, { balance, tier: policy.TIERS[0] });
     await expect(h.raiseTx(h.mirror.pendingEscape(proof.publicInput.nullifier)!, evidence, policy.TIERS[0]))
       .rejects.toThrow(/would not increase the concession/);
+    await h.raise(proof.publicInput.nullifier, paid, policy.TIERS[0]);
+    await h.reduce();
+    expect(h.mirror.pendingEscape(proof.publicInput.nullifier)!.conceded.toBigInt()).toBe(policy.TIERS[0]);
   });
 
   it('applies two raises in one reduce only as far as the first: the second names a record already replaced', async () => {
@@ -249,8 +260,3 @@ describe('the reduce with challenges', () => {
     expect(reduce.rows).toBeLessThanOrEqual(2 ** 16);
   });
 });
-
-/** The same evidence, as if the payer had proved it subsidised (only the public input matters with proofs off). */
-function subsidised(p: RequestProof): RequestProof {
-  return new RequestProof({ ...p, publicInput: new RequestPublic({ ...p.publicInput, subsidised: Bool(true) }) });
-}

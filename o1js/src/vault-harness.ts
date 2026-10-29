@@ -143,17 +143,23 @@ export function vaultHarness(Local: Local) {
       },
       /**
        * A request proof of `note`'s state at `step` (0 is genesis, the default 1 its successor) with
-       * `balance`, opening an allowance of `tier` now: the evidence a challenger holds.
+       * `balance`, opening an allowance of `tier` now: the evidence a challenger holds. A subsidised
+       * one counts its period from the vault's creation time.
        */
-      async requestProof(note: Note, o: { step?: number; balance?: bigint; tier: bigint; foreignKey?: boolean }) {
+      async requestProof(
+        note: Note, o: { step?: number; balance?: bigint; tier: bigint; foreignKey?: boolean; subsidised?: boolean }
+      ) {
         const step = o.step ?? 1;
         const index = mirror.indexOf(commitSecret(Field(note.secret)));
-        const { pub, priv } = buildRequest(mirror.tree, index, {
+        const { pub, priv, vaultCreation } = buildRequest(mirror.tree, index, {
           ...defaultSample(), secret: note.secret, size: note.size, depositTime: note.depositTime, requestTime: now(),
           tier: o.tier, signed: step > 0, step, balance: o.balance ?? 3n * 1_000_000_000n,
           vaultSecret: (o.foreignKey ? PrivateKey.random() : stateKey).toBigInt(),
+          subsidy: o.subsidised ? { vaultCreation: vault.creationTime.get().toBigInt() } : undefined,
         });
-        const { proof } = await RequestProgram.unsubsidised(pub, priv);
+        const { proof } = o.subsidised
+          ? await RequestProgram.subsidised(pub, priv, vaultCreation)
+          : await RequestProgram.unsubsidised(pub, priv);
         return proof;
       },
       /** Sends a mutual close and records its action in the mirror. */

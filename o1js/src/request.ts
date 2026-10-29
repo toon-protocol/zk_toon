@@ -1,14 +1,15 @@
-// The unsubsidised request proof: a payer proves that some unspent note in the vault can cover tier `b`,
+// The request proof, unsubsidised or subsidised: a payer proves that some unspent note in the vault can cover tier `b`,
 // without revealing which note. Every derivation comes from primitives.ts, balance.ts and state.ts.
 import { Bool, Field, Group, PublicKey, Scalar, Signature, Struct, ZkProgram } from 'o1js';
 import { rerandomise } from './balance.js';
 import { NoteWitness } from './note-tree.js';
 import { U64_BITS, checkNoteState } from './note-state.js';
-import { authTag } from './primitives.js';
+import { MIN_SUBSIDY_AGE_MS, SUBSIDY_PERIOD_MS, TIERS } from './policy.js';
+import { authTag, periodNullifier } from './primitives.js';
 
 /**
- * The public inputs, in the spec's order (#2). The connector reads these fields, and the subsidised
- * method will share this layout.
+ * The public inputs, in the spec's order (#2). The connector reads these fields, and both methods share
+ * this layout.
  */
 export class RequestPublic extends Struct({
   vault: PublicKey,
@@ -74,6 +75,40 @@ export function checkUnsubsidised(pub: RequestPublic, priv: RequestPrivate) {
   checkRequest(pub, priv);
 }
 
+/**
+ * The subsidised request (ADR 0001): besides the shared checks, the note is at least 7 days old at
+ * `requestTime`, `period` is the whole weeks from `vaultCreation` to `requestTime`, `periodNullifier`
+ * is derived from the note's secret, index and that period, and `b` is the smallest tier.
+ *
+ * `vaultCreation` is a private input, not a public one: the public layout is fixed, and the circuit
+ * cannot read the vault's state. So this proof shows only that `period` is the week of `requestTime`
+ * counted from *some* creation time. What binds it to the vault is the verifier's check that
+ * `period == subsidyPeriod(vault.creationTime, requestTime)`: `period` and `requestTime` are public,
+ * and the vault's creation time is fixed at its init and readable by anyone. The zk edge must make
+ * that check (`subsidyPeriod` in policy.ts, `policy::subsidy_period` in zk-note) before it trusts the
+ * per-period nullifier; the vault itself never needs to, since a subsidised proof never raises and a
+ * defeat does not depend on the period.
+ */
+export function checkSubsidised(pub: RequestPublic, priv: RequestPrivate, vaultCreation: Field) {
+  pub.subsidised.assertTrue();
+  pub.tier.assertEquals(Field(TIERS[0]));
+
+  // Old enough: requestTime - depositTime >= 7 days. checkRequest bounds requestTime and depositTime.
+  pub.requestTime.sub(priv.depositTime).sub(Field(MIN_SUBSIDY_AGE_MS)).toBits(U64_BITS);
+
+  // The period: period * week <= requestTime - vaultCreation < (period + 1) * week. Each side is
+  // bounded to 64 bits, so a request before the creation time, or another period, wraps and fails.
+  vaultCreation.toBits(U64_BITS);
+  pub.period.toBits(U64_BITS);
+  const elapsed = pub.requestTime.sub(vaultCreation);
+  const weekStart = pub.period.mul(Field(SUBSIDY_PERIOD_MS));
+  elapsed.sub(weekStart).toBits(U64_BITS);
+  weekStart.add(Field(SUBSIDY_PERIOD_MS - 1n)).sub(elapsed).toBits(U64_BITS);
+
+  periodNullifier(priv.secret, priv.index, pub.period).assertEquals(pub.periodNullifier);
+  checkRequest(pub, priv);
+}
+
 export const RequestProgram = ZkProgram({
   name: 'zk-toon-request',
   publicInput: RequestPublic,
@@ -82,6 +117,12 @@ export const RequestProgram = ZkProgram({
       privateInputs: [RequestPrivate],
       async method(pub: RequestPublic, priv: RequestPrivate) {
         checkUnsubsidised(pub, priv);
+      },
+    },
+    subsidised: {
+      privateInputs: [RequestPrivate, Field],
+      async method(pub: RequestPublic, priv: RequestPrivate, vaultCreation: Field) {
+        checkSubsidised(pub, priv, vaultCreation);
       },
     },
   },

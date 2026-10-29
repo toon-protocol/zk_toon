@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { Bool, Field, Group, PrivateKey, Provable, Scalar, Signature, verify } from 'o1js';
 import { commit, rerandomise } from './balance.js';
 import { TIERS, expiryOf } from './policy.js';
-import { authTag, commitSecret, genesisAnchor, nextAnchor, nullifier } from './primitives.js';
-import { RequestPrivate, RequestProgram, RequestPublic, checkUnsubsidised } from './request.js';
+import { authTag, commitSecret, genesisAnchor, nextAnchor, nullifier, periodNullifier } from './primitives.js';
+import { RequestPrivate, RequestProgram, RequestPublic, checkSubsidised, checkUnsubsidised } from './request.js';
 import { VECTOR_SAMPLES, buildSample, defaultSample, requestVector, type SampleOptions } from './request-sample.js';
 import { stateFields } from './state.js';
 
@@ -15,6 +15,19 @@ const holds = async (pub: RequestPublic, priv: RequestPrivate) => {
       const p = Provable.witness(RequestPublic, () => pub);
       const w = Provable.witness(RequestPrivate, () => priv);
       checkUnsubsidised(p, w);
+    });
+    return true;
+  } catch {
+    return false;
+  }
+};
+const holdsSubsidised = async (pub: RequestPublic, priv: RequestPrivate, vaultCreation: Field) => {
+  try {
+    await Provable.runAndCheck(() => {
+      const p = Provable.witness(RequestPublic, () => pub);
+      const w = Provable.witness(RequestPrivate, () => priv);
+      const c = Provable.witness(Field, () => vaultCreation);
+      checkSubsidised(p, w, c);
     });
     return true;
   } catch {
@@ -149,14 +162,99 @@ describe('request proof constraints', () => {
   });
 });
 
+describe('subsidised request proof constraints', () => {
+  const DAY = 86_400_000n;
+  const { depositTime } = defaultSample();
+  // The vault was created 10 days before the deposit; the default request is 8 days after it.
+  const vaultCreation = depositTime - 10n * DAY;
+  const subsidisedSample = (o: Partial<SampleOptions> = {}) =>
+    sample({ tier: TIERS[0], subsidy: { vaultCreation }, ...o });
+  const ok = (s: ReturnType<typeof sample>) => holdsSubsidised(s.pub, s.priv, Field(vaultCreation));
+
+  it('hold for a note 7 or more days old, at the smallest tier, in the period of its request time', async () => {
+    const s = subsidisedSample();
+    expect(s.pub.subsidised.toBoolean()).toBe(true);
+    // 18 days after creation is the third week: period 2.
+    expect(s.pub.period.toBigInt()).toBe(2n);
+    expect(s.pub.periodNullifier.toBigInt()).toBe(periodNullifier(s.priv.secret, s.priv.index, Field(2)).toBigInt());
+    expect(await ok(s)).toBe(true);
+    expect(await ok(subsidisedSample({ signed: true }))).toBe(true);
+    // Exactly 7 days old is old enough.
+    expect(await ok(subsidisedSample({ requestTime: depositTime + 7n * DAY }))).toBe(true);
+  });
+
+  it('fail for a note younger than 7 days', async () => {
+    for (const requestTime of [depositTime + 7n * DAY - 1n, depositTime + DAY, depositTime]) {
+      expect(await ok(subsidisedSample({ requestTime }))).toBe(false);
+    }
+  });
+
+  it('fail for a tier above the smallest', async () => {
+    for (const tier of TIERS.slice(1)) expect(await ok(subsidisedSample({ tier }))).toBe(false);
+  });
+
+  it('fail for a wrong period number', async () => {
+    const s = subsidisedSample();
+    for (const period of [1n, 3n, 0n]) {
+      const pub = withPub(s, { period: Field(period), periodNullifier: periodNullifier(s.priv.secret, s.priv.index, Field(period)) });
+      expect(await holdsSubsidised(pub, s.priv, Field(vaultCreation))).toBe(false);
+    }
+    // The last instant of a week is still that week, and its first instant is the next.
+    const week = 7n * DAY;
+    const end = vaultCreation + 3n * week - 1n;
+    expect(subsidisedSample({ requestTime: end }).pub.period.toBigInt()).toBe(2n);
+    expect(await ok(subsidisedSample({ requestTime: end }))).toBe(true);
+    expect(subsidisedSample({ requestTime: end + 1n }).pub.period.toBigInt()).toBe(3n);
+    expect(await ok(subsidisedSample({ requestTime: end + 1n }))).toBe(true);
+    const late = subsidisedSample({ requestTime: end + 1n });
+    const stale = withPub(late, { period: Field(2), periodNullifier: periodNullifier(late.priv.secret, late.priv.index, Field(2)) });
+    expect(await holdsSubsidised(stale, late.priv, Field(vaultCreation))).toBe(false);
+    // A request time before the vault's creation has no period.
+    expect(await holdsSubsidised(s.pub, s.priv, Field(s.pub.requestTime.toBigInt() + 1n))).toBe(false);
+  });
+
+  it('fail for a per-period nullifier of another period, index or secret', async () => {
+    const s = subsidisedSample();
+    for (const pn of [
+      periodNullifier(s.priv.secret, s.priv.index, Field(1)),
+      periodNullifier(s.priv.secret, s.priv.index.add(1), Field(2)),
+      periodNullifier(Field(31337), s.priv.index, Field(2)),
+    ]) {
+      expect(await holdsSubsidised(withPub(s, { periodNullifier: pn }), s.priv, Field(vaultCreation))).toBe(false);
+    }
+  });
+
+  it('fail when not flagged subsidised', async () => {
+    const s = subsidisedSample();
+    expect(await holdsSubsidised(withPub(s, { subsidised: Bool(false) }), s.priv, Field(vaultCreation))).toBe(false);
+  });
+
+  it('carry one per-period nullifier for two proofs from one note in one period, and another in the next', async () => {
+    const week = 7n * DAY;
+    const first = subsidisedSample({ requestTime: depositTime + 7n * DAY, signed: false });
+    const second = subsidisedSample({ requestTime: vaultCreation + 3n * week - 1n, signed: true, step: 3 });
+    const next = subsidisedSample({ requestTime: vaultCreation + 3n * week, signed: true, step: 3 });
+    for (const s of [first, second, next]) expect(await ok(s)).toBe(true);
+    // Different states, so different nullifiers: only the per-period nullifier links the two claims.
+    expect(first.pub.nullifier.toBigInt()).not.toBe(second.pub.nullifier.toBigInt());
+    expect(first.pub.periodNullifier.toBigInt()).toBe(second.pub.periodNullifier.toBigInt());
+    expect(next.pub.periodNullifier.toBigInt()).not.toBe(second.pub.periodNullifier.toBigInt());
+  });
+});
+
 describe('request proof', () => {
-  it('compiles, then proves and verifies a genesis and a signed request', async () => {
+  it('compiles, then proves and verifies a genesis and a signed request, and a subsidised one', async () => {
     const { verificationKey } = await RequestProgram.compile();
     for (const s of [sample(), signedSample()]) {
       const { proof } = await RequestProgram.unsubsidised(s.pub, s.priv);
       expect(await verify(proof, verificationKey)).toBe(true);
       expect(proof.publicInput.nullifier.toString()).toBe(s.pub.nullifier.toString());
     }
+    const sub = signedSample({ tier: TIERS[0], subsidy: { vaultCreation: defaultSample().depositTime - 10n * 86_400_000n } });
+    const { proof } = await RequestProgram.subsidised(sub.pub, sub.priv, sub.vaultCreation);
+    expect(await verify(proof, verificationKey)).toBe(true);
+    expect(proof.publicInput.subsidised.toBoolean()).toBe(true);
+    expect(proof.publicInput.periodNullifier.toString()).toBe(sub.pub.periodNullifier.toString());
   }, 900_000);
 });
 
@@ -167,7 +265,12 @@ describe('request proof vectors', () => {
     for (const [i, o] of VECTOR_SAMPLES.entries()) {
       const s = buildSample(o);
       expect(requestVector(s, o)).toEqual(file.requestProofs[i]);
-      expect(await holds(s.pub, s.priv)).toBe(true);
+      if (o.subsidy) expect(await holdsSubsidised(s.pub, s.priv, s.vaultCreation)).toBe(true);
+      else expect(await holds(s.pub, s.priv)).toBe(true);
     }
+    // Both kinds are pinned, subsidised in two periods.
+    const periods = file.requestProofs.filter((e: any) => e.public.subsidised).map((e: any) => e.public.period);
+    expect(file.requestProofs.some((e: any) => !e.public.subsidised)).toBe(true);
+    expect(new Set(periods).size).toBeGreaterThanOrEqual(2);
   });
 });
