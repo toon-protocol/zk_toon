@@ -3,6 +3,7 @@ name = "zk-prover"
 version = "0.1.0"
 edition = "2021"
 description = "Kimchi step prover for o1js circuits, on the pinned mina-rust fork"
+license = "Apache-2.0"
 
 [dependencies]
 anyhow = "1"

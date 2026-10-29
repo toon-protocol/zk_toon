@@ -1,4 +1,4 @@
-//! The verifier accepts o1js's real `land` proof and refuses a changed public input.
+//! The verifier accepts o1js's real `land` proof and refuses a changed proof or public input.
 
 use std::io::Read;
 
@@ -39,6 +39,21 @@ fn verifies_o1js_land_proof_and_refuses_tampering() {
     let mut tampered = public.clone();
     *tampered.last_mut().unwrap() += Fp::from(1u64);
     assert!(!verify(&vk, &tampered, &proof));
+
+    // A changed `alpha` still parses, but is no longer the proof's challenge.
+    let tampered = tamper_alpha(f["proof"].as_str().unwrap());
+    let tampered = WrapProof::from_o1js_base64(&tampered).unwrap();
+    assert!(!verify(&vk, &public, &tampered));
+}
+
+fn tamper_alpha(b64: &str) -> String {
+    use base64::{engine::general_purpose::URL_SAFE, Engine as _};
+    let sexp = String::from_utf8(URL_SAFE.decode(b64).unwrap()).unwrap();
+    let start = sexp.find("(alpha((inner(").unwrap() + "(alpha((inner(".len();
+    let limb = &sexp[start..start + 16];
+    let changed = format!("{:016x}", u64::from_str_radix(limb, 16).unwrap() ^ 1);
+    let sexp = format!("{}{changed}{}", &sexp[..start], &sexp[start + 16..]);
+    URL_SAFE.encode(sexp)
 }
 
 fn ledger_hash(vk: &ledger::VerificationKey) -> String {

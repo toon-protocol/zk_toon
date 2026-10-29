@@ -1,7 +1,8 @@
 //! Verify an o1js ZkProgram proof under a verification key.
 //!
-//! Derived from `toon-protocol/zk-note-vectors` `rust/mesa-toon-1512` (connector#1512), which
-//! builds on mina-rust (Apache-2.0).
+//! Derived from `toon-protocol/zk-note-vectors` `rust/mesa-toon-1512/src/main.rs` at commit
+//! `384a0907078edb50ff840805a7011cae055c28b8` (connector#1512), which builds on mina-rust.
+//! Licensed under Apache-2.0; see `LICENSE-APACHE` and `NOTICE`.
 
 use std::str::FromStr;
 
@@ -19,9 +20,6 @@ use mina_p2p_messages::{
         PicklesProofProofsVerifiedMaxStableV2,
     },
 };
-
-/// A program's verification key.
-pub use ledger::VerificationKey as ProgramVk;
 
 /// A Pickles proof, as the side-loaded verifier reads it (at `maxProofsVerified` 2).
 pub struct WrapProof(PicklesProofProofsVerified2ReprStableV2);

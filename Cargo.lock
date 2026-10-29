@@ -3944,9 +3944,13 @@ name = "zk-prover"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ark-ff",
+ "base64",
  "flate2",
  "mina-curves",
+ "mina-p2p-messages",
  "mina-tree",
+ "rsexp",
  "serde_json",
 ]
 
