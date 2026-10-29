@@ -22,7 +22,8 @@ export interface SampleOptions {
   blinding: bigint;
   rerandom: bigint;
   vaultSecret: bigint;
-  ctx: { edge: bigint; sessionKeyX: bigint; sessionKeyIsOdd: boolean; expiry: bigint };
+  /** The edge is the vault key's x-coordinate, the key the zk edge signs state under. */
+  ctx: { sessionKeyX: bigint; sessionKeyIsOdd: boolean; expiry: bigint };
 }
 
 export const defaultSample = (): SampleOptions => {
@@ -31,7 +32,7 @@ export const defaultSample = (): SampleOptions => {
     secret: 123456789012345678901234567890n, before: 3, size: DEPOSIT_SIZES[0], depositTime,
     requestTime: depositTime + 8n * 86_400_000n, tier: TIERS[1], signed: false,
     balance: 4_000_000_000n, blinding: 777_000_111n, rerandom: 424_242n, vaultSecret: 1n,
-    ctx: { edge: 424242n, sessionKeyX: 31337n, sessionKeyIsOdd: true, expiry: depositTime + 9n * 86_400_000n },
+    ctx: { sessionKeyX: 31337n, sessionKeyIsOdd: true, expiry: depositTime + 9n * 86_400_000n },
   };
 };
 
@@ -48,14 +49,21 @@ export interface Sample {
   context: RequestContext;
 }
 
-export function buildSample(o: SampleOptions): Sample {
+/**
+ * `existing` is a tree that already holds the note, at `index` (a vault's own); otherwise a tree is built
+ * with `o.before` other deposits ahead of the note.
+ */
+export function buildSample(o: SampleOptions, existing?: { tree: NoteTree; index: bigint }): Sample {
   const secret = F(o.secret);
   const commitment = commitSecret(secret);
-  const tree = new NoteTree();
-  for (let i = 0; i < o.before; i++) {
-    tree.append({ commitment: commitSecret(F(BigInt(i + 1))), size: F(DEPOSIT_SIZES[0]), depositTime: F(o.depositTime) });
+  const tree = existing?.tree ?? new NoteTree();
+  let index = existing?.index ?? 0n;
+  if (!existing) {
+    for (let i = 0; i < o.before; i++) {
+      tree.append({ commitment: commitSecret(F(BigInt(i + 1))), size: F(DEPOSIT_SIZES[0]), depositTime: F(o.depositTime) });
+    }
+    index = tree.append({ commitment, size: F(o.size), depositTime: F(o.depositTime) });
   }
-  const index = tree.append({ commitment, size: F(o.size), depositTime: F(o.depositTime) });
 
   const vaultKey = PrivateKey.fromBigInt(o.vaultSecret);
   const vault = vaultKey.toPublicKey();
@@ -75,7 +83,7 @@ export function buildSample(o: SampleOptions): Sample {
   }
 
   const context: RequestContext = {
-    edge: F(o.ctx.edge), sessionKeyX: F(o.ctx.sessionKeyX), sessionKeyIsOdd: Bool(o.ctx.sessionKeyIsOdd),
+    edge: vault.x, sessionKeyX: F(o.ctx.sessionKeyX), sessionKeyIsOdd: Bool(o.ctx.sessionKeyIsOdd),
     tier: F(o.tier), expiry: F(o.ctx.expiry),
   };
   const n = nullifier(secret, anchor);
@@ -102,6 +110,8 @@ export function requestVector(s: Sample, o: SampleOptions) {
   const str = (f: Field) => f.toString();
   const pt = (g: Group) => ({ x: str(g.x), y: str(g.y) });
   return {
+    /** The public input as o1js flattens it into a JsonProof's `publicInput`, in `RequestPublic`'s field order. */
+    publicInput: RequestPublic.toFields(s.pub).map(str),
     public: {
       vault: { x: str(s.pub.vault.x), isOdd: str(s.pub.vault.isOdd.toField()) },
       root: str(s.pub.root), requestTime: str(s.pub.requestTime), tier: str(s.pub.tier),

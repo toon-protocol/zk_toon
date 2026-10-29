@@ -2,6 +2,7 @@
 name = "zk-note"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "zk-note primitives: the hashes, nullifiers, anchors and period arithmetic the vault circuits check"
 
 [dependencies]

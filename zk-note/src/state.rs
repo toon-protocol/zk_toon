@@ -46,7 +46,7 @@ impl StateMessage {
 }
 
 #[derive(Clone)]
-struct Fields(Vec<Field>);
+pub(crate) struct Fields(pub(crate) Vec<Field>);
 
 impl Hashable for Fields {
     type D = NetworkId;

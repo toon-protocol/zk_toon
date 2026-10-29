@@ -11,6 +11,7 @@ export const TAGS = {
   anchor: 'toon.zk.anchor.v1',
   authTag: 'toon.zk.auth-tag.v1',
   periodNullifier: 'toon.zk.period-nullifier.v1',
+  clearance: 'toon.zk.clearance.v1',
 } as const;
 
 export function tagToBigint(tag: string): bigint {
@@ -44,7 +45,7 @@ export const nullifier = (secret: Field, anchor: Field) =>
 export const nextAnchor = (nullifierValue: Field) => hashWithTag(TAGS.anchor, [nullifierValue]);
 
 export interface RequestContext {
-  /** The zk edge's identity. */
+  /** The zk edge's identity: the x-coordinate of the vault key it signs state under. */
   edge: Field;
   /** The session key's x coordinate and whether y is odd (hashed as 0 or 1). */
   sessionKeyX: Field;
