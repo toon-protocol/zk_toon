@@ -3,7 +3,7 @@ import { AccountUpdate, Field, Mina, PrivateKey, UInt64, Unconstrained } from 'o
 import * as policy from './policy.js';
 import { commitSecret, leaf } from './primitives.js';
 import { DepositLike, NoteTree, emptyNoteRoot, reduceWitnesses } from './note-tree.js';
-import { NullifierSet, PendingEscapes, REDUCE_BATCH_SIZE, ROOT_RING_LENGTH, SLOT_MS, Vault, batchReducer } from './vault.js';
+import { NullifierSet, PendingEscapes, REDUCE_BATCH_SIZE, ROOT_RING_LENGTH, SLOT_MS, VAULT_URI, Vault, batchReducer } from './vault.js';
 
 const [SMALL, MEDIUM] = policy.DEPOSIT_SIZES;
 
@@ -64,7 +64,7 @@ describe('vault deposit path', () => {
     await batchReducer.compile();
     const tx = await Mina.transaction(deployer, async () => {
       AccountUpdate.fundNewAccount(deployer);
-      await vault.deploy();
+      await vault.deploy({ zkappUri: VAULT_URI });
     });
     await tx.prove();
     await tx.sign([deployer.key, zkappKey]).send();

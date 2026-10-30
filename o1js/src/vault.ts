@@ -12,10 +12,10 @@
 // of the expired notes it passes, and dispatches a sweep; the reduce pays the treasury what those notes
 // left in the vault, `expired − claimed − swept`, without learning which note was withdrawn (ADR 0005).
 //
-// The vault has no pause: its deploy makes its permissions and timing unchangeable, and its verification
-// key changeable only across a Mina hard fork (`impossibleDuringCurrentVersion`: the key may be reset
-// once the protocol version changes, so a vault can survive a fork's new proof system). No owner action
-// can stop or delay an escape.
+// The vault has no pause: its deploy fixes its account's permissions (ADR 0006, "The vault's account
+// permissions"). The upgrade key can change nothing that touches funds or state while the protocol version
+// stays the same, and the vault's verification key is replaceable only after a Mina hard fork
+// (`impossibleDuringCurrentVersion`), after a fork notice. No owner action can stop or delay an escape.
 import {
   AccountUpdate, Bool, Experimental, Field, IndexedMerkleMap, Permissions, Poseidon, Provable, PublicKey, Signature,
   SmartContract, State, Struct, UInt32, UInt64, Unconstrained, declareMethods, declareState,
@@ -31,6 +31,9 @@ import { tagToBigint } from './primitives.js';
 export const ROOT_RING_LENGTH = 8;
 /** Mesa slots are 90 s. */
 export const SLOT_MS = 90_000n;
+
+/** The zkApp URI the shared harnesses deploy a vault with: the location of its fork notices. */
+export const VAULT_URI = 'https://example.org/toon-vault';
 /**
  * Actions folded per reduce. A reduce sends two account updates per action (a close's two payouts),
  * so a full batch is 8 unsigned updates: 4 pairs, plus the fee payer and the vault, 6 of Mina's 16
@@ -290,14 +293,30 @@ export class Vault extends SmartContract {
 
   events = { escape: EscapeUpdate };
 
-  /** Deploys with the verification key, permissions and timing locked: the vault has no pause. */
-  async deploy(args?: Parameters<SmartContract['deploy']>[0]) {
+  /**
+   * Deploys with the account's permissions fixed (ADR 0006) and its zkApp URI set, once: the URI names where
+   * fork notices appear. The vault has no pause.
+   */
+  async deploy({ zkappUri, ...args }: NonNullable<Parameters<SmartContract['deploy']>[0]> & { zkappUri: string }) {
     await super.deploy(args);
+    this.account.zkappUri.set(zkappUri);
     this.account.permissions.set({
-      ...Permissions.default(),
+      editState: Permissions.proof(),
+      send: Permissions.proof(),
+      editActionState: Permissions.proof(),
+      // Not `proof`: that would refuse the upgrade key's delegation too (ADR 0006). An update with no change is harmless.
+      access: Permissions.none(),
+      receive: Permissions.none(),
+      // The upgrade key can replace the contract only after a hard fork, and only after a fork notice.
       setVerificationKey: Permissions.VerificationKey.impossibleDuringCurrentVersion(),
       setPermissions: Permissions.impossible(),
       setTiming: Permissions.impossible(),
+      incrementNonce: Permissions.impossible(),
+      setZkappUri: Permissions.impossible(),
+      setVotingFor: Permissions.impossible(),
+      setTokenSymbol: Permissions.impossible(),
+      // Deliberate: the operator may stake the vault's balance. Delegating can't move funds.
+      setDelegate: Permissions.signature(),
     });
   }
 
@@ -340,7 +359,7 @@ export class Vault extends SmartContract {
     this.depositSizes.getAndRequireEquals().has(size).assertTrue('not a deposit size');
     this.network.timestamp.requireBetween(depositTime, depositTime.add(UInt64.from(SLOT_MS)));
     const payer = AccountUpdate.createSigned(this.sender.getAndRequireSignature());
-    payer.send({ to: this.address, amount: size });
+    payer.send({ to: this, amount: size });
     batchReducer.dispatch(VaultAction.deposit(commitment, size, depositTime));
   }
 

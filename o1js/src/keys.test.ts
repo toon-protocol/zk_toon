@@ -7,7 +7,7 @@ import { buildKeys } from './keys.js';
 import { PROOFS_ON } from './proofs-on.js';
 import { RequestProgram } from './request.js';
 import { defaultSample, buildSample } from './request-sample.js';
-import { Vault } from './vault.js';
+import { VAULT_URI, Vault } from './vault.js';
 
 const o1jsVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).dependencies.o1js;
 
@@ -26,7 +26,7 @@ describe('the published keys', () => {
     const vault = new Vault(vaultKey.toPublicKey());
     const tx = await Mina.transaction(payer, async () => {
       AccountUpdate.fundNewAccount(payer);
-      await vault.deploy();
+      await vault.deploy({ zkappUri: VAULT_URI });
     });
     await tx.prove();
     await tx.sign([payer.key, vaultKey]).send();

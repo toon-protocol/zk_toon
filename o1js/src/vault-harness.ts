@@ -6,7 +6,7 @@ import * as policy from './policy.js';
 import { signClearance } from './clearance.js';
 import { commitSecret } from './primitives.js';
 import {
-  CLOSE_WINDOW_MS, PendingEscape, SWEEP_BATCH_SIZE, SweptNote, Vault, VaultAction, batchReducer, setupFields,
+  CLOSE_WINDOW_MS, PendingEscape, SWEEP_BATCH_SIZE, SweptNote, VAULT_URI, Vault, VaultAction, batchReducer, setupFields,
 } from './vault.js';
 import { VaultMirror } from './vault-mirror.js';
 import { WithdrawalKind, WithdrawalProgram, WithdrawalProof, WithdrawalPublic } from './withdrawal.js';
@@ -89,7 +89,7 @@ export function vaultHarness(Local: Local) {
     batchReducer.setContractInstance(vault);
     const tx = await Mina.transaction(deployer, async () => {
       AccountUpdate.fundNewAccount(deployer);
-      await vault.deploy();
+      await vault.deploy({ zkappUri: VAULT_URI });
     });
     await tx.prove();
     await tx.sign([deployer.key, zkappKey]).send();

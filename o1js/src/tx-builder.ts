@@ -11,7 +11,7 @@ import { commit, rerandomise } from './balance.js';
 import { authTag, commitSecret, genesisAnchor, nextAnchor, nullifier } from './primitives.js';
 import { RequestPrivate, RequestProgram, RequestProof, RequestPublic, subsidyPeriodHolds } from './request.js';
 import { expiryOf } from './policy.js';
-import { PendingEscape, PendingEscapes, Vault, batchReducer, setupFields } from './vault.js';
+import { PendingEscape, PendingEscapes, VAULT_URI, Vault, batchReducer, setupFields } from './vault.js';
 import { VaultKeeper, chainNow, escapeEvents, pendingEscapesView, vaultView } from './vault-view.js';
 import type { VaultMirror } from './vault-mirror.js';
 import { WithdrawalKind, WithdrawalPrivate, WithdrawalProgram, WithdrawalPublic } from './withdrawal.js';
@@ -398,7 +398,7 @@ export async function createBuilder(options: BuilderOptions) {
       batchReducer.setContractInstance(vault);
       const deploy = await Mina.transaction(deployer, async () => {
         AccountUpdate.fundNewAccount(deployer);
-        await vault.deploy();
+        await vault.deploy({ zkappUri: VAULT_URI });
       });
       await deploy.prove();
       await deploy.sign([deployer.key, zkappKey]).send();
