@@ -27,8 +27,11 @@ zcat ../zk-prover/fixtures/w003_cs003.json.gz | cmp - /tmp/land-dump/w003_cs003.
 What each fixture is: `cs003` is `land`'s step circuit, `cs004` `setup`'s and `cs005` the wrap circuit both
 share. `w003` and `w001` are o1js's witnesses for the `land` and `setup` step circuits, `w004` and `w002` its
 wrap witnesses for the step proofs `stepproof002` and `stepproof001`. `inputs.json` holds the program's
-verification key data and hash, `land_proof.json` and `setup_proof.json` o1js's final proofs. (`land-step-map.txt` comes from `trace-land.mjs`, below.)
-The circuits (`cs00N_*`), the step witnesses (`w001`, `w003`) and `inputs.json` are byte-identical on a rerun.
+verification key data and hash, `land_proof.json` and `setup_proof.json` o1js's final proofs.
+`land-step-map.txt` (from `step-map.mjs`, run by `--write`) names the o1js call site of each of `w003`'s
+variables, for `zk-prover`'s witness tests.
+The circuits (`cs00N_*`), the step witnesses (`w001`, `w003`), `inputs.json` and `land-step-map.txt` are
+byte-identical on a rerun.
 Two things are pinned so a rerun is byte-identical: the fee payer (o1js picks a random one) and
 the blinding of each account update's `callData` (`Fp.random`).
 
