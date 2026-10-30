@@ -30,7 +30,7 @@ const FEE = 100_000_000;
 export type Outcome = { status: 'included' | 'rejected'; errors: string[] };
 
 /** Sends a signed, proved command and waits for its block. */
-async function submit(tx: Mina.Transaction<false, false>, keys: PrivateKey[]): Promise<Outcome> {
+export async function submit(tx: Mina.Transaction<false, false>, keys: PrivateKey[]): Promise<Outcome> {
   await tx.prove();
   const sent = await tx.sign(keys).safeSend();
   if (sent.status === 'rejected') return { status: 'rejected', errors: sent.errors.map(String) };

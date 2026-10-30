@@ -57,3 +57,21 @@ still matters: the new action state is accepted, and it was none of the five bef
 For a cursor checked this way, as `collect` would check `reduce`'s `actionCursor` (connector#1553),
 this means an action-state precondition alone does not reject a cursor that is up to four dispatch
 slots stale.
+
+`vk-ordering.lightnet.ts` (#35) answers this question: does Mina check an account update's proof against a
+verification key that an earlier account update in the same command installed? `VkProbeV1` and
+`VkProbeV2` have different keys. The zkApp is deployed with V1 and `setVerificationKey: signature`. Each
+command holds a signed update that sets V2's key (or none), then a call to `resume`, proved against V1
+or V2. V2's `resume` sets `x` to 2.
+
+| Update 1 | `resume` proved against | Result |
+| --- | --- | --- |
+| sets V2's key | V2 | applied: the account's key hash is V2's and `x` is 2 |
+| sets V2's key | V1 | rejected at `safeSend`: `Invalid_proof (Pickles.verify dlog_check)` |
+| none (control) | V2 | rejected at `safeSend`: `Invalid_proof (Pickles.verify dlog_check)` |
+
+The ordering holds: the proof is checked against the key the command installed. Both rejections happen
+before a block, and the tests check the key and `x` are unchanged afterwards. The control shows the keys
+really differ. This confirms the order within a command only. It does not exercise
+`impossibleDuringCurrentVersion` and its fallback to `signature` after a hard fork, which a lightnet
+can't do. There is no LocalBlockchain counterpart: with proofs off, both circuits get the same dummy key.
