@@ -13,7 +13,7 @@ describe('verification key ordering within one zkApp command (proofs-on lightnet
   const address = zkappKey.toPublicKey();
   let keys: { v1: Key; v2: Key };
   /** The zkApp's on-chain key hash and state after the last block. */
-  const refresh = async () => {
+  const onChain = async () => {
     await fetchAccount({ publicKey: address });
     return cachedAccount(address);
   };
@@ -25,28 +25,33 @@ describe('verification key ordering within one zkApp command (proofs-on lightnet
   });
   afterAll(release);
 
-  // C and B run first: both leave the account on V1, so A (which changes it) goes last.
+  // The cases are those of #35. C and B run first: both leave the account on V1, so A, which changes it,
+  // goes last and these tests depend on running in file order.
   it('C: no key update, proof against V2: rejected', async () => {
-    const before = await refresh();
+    const before = await onChain();
     expect(before.vkHash).toBe(keys.v1.hash.toBigInt());
-    const result = await setKeyThenResume(address, zkappKey, sender, undefined, 'v2');
+    const result = await setKeyThenResume(zkappKey, sender, 'v2');
     console.log('C (control):', result);
     expect(result.status).toBe('rejected');
-    expect(await refresh()).toEqual(before);
+    expect(result.rejectedAt).toBe('safeSend');
+    expect(result.errors.join('\n')).toMatch(/Invalid_proof \(Pickles.verify dlog_check\)/);
+    expect(await onChain()).toEqual(before);
   });
 
   it('B: key update to V2, proof against V1: rejected', async () => {
-    const before = await refresh();
-    const result = await setKeyThenResume(address, zkappKey, sender, keys.v2, 'v1');
+    const before = await onChain();
+    const result = await setKeyThenResume(zkappKey, sender, 'v1', keys.v2);
     console.log('B:', result);
     expect(result.status).toBe('rejected');
-    expect(await refresh()).toEqual(before);
+    expect(result.rejectedAt).toBe('safeSend');
+    expect(result.errors.join('\n')).toMatch(/Invalid_proof \(Pickles.verify dlog_check\)/);
+    expect(await onChain()).toEqual(before);
   });
 
   it('A: key update to V2, proof against V2: applied', async () => {
-    const result = await setKeyThenResume(address, zkappKey, sender, keys.v2, 'v2');
+    const result = await setKeyThenResume(zkappKey, sender, 'v2', keys.v2);
     console.log('A:', result);
     expect(result.status).toBe('included');
-    expect(await refresh()).toEqual({ vkHash: keys.v2.hash.toBigInt(), x: V2_MARK });
+    expect(await onChain()).toEqual({ vkHash: keys.v2.hash.toBigInt(), x: V2_MARK });
   });
 });

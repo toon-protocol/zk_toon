@@ -25,14 +25,12 @@ export class VkProbeV2 extends SmartContract {
 declareMethods(VkProbeV2, { resume: [] } as Record<string, any[]>);
 declareState(VkProbeV2, { x: Field });
 
-/** `x` after V1's and V2's `resume`. */
-export const V1_MARK = 1n;
+/** `x` after V2's `resume` (V1's `resume` writes 1). */
 export const V2_MARK = 2n;
 
 const FEE = 100_000_000;
 
 export type Key = { data: string; hash: Field };
-export type { Outcome };
 
 /** Compiles both circuits and returns their verification keys, which differ. */
 export async function compileBoth(): Promise<{ v1: Key; v2: Key }> {
@@ -59,23 +57,28 @@ export function cachedAccount(address: PublicKey) {
 }
 
 /**
- * One command with two account updates on the zkApp: a signed one that sets `newKey` (if given), then a
- * call to `resume` of `circuit`, proved against it.
+ * One command with two account updates on the zkApp: a signed one that sets `installKey` (if given),
+ * then a call to `resume` of `circuit`, proved against it. Throws if the key update is not first.
  */
 export async function setKeyThenResume(
-  address: PublicKey,
   zkappKey: PrivateKey,
   sender: Mina.TestPublicKey,
-  newKey: Key | undefined,
-  circuit: 'v1' | 'v2'
+  circuit: 'v1' | 'v2',
+  installKey?: Key
 ): Promise<Outcome> {
+  const address = zkappKey.toPublicKey();
   const app = circuit === 'v1' ? new VkProbeV1(address) : new VkProbeV2(address);
   const tx = await Mina.transaction({ sender, fee: FEE }, async () => {
-    if (newKey) {
+    if (installKey) {
       const update = AccountUpdate.createSigned(address);
-      update.body.update.verificationKey = { isSome: Bool(true), value: newKey };
+      update.body.update.verificationKey = { isSome: Bool(true), value: installKey };
     }
     await app.resume();
   });
+  const sets = tx.transaction.accountUpdates.map((u) => u.body.update.verificationKey.isSome.toBoolean());
+  const expected = installKey ? [true, false] : [false];
+  if (JSON.stringify(sets.slice(-expected.length)) !== JSON.stringify(expected)) {
+    throw Error(`account updates are not in the intended order: sets-key flags ${sets}`);
+  }
   return submit(tx, [sender.key, zkappKey]);
 }
