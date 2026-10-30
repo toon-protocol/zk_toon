@@ -9,7 +9,7 @@
 //! see `LICENSE-APACHE` and `NOTICE`.
 
 use ark_ec::{AffineRepr, CurveGroup};
-use ark_ff::{BigInteger256, Field as _};
+use ark_ff::BigInteger256;
 use ledger::proofs::{
     field::{CircuitVar, FieldWitness, GroupAffine},
     public_input::scalar_challenge::ScalarChallenge,

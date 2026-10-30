@@ -4,10 +4,10 @@
 //! Derived from `crates/ledger/src/proofs/wrap.rs` (`deferred_values`) in `toon-protocol/mina-rust`
 //! at rev `6feeb3797fff6dba49fd848cb2d6decd63fee1b4` (itself from `o1-labs/mina-rust` v0.19.0,
 //! Apache-2.0), generalised to a step circuit with feature flags and lookups (`lookup: None` and
-//! empty flags there). Mina's `wrap.ml` and `wrap_deferred_values.ml` at `aa93c444` are the
+//! empty flags there). Mina's `wrap.ml` and `wrap_deferred_values.ml` at `228c409a` (the commit o1js v3.1.0 bundles) are the
 //! reference. Licensed under Apache-2.0; see `LICENSE-APACHE` and `NOTICE`.
 
-use ark_ff::{BigInteger256, Zero};
+use ark_ff::BigInteger256;
 use kimchi::proof::PointEvaluations;
 use ledger::proofs::{
     field::FieldWitness,
@@ -223,9 +223,4 @@ pub fn deferred_values(params: DeferredValuesParams) -> DeferredValuesAndHints {
         sponge_digest_before_evaluations: oracle.digest_before_evaluations,
         x_hat_evals: x_hat,
     }
-}
-
-#[allow(unused)]
-fn _unused(_: Fp) -> bool {
-    Fp::zero().is_zero()
 }

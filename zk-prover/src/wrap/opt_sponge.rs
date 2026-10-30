@@ -3,7 +3,7 @@
 //! Derived from `crates/ledger/src/proofs/opt_sponge.rs` in `toon-protocol/mina-rust` at rev
 //! `6feeb3797fff6dba49fd848cb2d6decd63fee1b4` (itself from `o1-labs/mina-rust` v0.19.0,
 //! Apache-2.0), with `copy`, `consume_all_pending` and `recombine` added, and
-//! `needs_final_permute_if_empty` reset after a squeeze, from Mina `aa93c444`,
+//! `needs_final_permute_if_empty` reset after a squeeze, from Mina `228c409a` (the commit o1js v3.1.0 bundles),
 //! `src/lib/pickles/opt_sponge.ml`. Licensed under Apache-2.0; see `LICENSE-APACHE` and `NOTICE`.
 
 use ledger::proofs::{

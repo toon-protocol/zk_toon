@@ -6,9 +6,6 @@
 //! field is, so it fails for the wrap circuit's `Fq`. Licensed under Apache-2.0; see
 //! `LICENSE-APACHE` and `NOTICE`.
 
-use std::ops::Neg;
-
-use ark_ff::{Field, PrimeField, Zero};
 use ledger::proofs::{
     field::{field, Boolean, FieldWitness, GroupAffine, ToBoolean},
     transaction::make_group,

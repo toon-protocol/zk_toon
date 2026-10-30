@@ -3,7 +3,7 @@
 //! Derived from `wrap_verifier` in `crates/ledger/src/proofs/wrap.rs` of `toon-protocol/mina-rust`
 //! at rev `6feeb3797fff6dba49fd848cb2d6decd63fee1b4` (itself from `o1-labs/mina-rust` v0.19.0,
 //! Apache-2.0), which handles neither optional commitments nor lookups. The generalisation
-//! follows Mina `aa93c444`, `src/lib/pickles/wrap_verifier.ml`
+//! follows Mina `228c409a` (the commit o1js v3.1.0 bundles), `src/lib/pickles/wrap_verifier.ml`
 //! (`incrementally_verify_proof`, `index_to_field_elements`, `Split_commitments`,
 //! `simulate_optional_sponge_with_alignment`) and `src/lib/crypto/plonkish_prelude/pcs_batch.ml`.
 //! Licensed under Apache-2.0; see `LICENSE-APACHE` and `NOTICE`.
@@ -17,15 +17,13 @@ use ark_ff::{BigInteger256, One, Zero};
 use itertools::Itertools;
 use kimchi::circuits::wires::COLUMNS;
 use ledger::proofs::{
-    field::{field, Boolean, CircuitVar, FieldWitness, GroupAffine, ToBoolean},
+    field::{Boolean, CircuitVar, FieldWitness, GroupAffine, ToBoolean},
     public_input::{
         plonk_checks::{ShiftedValue, ShiftingValue},
         prepared_statement::Plonk,
     },
-    step::OptFlag,
     transaction::{
-        plonk_curve_ops::scale_fast, poseidon::Sponge, scalar_challenge, InnerCurve, make_group,
-        Check,
+        plonk_curve_ops::scale_fast, poseidon::Sponge, InnerCurve, make_group,
     },
     util::two_u64_to_field,
     witness::Witness,
@@ -38,7 +36,7 @@ use ledger::proofs::{
     },
 };
 use mina_curves::pasta::{Fp, Fq, Vesta};
-use poly_commitment::{ipa::{OpeningProof, SRS}, PolyComm, SRS as _};
+use poly_commitment::{ipa::{OpeningProof, SRS}, PolyComm};
 
 use super::{
     group_map::group_map,
@@ -236,20 +234,15 @@ fn check_bulletproof(
         bigint.into() // Never fail, `Fq` is larger than `Fp`
     };
     sponge.absorb(&[combined_inner_product], w);
-    super::trace("bulletproof: absorbed cip", w);
 
     let u = {
         let t = sponge.squeeze(w);
-        super::trace("bulletproof: squeezed t", w);
         group_map(t, w)
     };
-    super::trace("bulletproof: group_map", w);
 
     let combined_polynomial = split_commitments::combine(xi, &polynomials, w);
-    super::trace("bulletproof: combine", w);
 
     let (lr_prod, challenges) = bullet_reduce(&mut sponge, lr, w);
-    super::trace("bulletproof: bullet_reduce", w);
 
     let p_prime = {
         let _ = w.exists_no_check(u); // Made by `plonk_curve_ops.seal` in `scale_fast`
@@ -262,19 +255,16 @@ fn check_bulletproof(
         sponge.absorb(&[*x, *y], w);
     };
 
-    super::trace("bulletproof: p_prime", w);
     let q = w.add_fast(p_prime, lr_prod);
 
     absorb_curve(delta, &mut sponge, w);
     let c = lowest_128_bits(sponge.squeeze(w), false, w);
 
-    super::trace("bulletproof: c", w);
     let lhs = {
         let cq = endo::<Fq, Fq, 128>(q, c, w);
         w.add_fast(cq, *delta)
     };
 
-    super::trace("bulletproof: lhs", w);
     let rhs = {
         let b_u = {
             let _ = w.exists_no_check(u); // Made by `plonk_curve_ops.seal` in `scale_fast`
@@ -285,7 +275,6 @@ fn check_bulletproof(
         w.add_fast(z_1_g_plus_b_u, z2_h)
     };
 
-    super::trace("bulletproof: rhs", w);
     (equal_g(lhs, rhs, w), challenges)
 }
 
@@ -390,14 +379,14 @@ pub mod split_commitments {
                     Boolean::False => p,
                 };
                 if let CircuitVar::Var(_) = acc.non_zero {
-                    w.exists_no_check(base_point);
+                    let _ = w.exists_no_check(base_point);
                 }
                 let point = match keep.as_boolean() {
                     Boolean::True => base_point,
                     Boolean::False => acc.point,
                 };
                 if let CircuitVar::Var(_) = keep {
-                    w.exists_no_check(point);
+                    let _ = w.exists_no_check(point);
                 }
                 // `keep &&& true_ ||| acc.non_zero`
                 let non_zero = keep.or(&acc.non_zero, w);
@@ -605,9 +594,7 @@ pub fn incrementally_verify_proof(
     let sample = challenge;
     let sample_scalar = scalar_challenge;
 
-    super::trace("before index digest", w);
     let index_digest = index_digest(m, w);
-    super::trace("index digest", w);
 
     sponge.absorb((t, index_digest));
 
@@ -708,7 +695,6 @@ pub fn incrementally_verify_proof(
         w.add_fast(x_hat, srs.h)
     };
 
-    super::trace("x_hat", w);
     absorb_points(&mut sponge, t, &[x_hat]);
 
     for w_comm in &messages.w_comm {
@@ -739,7 +725,6 @@ pub fn incrementally_verify_proof(
         Opt::Just(runtime) => absorb_points(&mut sponge, t, runtime),
     }
 
-    super::trace("before joint combiner", w);
     // `joint_combiner`
     let joint_combiner: Opt<Fq> = {
         let compute_joint_combiner =
@@ -795,18 +780,10 @@ pub fn incrementally_verify_proof(
             }
         }
     };
-    super::trace("joint combiner", w);
     // `lookup_table_comm`
     let lookup_table_comm: Opt<Comm> = {
         let add = |a: &Comm, b: &Comm, w: &mut Witness<Fq>| -> Comm {
             a.iter().zip(b).map(|(a, b)| w.add_fast(*a, *b)).collect()
-        };
-        let if_comm = |b: Boolean, then_: &Comm, else_: &Comm, w: &mut Witness<Fq>| -> Comm {
-            then_
-                .iter()
-                .zip(else_)
-                .map(|(t, e)| if_curve(b, *t, *e, w))
-                .collect()
         };
         let endo = |acc: &Comm, jc: Fq, w: &mut Witness<Fq>| -> Comm {
             acc.iter()
@@ -814,9 +791,7 @@ pub fn incrementally_verify_proof(
                 .collect()
         };
         let compute = |l: &LookupMessages, jc: Fq, w: &mut Witness<Fq>| -> Opt<Comm> {
-            let [first_column, second_column, rest @ ..] = &m.lookup_table else {
-                unreachable!()
-            };
+            let [first_column, second_column, rest @ ..] = &m.lookup_table;
             let second_column_with_runtime: Opt<Comm> = match (second_column, &l.runtime) {
                 (Opt::Nothing, comm) => comm.clone(),
                 (comm, Opt::Nothing) => comm.clone(),
@@ -926,7 +901,6 @@ pub fn incrementally_verify_proof(
         }
     };
 
-    super::trace("lookup_table_comm", w);
     // `lookup_sorted`
     let lookup_sorted: Vec<Opt<Comm>> = (0..5)
         .map(|i| match &messages.lookup {
@@ -978,7 +952,6 @@ pub fn incrementally_verify_proof(
     let sponge_before_evaluations = sponge.clone();
     let sponge_digest_before_evaluations = sponge.squeeze(w);
 
-    super::trace("digest before evaluations", w);
     let scale = scale_fast::<Fq, Fp, { OTHER_FIELD_PACKED_CONSTANT_SIZE_IN_BITS }>;
     let t_comm = PolyComm {
         chunks: messages.t_comm.clone(),
@@ -1039,7 +1012,6 @@ pub fn incrementally_verify_proof(
             m.lookup_selector_ffmul.clone(),
         ]);
 
-        super::trace("ft_comm", w);
         let srs = &srs;
         let advice = &advice;
         check_bulletproof(

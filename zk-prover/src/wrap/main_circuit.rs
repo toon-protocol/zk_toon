@@ -4,20 +4,18 @@
 //! Derived from `wrap_main` in `crates/ledger/src/proofs/wrap.rs` of `toon-protocol/mina-rust` at
 //! rev `6feeb3797fff6dba49fd848cb2d6decd63fee1b4` (itself from `o1-labs/mina-rust` v0.19.0,
 //! Apache-2.0), which fixes `MAX_PROOFS_VERIFIED_N = 2`, takes one step key and leaves out
-//! optional gates and lookups. The generalisation follows Mina `aa93c444`,
+//! optional gates and lookups. The generalisation follows Mina `228c409a` (the commit o1js v3.1.0 bundles),
 //! `src/lib/pickles/wrap_main.ml`. Licensed under Apache-2.0; see `LICENSE-APACHE` and `NOTICE`.
 
-use ark_ff::BigInteger256;
 use kimchi::{circuits::wires::COLUMNS, proof::ProverCommitments};
 use ledger::proofs::{
-    field::{field, Boolean, CircuitVar, FieldWitness, GroupAffine, ToBoolean},
-    opt_sponge::OptSponge as _,
+    field::{Boolean, CircuitVar, GroupAffine, ToBoolean},
     public_input::{messages::MessagesForNextWrapProof, prepared_statement::DeferredValues},
     step::{FeatureFlags, OptFlag},
     transaction::{poseidon::Sponge, Check, ProofWithPublic},
     util::four_u64_to_field,
     witness::Witness,
-    wrap::{one_hot_vector, pseudo, Domains, Packed, WrapStatement},
+    wrap::{one_hot_vector, Domains, Packed, WrapStatement},
     ProverIndex,
 };
 use mina_curves::pasta::{Fp, Fq, Vesta};
@@ -311,18 +309,6 @@ fn hash_messages_for_next_wrap_proof(
     sponge.squeeze(w)
 }
 
-fn split_field(x: Fq, w: &mut Witness<Fq>) -> (Fq, Boolean) {
-    let n: BigInteger256 = x.into();
-    let n: [u64; 4] = n.0;
-
-    let is_odd = n[0] & 1 != 0;
-
-    let y = if is_odd { x - Fq::from(1u64) } else { x };
-    let y = y / Fq::from(2u64);
-
-    w.exists((y, is_odd.to_boolean()))
-}
-
 pub fn wrap_main(params: WrapMainParams, w: &mut Witness<Fq>) -> anyhow::Result<()> {
     let WrapMainParams {
         step_keys,
@@ -338,16 +324,12 @@ pub fn wrap_main(params: WrapMainParams, w: &mut Witness<Fq>) -> anyhow::Result<
 
     let branches = step_keys.len() as u64;
     let which_branch = w.exists(Fq::from(which_index));
-    super::trace("which_branch exists", w);
     let which_branch = one_hot_vector::of_index(which_branch, branches, w);
-    super::trace("one_hot_vector", w);
 
     // `prev_proof_state`: no unfinalized proofs, then the digest.
     w.exists(four_u64_to_field::<Fq, _>(&messages_for_next_step_proof_hash)?);
 
-    super::trace("prev_proof_state", w);
     let step_plonk_index = choose_key(step_keys, &which_branch, w);
-    super::trace("choose_key", w);
 
     // Check consistency between index and feature flags.
     {
@@ -385,13 +367,11 @@ pub fn wrap_main(params: WrapMainParams, w: &mut Witness<Fq>) -> anyhow::Result<
         assert_consistent(&k.lookup_selector_ffmul, all.foreign_field_mul);
     }
 
-    super::trace("consistency", w);
     // No previous proofs: no accumulators, challenges, evaluations or wrap domains.
 
     let openings_proof = w.exists(&proof.proof.proof);
     let messages = exists_messages(&proof.proof.commitments, flags, w);
 
-    super::trace("openings_proof and messages", w);
     let public_input = vec![Packed::PackedBits(
         CircuitVar::Var(four_u64_to_field::<Fq, _>(&messages_for_next_step_proof_hash)?),
         255,
@@ -429,9 +409,7 @@ pub fn wrap_main(params: WrapMainParams, w: &mut Witness<Fq>) -> anyhow::Result<
         w,
     );
 
-    super::trace("incrementally_verify_proof", w);
     hash_messages_for_next_wrap_proof(0, openings_proof.sg, &[], w);
 
-    let _ = (field::equal::<Fq>, pseudo::choose);
     Ok(())
 }

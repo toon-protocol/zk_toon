@@ -16,9 +16,12 @@ use ledger::proofs::{
     step::FeatureFlags,
     transaction::{InnerCurve, ProofWithPublic, ReducedMessagesForNextStepProof},
     witness::Witness,
-    wrap::{Domain, Domains, WrapProofState, WrapStatement},
+    unfinalized::{AllEvals, EvalsWithPublicInput},
+    wrap::{dummy_ipa_wrap_sg, Domain, Domains, WrapProof, WrapProofState, WrapStatement},
 };
 use mina_curves::pasta::{Fp, Fq};
+
+use ledger::proofs::constants::ProofConstants;
 
 use crate::StepCircuit;
 
@@ -28,6 +31,9 @@ pub mod group_map;
 pub mod key;
 pub mod main_circuit;
 pub mod opt_sponge;
+pub mod prove;
+
+pub use prove::WrapCircuit;
 pub mod verifier;
 
 use ark_ff::BigInteger256;
@@ -97,40 +103,62 @@ impl WrapWitness {
     }
 }
 
-thread_local! {
-    /// o1js's witness, when a test wants [`trace`] to report where ours leaves it.
-    pub static EXPECTED: std::cell::RefCell<Option<Vec<Fq>>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Report how far `w` agrees with [`EXPECTED`]: for debugging a port against o1js.
-pub(crate) fn trace(label: &str, w: &Witness<Fq>) {
-    EXPECTED.with(|e| {
-        let e = e.borrow();
-        let Some(expected) = e.as_ref() else { return };
-        let Ok(ours) = WrapWitness::of_witness(w) else { return };
-        let len = ours.external().len();
-        match ours.first_difference(&expected[..len.min(expected.len())]) {
-            None => eprintln!("trace {label}: {len} values agree"),
-            Some(i) => {
-                eprintln!(
-                    "trace {label}: {len} values, first difference at {i}: ours {:?} o1js {:?}",
-                    ours.external().get(i),
-                    expected.get(i)
-                );
-                if std::env::var("TRACE_WINDOW").is_ok() {
-                    let short = |f: Option<&Fq>| f.map(|f| { let s = f.to_string(); s.chars().take(12).collect::<String>() }).unwrap_or_default();
-                    let ext = ours.external();
-                    for j in i.saturating_sub(40)..(i + 40).min(len) {
-                        eprintln!("  {j}: ours {} o1js {}", short(ext.get(j)), short(expected.get(j)));
-                    }
-                }
-            }
-        }
-    });
+/// What proving the wrap needs besides its witness.
+struct Prepared {
+    witness: WrapWitness,
+    statement: WrapStatement,
+    x_hat_evals: kimchi::proof::PointEvaluations<Vec<Fp>>,
 }
 
 /// The wrap witness for a step proof.
 pub fn wrap_witness(params: WrapParams) -> anyhow::Result<WrapWitness> {
+    Ok(prepare(params)?.witness)
+}
+
+/// The wrap proof and witness for a step proof, proved under `circuit`.
+pub fn wrap<C: ProofConstants>(
+    params: WrapParams,
+    circuit: &WrapCircuit,
+) -> anyhow::Result<WrapOutput> {
+    let step_proof = params.step_proof;
+    let Prepared {
+        witness,
+        statement,
+        x_hat_evals,
+    } = prepare(params)?;
+
+    // No previous proofs: the wrap proof's accumulators are two dummies.
+    let prev_challenges = (0..2)
+        .map(|_| kimchi::proof::RecursionChallenge {
+            comm: poly_commitment::PolyComm::<mina_curves::pasta::Pallas> {
+                chunks: vec![dummy_ipa_wrap_sg()],
+            },
+            chals: MessagesForNextWrapProof::dummy_padding().to_vec(),
+        })
+        .collect();
+    let proof = circuit.prove::<C>(&witness, prev_challenges)?;
+
+    let proof = WrapProof {
+        proof,
+        statement,
+        prev_evals: AllEvals {
+            ft_eval1: step_proof.proof.ft_eval1,
+            evals: EvalsWithPublicInput {
+                public_input: (x_hat_evals.zeta, x_hat_evals.zeta_omega),
+                evals: step_proof.proof.evals.clone(),
+            },
+        },
+    };
+    Ok(WrapOutput { proof, witness })
+}
+
+/// A wrap proof, and the witness it was proved from.
+pub struct WrapOutput {
+    pub proof: WrapProof,
+    pub witness: WrapWitness,
+}
+
+fn prepare(params: WrapParams) -> anyhow::Result<Prepared> {
     let WrapParams {
         max_proofs_verified,
         step_circuits,
@@ -149,7 +177,7 @@ pub fn wrap_witness(params: WrapParams) -> anyhow::Result<WrapWitness> {
         .map(|c| step_features(c.index()))
         .collect::<Vec<_>>();
     anyhow::ensure!(
-        format!("{:?}", union(&branch_features)) == format!("{features:?}"),
+        format!("{:?}", union_features(&branch_features)) == format!("{features:?}"),
         "the feature flags are not the union of the methods' flags"
     );
     let flags = ProgramFlags::of_branches(&branch_features);
@@ -204,7 +232,7 @@ pub fn wrap_witness(params: WrapParams) -> anyhow::Result<WrapWitness> {
 
     let primary = PreparedStatement {
         proof_state: ProofState {
-            deferred_values: d.deferred_values,
+            deferred_values: d.deferred_values.clone(),
             sponge_digest_before_evaluations: to_u(d.sponge_digest_before_evaluations),
             messages_for_next_wrap_proof: messages_for_next_wrap_proof_hash,
         },
@@ -230,10 +258,14 @@ pub fn wrap_witness(params: WrapParams) -> anyhow::Result<WrapWitness> {
         &mut w,
     )?;
 
-    WrapWitness::of_witness(&w)
+    Ok(Prepared {
+        witness: WrapWitness::of_witness(&w)?,
+        statement: next_statement,
+        x_hat_evals: d.x_hat_evals,
+    })
 }
 
-fn union(branches: &[FeatureFlags<bool>]) -> FeatureFlags<bool> {
+pub fn union_features(branches: &[FeatureFlags<bool>]) -> FeatureFlags<bool> {
     let any = |f: fn(&FeatureFlags<bool>) -> bool| branches.iter().any(f);
     FeatureFlags {
         range_check0: any(|f| f.range_check0),

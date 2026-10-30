@@ -6,6 +6,10 @@
 //!
 //! The witness can come from o1js's own dump ([`StepWitness::from_o1js_json`]) or, later, be built
 //! in Rust ([`StepWitness::from_parts`]).
+//!
+//! [`wrap::wrap`] wraps a step proof into the Pickles wrap proof of an o1js program: given the
+//! program's step circuits (one per method), its feature flags and its compiled wrap circuit, it
+//! returns the wrap proof and the wrap witness, which equals o1js's value for value.
 
 pub mod pins;
 pub mod verify;
@@ -26,7 +30,17 @@ use mina_curves::pasta::Fp;
 pub use ledger::proofs::transaction::ProofWithPublic as StepProof;
 
 /// Shape of `land`'s step circuit (`cs003`).
-pub use ledger::proofs::toon1561::{StepLand, StepSetup, WrapLand};
+pub use ledger::proofs::toon1561::{StepLand, StepSetup};
+
+/// Shape of the wrap circuit of the toy `land` / `setup` program (`cs005`): 40 public inputs, and
+/// the 2 previous challenges every Pickles wrap circuit has.
+pub struct WrapLandSetup;
+impl ProofConstants for WrapLandSetup {
+    const PRIMARY_LEN: usize = 40;
+    const AUX_LEN: usize = 99657;
+    const PREVIOUS_CHALLENGES: usize = 2;
+    const ROWS: usize = 6798;
+}
 
 /// A compiled step circuit with its prover index.
 pub struct StepCircuit {

@@ -3957,6 +3957,7 @@ dependencies = [
  "mina-tree",
  "poly-commitment",
  "poseidon",
+ "rand",
  "rmp-serde",
  "rsexp",
  "serde_json",
