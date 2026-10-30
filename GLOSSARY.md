@@ -39,6 +39,12 @@ _Avoid_: Channel, account, coin
 The time since a zk note was deposited. It doesn't reset when the note spends.
 _Avoid_: Holding time, idle time, time since last spend
 
+**Slot**:
+The unit of chain time: Mina's global slot counted from the network's original genesis, the count the
+chain checks a transaction's time against. A slot has been 90 seconds since the Mesa fork. Every time
+the vault records or checks, and every time in a note or a proof, is a slot (ADR 0007).
+_Avoid_: Timestamp, block time, slot since the fork
+
 **Balance commitment**:
 A hiding commitment to a zk note's balance, `B·G + r·H` on Pallas, that its holder can re-randomise
 or charge without opening it.
