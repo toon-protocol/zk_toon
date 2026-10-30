@@ -17,12 +17,13 @@ _Avoid_: Pool, mixer, contract (unqualified)
 **Upgrade key**:
 The vault account's own key. It signs for the vault account, but its permissions let it only delegate
 the vault's balance, and after a hard fork replace the vault's verification key (ADR 0006).
-_Avoid_: Vault key, owner key
+_Avoid_: Vault key, owner key, admin key
 
 **Fork notice**:
 The operator's promise, made off chain at the vault's zkApp URI at least 14 days before a fork's stop
 slot, to publish the post-fork verification key with its source tag and a reproducible build. The vault
 doesn't enforce it (ADR 0006).
+_Avoid_: Upgrade notice, migration window
 
 **Keeper**:
 Whoever calls the vault's reduce, which anyone may. The zk edge operator is the natural keeper
