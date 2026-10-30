@@ -3,7 +3,7 @@
 //! Derived from `crates/ledger/src/proofs/wrap.rs` (`choose_key`) in `toon-protocol/mina-rust` at
 //! rev `6feeb3797fff6dba49fd848cb2d6decd63fee1b4` (itself from `o1-labs/mina-rust` v0.19.0,
 //! Apache-2.0), which picks a single key with no optional commitments. The generalisation follows
-//! Mina `228c409a` (the commit o1js v3.1.0 bundles), `src/lib/pickles/wrap_verifier.ml` (`choose_key`) and
+//! Mina `228c409a` (the commit o1js v3.1.0 bundles), `src/lib/crypto/pickles/wrap_verifier.ml` (`choose_key`) and
 //! `src/lib/crypto/kimchi_backend/common/plonk_verification_key_evals.ml`. Licensed under
 //! Apache-2.0; see `LICENSE-APACHE` and `NOTICE`.
 

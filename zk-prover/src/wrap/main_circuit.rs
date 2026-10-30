@@ -5,7 +5,7 @@
 //! rev `6feeb3797fff6dba49fd848cb2d6decd63fee1b4` (itself from `o1-labs/mina-rust` v0.19.0,
 //! Apache-2.0), which fixes `MAX_PROOFS_VERIFIED_N = 2`, takes one step key and leaves out
 //! optional gates and lookups. The generalisation follows Mina `228c409a` (the commit o1js v3.1.0 bundles),
-//! `src/lib/pickles/wrap_main.ml`. Licensed under Apache-2.0; see `LICENSE-APACHE` and `NOTICE`.
+//! `src/lib/crypto/pickles/wrap_main.ml`. Licensed under Apache-2.0; see `LICENSE-APACHE` and `NOTICE`.
 
 use kimchi::{circuits::wires::COLUMNS, proof::ProverCommitments};
 use ledger::proofs::{
@@ -339,32 +339,32 @@ pub fn wrap_main(params: WrapMainParams, w: &mut Witness<Fq>) -> anyhow::Result<
             Opt::Maybe(b, _) => b.as_boolean(),
             Opt::Nothing => Boolean::False,
         };
-        let assert_consistent = |comm: &Opt<Comm>, flag_value: CircuitVar<Boolean>| {
-            assert_eq!(
-                flag(comm).as_bool(),
-                flag_value.as_boolean().as_bool(),
+        let ensure_consistent = |comm: &Opt<Comm>, flag_value: CircuitVar<Boolean>| {
+            anyhow::ensure!(
+                flag(comm).as_bool() == flag_value.as_boolean().as_bool(),
                 "the step key and the feature flags disagree"
             );
+            Ok(())
         };
         let k = &step_plonk_index;
-        assert_consistent(&k.xor, all.xor);
-        assert_consistent(&k.range_check0, all.range_check0);
-        assert_consistent(&k.range_check1, all.range_check1);
-        assert_consistent(&k.foreign_field_add, all.foreign_field_add);
-        assert_consistent(&k.foreign_field_mul, all.foreign_field_mul);
-        assert_consistent(&k.rot, all.rot);
+        ensure_consistent(&k.xor, all.xor)?;
+        ensure_consistent(&k.range_check0, all.range_check0)?;
+        ensure_consistent(&k.range_check1, all.range_check1)?;
+        ensure_consistent(&k.foreign_field_add, all.foreign_field_add)?;
+        ensure_consistent(&k.foreign_field_mul, all.foreign_field_mul)?;
+        ensure_consistent(&k.rot, all.rot)?;
         let v = all.table_width_at_least_1(w);
-        assert_consistent(&k.lookup_table[0], v);
+        ensure_consistent(&k.lookup_table[0], v)?;
         let v = all.table_width_at_least_2(w);
-        assert_consistent(&k.lookup_table[1], v);
-        assert_consistent(&k.lookup_table[2], all.xor);
-        assert_consistent(&k.lookup_table[3], CircuitVar::Constant(Boolean::False));
-        assert_consistent(&k.runtime_tables_selector, all.runtime_tables);
-        assert_consistent(&k.lookup_selector_lookup, all.lookup);
-        assert_consistent(&k.lookup_selector_xor, all.xor);
+        ensure_consistent(&k.lookup_table[1], v)?;
+        ensure_consistent(&k.lookup_table[2], all.xor)?;
+        ensure_consistent(&k.lookup_table[3], CircuitVar::Constant(Boolean::False))?;
+        ensure_consistent(&k.runtime_tables_selector, all.runtime_tables)?;
+        ensure_consistent(&k.lookup_selector_lookup, all.lookup)?;
+        ensure_consistent(&k.lookup_selector_xor, all.xor)?;
         let v = all.lookup_pattern_range_check(w);
-        assert_consistent(&k.lookup_selector_range_check, v);
-        assert_consistent(&k.lookup_selector_ffmul, all.foreign_field_mul);
+        ensure_consistent(&k.lookup_selector_range_check, v)?;
+        ensure_consistent(&k.lookup_selector_ffmul, all.foreign_field_mul)?;
     }
 
     // No previous proofs: no accumulators, challenges, evaluations or wrap domains.

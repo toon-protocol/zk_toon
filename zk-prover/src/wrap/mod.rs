@@ -5,6 +5,12 @@
 //! and leave out optional gates and lookups. This module is a generalised copy: the number of
 //! previous proofs, the program's step keys (one per method) and its feature flags are parameters.
 //! See the headers of the submodules for what each is derived from.
+//!
+//! `wrap` and `prepare` are derived from `wrap` in `crates/ledger/src/proofs/wrap.rs` of
+//! `toon-protocol/mina-rust` at rev `6feeb3797fff6dba49fd848cb2d6decd63fee1b4` (itself from
+//! `o1-labs/mina-rust` v0.19.0, Apache-2.0), following Mina `228c409a` (the commit o1js v3.1.0
+//! bundles), `src/lib/crypto/pickles/wrap.ml`. Licensed under Apache-2.0; see `LICENSE-APACHE` and
+//! `NOTICE`.
 
 use std::rc::Rc;
 
@@ -89,7 +95,10 @@ impl WrapWitness {
                 .ok_or_else(|| anyhow::anyhow!("no {name} in the witness"))?
                 + name.len()
                 + 3;
-            let end = start + text[start..].find(']').unwrap();
+            let end = start
+                + text[start..]
+                    .find(']')
+                    .ok_or_else(|| anyhow::anyhow!("no end to {name} in the witness"))?;
             text[start..end]
                 .split(", ")
                 .filter(|s| !s.is_empty())

@@ -4,7 +4,7 @@
 //! `6feeb3797fff6dba49fd848cb2d6decd63fee1b4` (itself from `o1-labs/mina-rust` v0.19.0,
 //! Apache-2.0), with `copy`, `consume_all_pending` and `recombine` added, and
 //! `needs_final_permute_if_empty` reset after a squeeze, from Mina `228c409a` (the commit o1js v3.1.0 bundles),
-//! `src/lib/pickles/opt_sponge.ml`. Licensed under Apache-2.0; see `LICENSE-APACHE` and `NOTICE`.
+//! `src/lib/crypto/pickles/opt_sponge.ml`. Licensed under Apache-2.0; see `LICENSE-APACHE` and `NOTICE`.
 
 use ledger::proofs::{
     field::{field, Boolean, CircuitVar, FieldWitness},
@@ -44,51 +44,6 @@ impl<F: FieldWitness> OptSponge<F> {
                 next_index: CircuitVar::Constant(Boolean::False),
                 xs: Vec::with_capacity(32),
             },
-        }
-    }
-
-    pub fn of_sponge(sponge: ledger::proofs::transaction::poseidon::Sponge<F>, w: &mut Witness<F>) -> Self {
-        use ledger::proofs::transaction::poseidon::Sponge;
-
-        let Sponge {
-            sponge_state,
-            state,
-            ..
-        } = sponge;
-
-        match sponge_state {
-            ::poseidon::SpongeState::Squeezed(n) => Self {
-                state,
-                params: F::get_params(),
-                needs_final_permute_if_empty: true,
-                sponge_state: SpongeState::Squeezed(n),
-            },
-            ::poseidon::SpongeState::Absorbed(n) => {
-                let abs = |i: Boolean| Self {
-                    state,
-                    params: F::get_params(),
-                    needs_final_permute_if_empty: true,
-                    sponge_state: SpongeState::Absorbing {
-                        next_index: CircuitVar::Constant(i),
-                        xs: vec![],
-                    },
-                };
-
-                match n {
-                    0 => abs(Boolean::False),
-                    1 => abs(Boolean::True),
-                    2 => Self {
-                        state: { block_cipher(state, F::get_params(), w) },
-                        params: F::get_params(),
-                        needs_final_permute_if_empty: false,
-                        sponge_state: SpongeState::Absorbing {
-                            next_index: CircuitVar::Constant(Boolean::False),
-                            xs: vec![],
-                        },
-                    },
-                    _ => panic!(),
-                }
-            }
         }
     }
 

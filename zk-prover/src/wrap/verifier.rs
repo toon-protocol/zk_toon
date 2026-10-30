@@ -3,7 +3,7 @@
 //! Derived from `wrap_verifier` in `crates/ledger/src/proofs/wrap.rs` of `toon-protocol/mina-rust`
 //! at rev `6feeb3797fff6dba49fd848cb2d6decd63fee1b4` (itself from `o1-labs/mina-rust` v0.19.0,
 //! Apache-2.0), which handles neither optional commitments nor lookups. The generalisation
-//! follows Mina `228c409a` (the commit o1js v3.1.0 bundles), `src/lib/pickles/wrap_verifier.ml`
+//! follows Mina `228c409a` (the commit o1js v3.1.0 bundles), `src/lib/crypto/pickles/wrap_verifier.ml`
 //! (`incrementally_verify_proof`, `index_to_field_elements`, `Split_commitments`,
 //! `simulate_optional_sponge_with_alignment`) and `src/lib/crypto/plonkish_prelude/pcs_batch.ml`.
 //! Licensed under Apache-2.0; see `LICENSE-APACHE` and `NOTICE`.
