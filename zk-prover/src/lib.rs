@@ -26,7 +26,7 @@ use mina_curves::pasta::Fp;
 pub use ledger::proofs::transaction::ProofWithPublic as StepProof;
 
 /// Shape of `land`'s step circuit (`cs003`).
-pub use ledger::proofs::toon1561::StepLand;
+pub use ledger::proofs::toon1561::{StepLand, StepSetup, WrapLand};
 
 /// A compiled step circuit with its prover index.
 pub struct StepCircuit {
