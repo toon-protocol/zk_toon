@@ -14,7 +14,7 @@ use ledger::proofs::{
     opt_sponge::OptSponge as _,
     public_input::{messages::MessagesForNextWrapProof, prepared_statement::DeferredValues},
     step::{FeatureFlags, OptFlag},
-    transaction::{Check, InnerCurve, ProofWithPublic},
+    transaction::{poseidon::Sponge, Check, ProofWithPublic},
     util::four_u64_to_field,
     witness::Witness,
     wrap::{one_hot_vector, pseudo, Domains, Packed, WrapStatement},
@@ -286,6 +286,31 @@ pub struct WrapMainParams<'a> {
     pub feature_flags: &'a FeatureFlags<bool>,
 }
 
+/// `Wrap_hack.Checked.hash_messages_for_next_wrap_proof`: the hash starts from the sponge state
+/// the padding challenges lead to, which is a constant.
+fn hash_messages_for_next_wrap_proof(
+    max_proofs_verified: usize,
+    challenge_polynomial_commitment: GroupAffine<Fq>,
+    old_bulletproof_challenges: &[[Fq; 15]],
+    w: &mut Witness<Fq>,
+) -> Fq {
+    let mut sponge = Sponge::<Fq>::new();
+    let mut scratch = Witness::<Fq>::empty();
+    for _ in 0..(2 - max_proofs_verified) {
+        for chal in MessagesForNextWrapProof::dummy_padding() {
+            sponge.absorb(&[chal], &mut scratch);
+        }
+    }
+    for chals in old_bulletproof_challenges {
+        for chal in chals {
+            sponge.absorb(&[*chal], w);
+        }
+    }
+    sponge.absorb(&[challenge_polynomial_commitment.x], w);
+    sponge.absorb(&[challenge_polynomial_commitment.y], w);
+    sponge.squeeze(w)
+}
+
 fn split_field(x: Fq, w: &mut Witness<Fq>) -> (Fq, Boolean) {
     let n: BigInteger256 = x.into();
     let n: [u64; 4] = n.0;
@@ -404,11 +429,8 @@ pub fn wrap_main(params: WrapMainParams, w: &mut Witness<Fq>) -> anyhow::Result<
         w,
     );
 
-    MessagesForNextWrapProof {
-        challenge_polynomial_commitment: InnerCurve::of_affine(openings_proof.sg),
-        old_bulletproof_challenges: vec![],
-    }
-    .hash_checked3(w);
+    super::trace("incrementally_verify_proof", w);
+    hash_messages_for_next_wrap_proof(0, openings_proof.sg, &[], w);
 
     let _ = (field::equal::<Fq>, pseudo::choose);
     Ok(())

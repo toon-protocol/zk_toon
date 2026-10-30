@@ -246,8 +246,10 @@ fn check_bulletproof(
     super::trace("bulletproof: group_map", w);
 
     let combined_polynomial = split_commitments::combine(xi, &polynomials, w);
+    super::trace("bulletproof: combine", w);
 
     let (lr_prod, challenges) = bullet_reduce(&mut sponge, lr, w);
+    super::trace("bulletproof: bullet_reduce", w);
 
     let p_prime = {
         let _ = w.exists_no_check(u); // Made by `plonk_curve_ops.seal` in `scale_fast`
@@ -260,16 +262,19 @@ fn check_bulletproof(
         sponge.absorb(&[*x, *y], w);
     };
 
+    super::trace("bulletproof: p_prime", w);
     let q = w.add_fast(p_prime, lr_prod);
 
     absorb_curve(delta, &mut sponge, w);
     let c = lowest_128_bits(sponge.squeeze(w), false, w);
 
+    super::trace("bulletproof: c", w);
     let lhs = {
         let cq = endo::<Fq, Fq, 128>(q, c, w);
         w.add_fast(cq, *delta)
     };
 
+    super::trace("bulletproof: lhs", w);
     let rhs = {
         let b_u = {
             let _ = w.exists_no_check(u); // Made by `plonk_curve_ops.seal` in `scale_fast`
@@ -280,6 +285,7 @@ fn check_bulletproof(
         w.add_fast(z_1_g_plus_b_u, z2_h)
     };
 
+    super::trace("bulletproof: rhs", w);
     (equal_g(lhs, rhs, w), challenges)
 }
 

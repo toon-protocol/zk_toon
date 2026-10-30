@@ -13,7 +13,7 @@ use ark_ff::{BigInteger256, Field as _};
 use ledger::proofs::{
     field::{CircuitVar, FieldWitness, GroupAffine},
     public_input::scalar_challenge::ScalarChallenge,
-    transaction::{endos, field_to_bits, make_group, poseidon::Sponge},
+    transaction::{endos, field_to_bits, make_group, poseidon::Sponge, InnerCurve},
     witness::Witness,
 };
 
@@ -103,8 +103,9 @@ pub fn endo_inv<F: FieldWitness, F2: FieldWitness, const NBITS: usize>(
         let chal = ScalarChallenge::from(chal).to_field(&e);
         let scalar: <F as FieldWitness>::Scalar = <F as FieldWitness>::Scalar::from(1u64) / chal;
         let scalar: BigInteger256 = scalar.into();
-        GroupAffine::<F>::from(t.mul_bigint(scalar).into_affine())
+        InnerCurve::<F>::of_affine(GroupAffine::<F>::from(t.mul_bigint(scalar).into_affine()))
     });
+    let res = res.to_affine();
     let _ = endo::<F, F2, NBITS>(res, chal, w);
     res
 }
