@@ -9,6 +9,7 @@
 
 pub mod pins;
 pub mod verify;
+pub mod wrap;
 
 use std::str::FromStr;
 
@@ -50,6 +51,11 @@ impl StepCircuit {
                 index,
             },
         })
+    }
+
+    /// The kimchi prover index, from which the step verification key is read.
+    pub fn index(&self) -> &ledger::proofs::ProverIndex<Fp> {
+        &self.prover.index
     }
 }
 

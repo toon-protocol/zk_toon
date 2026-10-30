@@ -3944,12 +3944,20 @@ name = "zk-prover"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ark-ec",
  "ark-ff",
+ "ark-poly",
  "base64",
  "flate2",
+ "itertools 0.12.1",
+ "kimchi",
  "mina-curves",
  "mina-p2p-messages",
+ "mina-poseidon",
  "mina-tree",
+ "poly-commitment",
+ "poseidon",
+ "rmp-serde",
  "rsexp",
  "serde_json",
 ]
