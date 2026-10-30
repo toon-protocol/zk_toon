@@ -8,8 +8,27 @@ zk edge with zero-knowledge proofs instead of vouchers that name its channel.
 ### Notes and the vault
 
 **Vault**:
-The Mina zkApp that holds every note's deposit and pays it back out on withdrawal.
+The Mina zkApp that holds every note's deposit and pays it back out on withdrawal. It has no pause:
+its deploy makes its permissions and timing unchangeable, and its verification key
+(`setVerificationKey: impossibleDuringCurrentVersion`) changeable only across a Mina hard fork, which
+changes the protocol version. No owner action can stop or delay an escape (ADR 0006).
 _Avoid_: Pool, mixer, contract (unqualified)
+
+**Upgrade key**:
+The vault account's own key. It signs for the vault account, but its permissions let it only delegate
+the vault's balance, and after a hard fork replace the vault's verification key (ADR 0006).
+_Avoid_: Vault key, owner key, admin key
+
+**Fork notice**:
+The operator's promise, made off chain at the vault's zkApp URI at least 14 days before a fork's stop
+slot, to publish the post-fork verification key with its source tag and a reproducible build. The vault
+doesn't enforce it (ADR 0006).
+_Avoid_: Upgrade notice, migration window
+
+**Keeper**:
+Whoever calls the vault's reduce, which anyone may. The zk edge operator is the natural keeper
+(ADR 0002).
+_Avoid_: Reducer (that's o1js's), operator (unqualified)
 
 **zk note**:
 One deposit in the vault, spendable only by whoever knows its secret, and carrying a balance that
@@ -19,6 +38,12 @@ _Avoid_: Channel, account, coin
 **Note age**:
 The time since a zk note was deposited. It doesn't reset when the note spends.
 _Avoid_: Holding time, idle time, time since last spend
+
+**Slot**:
+The unit of chain time: Mina's global slot counted from the network's original genesis, the count the
+chain checks a transaction's time against. A slot has been 90 seconds since the Mesa fork. Every time
+the vault records or checks, and every time in a note or a proof, is a slot (ADR 0007).
+_Avoid_: Timestamp, block time, slot since the fork
 
 **Balance commitment**:
 A hiding commitment to a zk note's balance, `B·G + r·H` on Pallas, that its holder can re-randomise
@@ -63,8 +88,20 @@ What a zk edge chooses to spend, each period, on paying for subsidised allowance
 _Avoid_: Treasury, rewards pool, incentive fund
 
 **Subsidy period**:
-The span of time in which each zk note may claim at most one subsidised allowance.
+The span of time in which each zk note may claim at most one subsidised allowance. Periods are whole
+weeks counted from the vault's creation time. A subsidised request proof publishes its period, but
+the circuit checks it only against a creation time the payer supplies, since it can't read the vault.
+So the zk edge must check every request proof's period against the vault's creation time and the
+proof's request time (`RequestPublic::check_subsidy_period` in zk-note, `subsidyPeriodHolds` in
+o1js) before it trusts the per-period nullifier. Without that check, a payer could forge the creation
+time, prove another period, and claim twice in one week.
 _Avoid_: Epoch, round, claim window
+
+**Per-period nullifier**:
+The value a subsidised request proof publishes so a zk edge can refuse a second claim by one note in
+one subsidy period: derived from the note's secret, index and period, so it is the same for every
+state of the note within a period and different in the next.
+_Avoid_: Claim nullifier, subsidy tag
 
 **Charge**:
 What an allowance actually cost the zk note that opened it, known when the allowance closes. It is
@@ -105,12 +142,84 @@ The zk edge's signature, under the state key, agreeing that one state's nullifie
 destination.
 _Avoid_: Co-signature, release, approval
 
+**Escape**:
+Leaving without the zk edge: a payer consumes a zk note's current and next nullifiers, names a
+concession and a destination, and is paid after the challenge window unless the escape is defeated.
+_Avoid_: Forced exit, unilateral close, emergency withdrawal
+
+**Concession**:
+What an escape gives up of its balance to the treasury: named by the payer, at most the balance,
+and liftable by a raise to at most one allowance's tier.
+_Avoid_: Penalty, fee, Δ (in prose)
+
+**Challenge window**:
+The 2 days after the vault records an escape, during which a challenger may defeat or raise it.
+Only after it ends can anyone finalize the escape.
+_Avoid_: Dispute period, timeout
+
+**Defeat**:
+Cancelling an escape, within its challenge window, with a request proof at its next nullifier: the
+note's successor state already opened an allowance, so the escape was from a stale state. Nothing is
+paid and the deposit stays in the vault. The escape consumed both nullifiers, so the note goes on from
+the state the zk edge signs after that successor.
+_Avoid_: Cancel (unqualified), slash, veto
+
+**Raise**:
+Lifting an escape's concession, within its challenge window, to `min(claimed, b, balance)` with a
+request proof of tier `b` at its current nullifier, where `claimed` is the allowance's recorded charge
+or `b` if it never closed. Refused unless it increases the concession, and never from a subsidised
+proof.
+_Avoid_: Penalty, top-up, dispute
+
+**Challenge**:
+A defeat or a raise: a challenger's answer to an escape within its challenge window, carrying a
+request proof the zk edge recorded as evidence.
+_Avoid_: Dispute, contest
+
 **Ownership proof**:
 A proof, shown only to the zk edge, that the payer holds a zk note's current state. The vault
 refuses it.
 _Avoid_: Ownership withdrawal, identity proof
 
+**Expiry sweep**:
+Paying the treasury, in aggregate, what expired notes left in the vault. The sweep walks the note tree
+in index order and adds up the expired notes' sizes. It pays that total less the sizes already
+withdrawn or held for pending escapes, less what earlier sweeps paid. It never names a note, and it
+underpays until withdrawn notes also expire.
+_Avoid_: Expiry claim, forfeiture, reclaim
+
+**Sweep cursor**:
+The index of the next note an expiry sweep walks. Every note below it has expired.
+_Avoid_: Expiry pointer, watermark
+
 **Treasury**:
 The zk edge operator's address, which receives what a closed or expired note's balance leaves of its
-deposit.
+deposit. Like a close's or an escape's destination, its account must already exist: setup, a close
+and an escape refuse a missing one, because a payout to it would fail the reduce, and a failed
+reduce blocks every action queued behind it (ADR 0002).
 _Avoid_: Subsidy budget, fee address
+
+### Building transactions
+
+**Transaction builder**:
+The o1js process that builds and proves vault transactions and request proofs for callers in Rust,
+which send it a note's secrets and get back a transaction ready to send or a proof.
+_Avoid_: Prover sidecar, o1js bridge
+
+### Building and publishing
+
+**Published keys**:
+The verification keys of the request proof, the withdrawal proof and the vault's batch reducer, with
+their hashes and the vault's code hash, that each build writes and the gate uploads. A zk edge's
+greeting pins are checked against them.
+_Avoid_: VK dump, key bundle
+
+**Vault code hash**:
+The hash of the vault's verification key: the key a deployed vault account carries, and so the only
+thing that names its code on chain.
+_Avoid_: Contract hash, bytecode hash
+
+**Proofs-on set**:
+The named tests that compile the circuits and prove for real: the request proof, the subsidised proof,
+mutual close, escape, defeat and the vault's compile. The gate fails unless each ran and passed.
+_Avoid_: Slow tests, integration tests

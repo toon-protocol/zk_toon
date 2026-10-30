@@ -1,6 +1,6 @@
 //! Clearances: reproduces the `clearances` entries of `test-vectors/zk-note.json` and refuses what a
 //! clearance must not cover.
-use mina_signer::{CompressedPubKey, Keypair, SecKey, Signature};
+use mina_signer::{CompressedPubKey, Keypair, NetworkId, SecKey, Signature};
 use serde_json::Value;
 use std::str::FromStr;
 use zk_note::balance::Scalar;
@@ -94,4 +94,32 @@ fn a_clearance_never_passes_as_a_state_message() {
     // The first field is the tag, which no state message's first field (a key's x) can be.
     assert_eq!(message(e).to_fields().len(), 6);
     assert_ne!(message(e).to_fields()[0], kp.public.into_compressed().x);
+}
+
+#[test]
+fn the_clearance_tag_is_a_domain_tag() {
+    let v = vectors();
+    assert_eq!(s(&v["tags"]["clearance"]["text"]), tags::CLEARANCE);
+    assert_eq!(field_to_string(tag_to_field(tags::CLEARANCE)), s(&v["tags"]["clearance"]["field"]));
+}
+
+#[test]
+fn a_state_signature_is_not_a_clearance() {
+    let v = vectors();
+    let e = &v["stateSignatures"]["cases"][0];
+    let kp = keypair(&e["secret"]);
+    let state_sig = Signature::new(f(&e["signature"]["r"]), sc(&e["signature"]["s"]));
+    let named = kp.public.into_compressed();
+    let msg = ClearanceMessage::new(&named, f(&e["anchor"]), &named);
+    assert!(!verify_clearance(&state_sig, &kp.public, &msg));
+}
+
+#[test]
+fn a_mainnet_signed_clearance_is_refused() {
+    let v = vectors();
+    let e = &v["clearances"]["mainnetClearance"];
+    assert_eq!(s(&e["networkId"]), "mainnet");
+    let kp = keypair(&e["stateSecret"]);
+    assert!(verify_clearance_on(NetworkId::MAINNET, &signature(e), &kp.public, &message(e)));
+    assert!(!verify_clearance(&signature(e), &kp.public, &message(e)));
 }

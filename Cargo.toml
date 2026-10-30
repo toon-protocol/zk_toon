@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["challenger", "zk-evidence", "zk-note", "zk-prover"]
+members = ["challenger", "challenger-mina", "tx-builder", "zk-evidence", "zk-note", "zk-prover"]
 
 # From mina-rust's workspace manifest (toon-protocol/mina-rust@6feeb37): a [patch] only counts at the root of the build.
 [patch.crates-io]
@@ -8,4 +8,8 @@ num-bigint = { git = "https://github.com/openmina/num-bigint", branch = "rebase-
 num-rational = { git = "https://github.com/openmina/num-rational", branch = "rebase-onstack" }
 
 [profile.test.package."*"]
+opt-level = 3
+
+# zk-prover builds an 18k-value witness and proves a 1.4k-row circuit; unoptimised that takes minutes.
+[profile.test.package.zk-prover]
 opt-level = 3

@@ -61,9 +61,15 @@ pub fn sign_clearance(keypair: &Keypair, msg: &ClearanceMessage) -> Signature {
 
 /// Verify a clearance under the devnet network ID. `state_key` must be the key the message names.
 pub fn verify_clearance(sig: &Signature, state_key: &PubKey, msg: &ClearanceMessage) -> bool {
+    verify_clearance_on(NetworkId::TESTNET, sig, state_key, msg)
+}
+
+/// Verify under an explicit network ID. Only tests and diagnostics need this: clearances are always
+/// devnet-signed.
+pub fn verify_clearance_on(network: NetworkId, sig: &Signature, state_key: &PubKey, msg: &ClearanceMessage) -> bool {
     let named = state_key.into_compressed();
     if (named.x, named.is_odd) != (msg.state_key_x, msg.state_key_is_odd) {
         return false;
     }
-    mina_signer::create_kimchi::<Fields>(NetworkId::TESTNET).verify(sig, state_key, &Fields(msg.to_fields()))
+    mina_signer::create_kimchi::<Fields>(network).verify(sig, state_key, &Fields(msg.to_fields()))
 }

@@ -1,5 +1,5 @@
 //! The withdrawal proof's sample entries in `test-vectors/zk-note.json`: recomputes the nullifier and checks
-//! the public inputs' layout and shape.
+//! the public inputs' layout and shape. An entry lists `conceded` only for an escape; it is zero otherwise.
 use serde_json::Value;
 use std::str::FromStr;
 use zk_note::withdrawal::*;
@@ -28,6 +28,7 @@ fn public(p: &Value) -> WithdrawalPublic {
         destination_is_odd: s(&p["destination"]["isOdd"]) == "1",
         valid_until: u(&p["validUntil"]),
         request_time: u(&p["requestTime"]),
+        conceded: if p["conceded"].is_null() { 0 } else { u(&p["conceded"]) },
     }
 }
 
@@ -44,8 +45,10 @@ fn withdrawal_samples_are_recomputed() {
         let pubs = public(p);
         kinds.push(pubs.kind);
         assert!(pubs.shape_is_valid());
-        assert_eq!(pubs.to_fields().len(), 12);
+        // `conceded` comes last, so the other inputs keep their places.
+        assert_eq!(pubs.to_fields().len(), 13);
         assert_eq!(field_to_string(pubs.to_fields()[4]), s(&p["nullifier"]));
+        assert_eq!(pubs.to_fields()[12], Field::from(pubs.conceded));
 
         // The nullifier is this state's, and the state is genesis or a signed next state.
         let secret = f(&w["secret"]);
@@ -65,12 +68,20 @@ fn withdrawal_samples_are_recomputed() {
         assert_eq!(policy::expiry_of(u(&w["depositTime"])), u(&w["expiry"]));
         assert!(pubs.request_time < u(&w["expiry"]));
         assert!(policy::is_deposit_size(pubs.size));
+
+        // An escape names the next state's nullifier, and may land only while the note is unexpired.
+        if pubs.kind == KIND_ESCAPE {
+            assert_eq!(pubs.next_nullifier, pubs.escape_next_nullifier(secret));
+            assert!(pubs.valid_until < u(&w["expiry"]));
+        } else {
+            assert!(p["conceded"].is_null());
+        }
     }
-    assert!(kinds.contains(&KIND_MUTUAL_CLOSE) && kinds.contains(&KIND_OWNERSHIP));
+    assert_eq!(kinds, [KIND_OWNERSHIP, KIND_MUTUAL_CLOSE, KIND_ESCAPE]);
 }
 
 #[test]
-fn only_a_close_and_an_ownership_proof_have_a_shape() {
+fn a_close_and_an_ownership_proof_have_a_zero_escape_tail() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../test-vectors/zk-note.json");
     let v: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let base = public(&v["withdrawalProofs"][1]["public"]);
@@ -82,4 +93,44 @@ fn only_a_close_and_an_ownership_proof_have_a_shape() {
     assert!(!WithdrawalPublic { valid_until: 1, ..base }.shape_is_valid());
     assert!(!WithdrawalPublic { next_nullifier: Field::from(1u64), ..base }.shape_is_valid());
     assert!(!WithdrawalPublic { amount: base.size + 1, ..base }.shape_is_valid());
+    assert!(!WithdrawalPublic { conceded: 1, ..base }.shape_is_valid());
+}
+
+#[test]
+fn an_escape_has_a_next_nullifier_a_bounded_concession_and_a_validity() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../test-vectors/zk-note.json");
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let base = public(&v["withdrawalProofs"][2]["public"]);
+    assert_eq!(base.kind, KIND_ESCAPE);
+    assert!(base.shape_is_valid());
+    assert!(!WithdrawalPublic { next_nullifier: Field::from(0u64), ..base }.shape_is_valid());
+    assert!(!WithdrawalPublic { conceded: base.amount + 1, ..base }.shape_is_valid());
+    assert!(WithdrawalPublic { conceded: base.amount, ..base }.shape_is_valid());
+    assert!(!WithdrawalPublic { valid_until: base.request_time - 1, ..base }.shape_is_valid());
+    assert!(!WithdrawalPublic { amount: base.size + 1, ..base }.shape_is_valid());
+}
+
+#[test]
+fn the_public_input_array_decodes_only_in_a_shape_its_kind_allows() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../test-vectors/zk-note.json");
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    for e in v["withdrawalProofs"].as_array().unwrap() {
+        let pubs = public(&e["public"]);
+        let flat = pubs.to_fields();
+        assert_eq!(WithdrawalPublic::from_fields(&flat), Ok(pubs));
+        assert_eq!(WithdrawalPublic::from_fields(&flat[1..]), Err(WithdrawalPublicError::Length(12)));
+        let mut bad = flat.clone();
+        bad[0] = Field::from(4u64);
+        assert_eq!(WithdrawalPublic::from_fields(&bad), Err(WithdrawalPublicError::Kind(4)));
+        let mut bad = flat.clone();
+        bad[9] = Field::from(2u64);
+        assert_eq!(WithdrawalPublic::from_fields(&bad), Err(WithdrawalPublicError::NotBool("destination.isOdd")));
+        let mut bad = flat.clone();
+        bad[6] = -Field::from(1u64);
+        assert_eq!(WithdrawalPublic::from_fields(&bad), Err(WithdrawalPublicError::NotU64("amount")));
+        // Every field decodes, but the inputs break the rule of their kind: amount above size.
+        let mut bad = flat.clone();
+        bad[6] = Field::from(pubs.size + 1);
+        assert_eq!(WithdrawalPublic::from_fields(&bad), Err(WithdrawalPublicError::Shape));
+    }
 }

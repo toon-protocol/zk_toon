@@ -17,3 +17,8 @@ Each file names its sources in its header.
 
 Derived files are licensed under the Apache License, Version 2.0; see
 LICENSE-APACHE.
+
+src/witness mirrors, in Rust, gadgets of o1js (https://github.com/o1-labs/o1js, Apache-2.0) and the
+Pickles and snarky sources of Mina (https://github.com/MinaProtocol/mina, Apache-2.0) at the commit
+o1js 3.1.0 builds on (see src/pins.rs). `endo_4` in src/witness/pickles.rs is derived from
+`endo_cvar` in crates/ledger/src/proofs/transaction.rs of mina-rust at the fork rev above (Apache-2.0).
