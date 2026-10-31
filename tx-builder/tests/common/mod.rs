@@ -54,7 +54,7 @@ impl Chain {
 
 /// A reduced note of `size`, deposited now from the chain's payer.
 pub fn deposit_note(b: &mut TxBuilder, chain: &Chain, secret: u64, size: u64) -> Note {
-    let deposit_time = b.local().now().unwrap();
+    let deposit_time = b.local().slot().unwrap();
     let note = Note { secret: Field::from(secret), size, deposit_time };
     let tx = b
         .deposit(&Deposit {
