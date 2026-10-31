@@ -197,8 +197,8 @@ fn request_times_agree() {
     assert!(entries.iter().any(|e| e["fresh"].as_bool().unwrap()));
     assert!(entries.iter().any(|e| !e["fresh"].as_bool().unwrap()));
     for e in entries {
-        let (request_time, now) = (u(&e["requestTime"]), u(&e["now"]));
-        assert_eq!(policy::is_request_time_fresh(request_time, now), e["fresh"].as_bool().unwrap(), "{e}");
+        let (request_time, current_slot) = (u(&e["requestTime"]), u(&e["currentSlot"]));
+        assert_eq!(policy::is_request_time_fresh(request_time, current_slot), e["fresh"].as_bool().unwrap(), "{e}");
     }
 }
 
@@ -206,12 +206,14 @@ fn request_times_agree() {
 fn policy_constants_match() {
     let v = vectors();
     let p = &v["policy"];
-    assert_eq!(policy::NOTE_LIFETIME_MS, u(&p["noteLifetimeMs"]));
-    assert_eq!(policy::MIN_SUBSIDY_AGE_MS, u(&p["minSubsidyAgeMs"]));
-    assert_eq!(policy::SUBSIDY_PERIOD_MS, u(&p["subsidyPeriodMs"]));
-    assert_eq!(policy::CHALLENGE_WINDOW_MS, u(&p["challengeWindowMs"]));
-    assert_eq!(policy::REQUEST_MAX_AGE_MS, u(&p["requestMaxAgeMs"]));
-    assert_eq!(policy::REQUEST_MAX_LEAD_MS, u(&p["requestMaxLeadMs"]));
+    assert_eq!(policy::SLOT_SECONDS, u(&p["slotSeconds"]));
+    assert_eq!(policy::SLOTS_PER_DAY, u(&p["slotsPerDay"]));
+    assert_eq!(policy::NOTE_LIFETIME_SLOTS, u(&p["noteLifetimeSlots"]));
+    assert_eq!(policy::MIN_SUBSIDY_AGE_SLOTS, u(&p["minSubsidyAgeSlots"]));
+    assert_eq!(policy::SUBSIDY_PERIOD_SLOTS, u(&p["subsidyPeriodSlots"]));
+    assert_eq!(policy::CHALLENGE_WINDOW_SLOTS, u(&p["challengeWindowSlots"]));
+    assert_eq!(policy::REQUEST_MAX_AGE_SLOTS, u(&p["requestMaxAgeSlots"]));
+    assert_eq!(policy::REQUEST_MAX_LEAD_SLOTS, u(&p["requestMaxLeadSlots"]));
     let tiers: Vec<u64> = p["tiers"].as_array().unwrap().iter().map(u).collect();
     assert_eq!(tiers, policy::TIERS);
     let sizes: Vec<u64> = p["depositSizes"].as_array().unwrap().iter().map(u).collect();
