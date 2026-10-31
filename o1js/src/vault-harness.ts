@@ -29,7 +29,7 @@ export function vaultHarness(Local: Local) {
   const [payer, deployer, alice, bob, treasuryAccount] = Local.testAccounts;
 
   /** Moves the chain forward by `slots`. */
-  const advance = (slots: bigint) => Local.incrementGlobalSlot(Number(slots));
+  const advance = (slots: bigint) => Local.setGlobalSlot(Number(now() + slots));
 
   /** A fresh vault on the shared chain, with its own state key and an off-chain mirror. */
   async function freshVault({ setup = true } = {}) {

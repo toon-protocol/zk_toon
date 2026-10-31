@@ -43,7 +43,7 @@ stderr.
 
 | value | encoding |
 |---|---|
-| field element, scalar, amount (nanomina), time (ms) | decimal string |
+| field element, scalar, amount (nanomina), time (slot) | decimal string |
 | public key | base58 address (`B62…`) |
 | fee payer private key | base58 (`EK…`) |
 | signature | `{"r": <decimal>, "s": <decimal>}`, Mina Schnorr as `zk-note` signs it |
@@ -61,7 +61,7 @@ stderr.
 `note` is what the payer keeps about its deposit:
 
 ```json
-{"secret": "<field>", "size": "<nanomina>", "depositTime": "<ms>"}
+{"secret": "<field>", "size": "<nanomina>", "depositTime": "<slot>"}
 ```
 
 `state` is the note's current state. A genesis state has `signed: null`, and its balance is the
@@ -155,7 +155,7 @@ subsidised, period, periodNullifier]`. `proof` is the o1js `JsonProof` the zk ed
 
 ### `verifyRequestProof`
 
-`{"proof": <JsonProof>, "vaultCreation"?: <ms>}` → `{"valid": true|false}`: whether the proof
+`{"proof": <JsonProof>, "vaultCreation"?: <slot>}` → `{"valid": true|false}`: whether the proof
 verifies against the request program's verification key, compiled by the builder. Given the vault's
 `creationTime` as `vaultCreation`, it is also valid only if its period is that vault's
 (`subsidyPeriodHolds` in `o1js/src/request.ts`, `RequestPublic::check_subsidy_period` in zk-note): the

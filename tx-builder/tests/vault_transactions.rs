@@ -5,7 +5,7 @@ mod common;
 use common::*;
 use zk_note::clearance::{sign_clearance, ClearanceMessage};
 use zk_note::balance::Scalar;
-use zk_note::policy::{DEPOSIT_SIZES, TIERS};
+use zk_note::policy::{DEPOSIT_SIZES, REQUEST_MAX_AGE_SLOTS, TIERS};
 use zk_note::withdrawal::{KIND_ESCAPE, KIND_MUTUAL_CLOSE};
 use zk_note::{commit_secret, Field};
 use zk_toon_tx_builder::{
@@ -92,7 +92,7 @@ fn an_escape_is_accepted_and_spends_both_nullifiers_at_the_reduce() {
         request_time,
         destination: chain.alice.clone(),
         conceded: MINA / 10,
-        valid_until: request_time + 7,
+        valid_until: request_time + REQUEST_MAX_AGE_SLOTS,
     };
 
     let tx = b.escape(&escape).unwrap();
@@ -126,7 +126,7 @@ fn recorded_escape(b: &mut TxBuilder, chain: &Chain, note: &Note, state: NoteSta
             request_time,
             destination: chain.alice.clone(),
             conceded,
-            valid_until: request_time + 7,
+            valid_until: request_time + REQUEST_MAX_AGE_SLOTS,
         })
         .unwrap();
     b.local().submit(&tx).unwrap();

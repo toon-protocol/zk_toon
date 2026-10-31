@@ -16,7 +16,7 @@ use common::keypair;
 use mina_signer::{CompressedPubKey, Keypair};
 use serde_json::{json, Value};
 use zk_note::balance::{commit, Scalar};
-use zk_note::policy::{DEPOSIT_SIZES, TIERS};
+use zk_note::policy::{DEPOSIT_SIZES, REQUEST_MAX_AGE_SLOTS, TIERS};
 use zk_note::state::{sign_state, StateMessage};
 use zk_note::{commit_secret, genesis_anchor, next_anchor, nullifier, Field};
 use zk_toon_challenger::{EscapeId, PortError, VaultChainPort};
@@ -136,7 +136,7 @@ fn escape(b: &mut TxBuilder, c: &Chain, note: &Note, state: NoteState, conceded:
             request_time,
             destination: c.alice.clone(),
             conceded,
-            valid_until: request_time + 7,
+            valid_until: request_time + REQUEST_MAX_AGE_SLOTS,
         })
         .unwrap();
     b.local().submit(&tx).unwrap();

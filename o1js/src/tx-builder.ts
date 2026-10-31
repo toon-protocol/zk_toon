@@ -429,7 +429,7 @@ export async function createBuilder(options: BuilderOptions) {
       return {};
     },
     async 'local.advance'(p) {
-      local!.incrementGlobalSlot(Number(u64(p.slots, 'slots')));
+      local!.setGlobalSlot(Number(chainSlot() + u64(p.slots, 'slots')));
       return {};
     },
     async 'local.slot'() {
