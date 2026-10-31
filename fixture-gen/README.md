@@ -28,6 +28,8 @@ What each fixture is: `cs003` is `land`'s step circuit, `cs004` `setup`'s and `c
 share. `w003` and `w001` are o1js's witnesses for the `land` and `setup` step circuits, `w004` and `w002` its
 wrap witnesses for the step proofs `stepproof002` and `stepproof001`. `inputs.json` holds the program's
 verification key data and hash, `land_proof.json` and `setup_proof.json` o1js's final proofs.
+`rust_land_proof.json` and `rust_setup_proof.json` are the Rust wrap proofs of those step proofs
+(`zk-prover`'s `rust_wrap_proofs` example), in `land_proof.json`'s shape, for `o1js/src/rust-wrap.test.ts`.
 `land-step-map.txt` (from `step-map.mjs`, run by `--write`) names the o1js call site of each of `w003`'s
 variables, for `zk-prover`'s witness tests.
 The circuits (`cs00N_*`), the step witnesses (`w001`, `w003`), `inputs.json` and `land-step-map.txt` are
