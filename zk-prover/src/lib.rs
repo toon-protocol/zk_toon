@@ -7,10 +7,15 @@
 //! The witness can come from o1js's own dump ([`StepWitness::from_o1js_json`]) or be built in Rust:
 //! [`witness`] mirrors the o1js gadgets and Pickles' step circuit, and builds `land`'s witness
 //! ([`witness::land::land_witness`]) equal to o1js's; [`StepWitness::from_parts`] takes it.
+//!
+//! [`wrap::wrap`] wraps a step proof into the Pickles wrap proof of an o1js program: given the
+//! program's step circuits (one per method), its feature flags and its compiled wrap circuit, it
+//! returns the wrap proof and the wrap witness, which equals o1js's value for value.
 
 pub mod pins;
 pub mod verify;
 pub mod witness;
+pub mod wrap;
 
 use std::str::FromStr;
 
@@ -26,11 +31,18 @@ use mina_curves::pasta::Fp;
 /// A step proof and its public input.
 pub use ledger::proofs::transaction::ProofWithPublic as StepProof;
 
-/// Shape of `land`'s step circuit (`cs003`).
-pub use ledger::proofs::toon1561::StepLand;
+/// Shape of `land`'s step circuit (`cs003`) and `setup`'s (`cs004`).
+pub use ledger::proofs::toon1561::{StepLand, StepSetup};
 
-/// Shape of `setup`'s step circuit (`cs004`).
-pub use ledger::proofs::toon1561::StepSetup;
+/// Shape of the wrap circuit of the toy `land` / `setup` program (`cs005`): 40 public inputs, and
+/// the 2 previous challenges every Pickles wrap circuit has.
+pub struct WrapLandSetup;
+impl ProofConstants for WrapLandSetup {
+    const PRIMARY_LEN: usize = 40;
+    const AUX_LEN: usize = 99657;
+    const PREVIOUS_CHALLENGES: usize = 2;
+    const ROWS: usize = 6798;
+}
 
 /// A compiled step circuit with its prover index.
 pub struct StepCircuit {
@@ -55,6 +67,11 @@ impl StepCircuit {
                 index,
             },
         })
+    }
+
+    /// The kimchi prover index, from which the step verification key is read.
+    pub fn index(&self) -> &ledger::proofs::ProverIndex<Fp> {
+        &self.prover.index
     }
 }
 

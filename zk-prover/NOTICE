@@ -7,6 +7,14 @@ rust/mesa-toon-1512/src/main.rs at commit
 (https://github.com/o1-labs/mina-rust, Apache-2.0) through the fork
 toon-protocol/mina-rust at rev 6feeb3797fff6dba49fd848cb2d6decd63fee1b4.
 
+The files under src/wrap/ are derived from the Pickles wrap prover in
+toon-protocol/mina-rust at rev 6feeb3797fff6dba49fd848cb2d6decd63fee1b4
+(crates/ledger/src/proofs/{wrap,opt_sponge,group_map,transaction}.rs), which
+is derived from o1-labs/mina-rust v0.19.0 (Apache-2.0), and follow the OCaml
+Pickles code of MinaProtocol/mina at commit
+228c409a1696669d963425162f12e88d41231c6d (the commit o1js v3.1.0 bundles).
+Each file names its sources in its header.
+
 Derived files are licensed under the Apache License, Version 2.0; see
 LICENSE-APACHE.
 
