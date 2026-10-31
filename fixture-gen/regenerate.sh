@@ -23,4 +23,10 @@ for f in cs00{3,4,5}_gates.json cs00{3,4,5}_internal_vars.bin cs00{3,4,5}_rows_r
   stepproof001.b64 stepproof002.b64 land_proof.json setup_proof.json land-step-map.txt; do
   gzip -9nc "$out/$f" > "$fixtures/$f.gz"
 done
+# A step proof's public input (the hash of its messages_for_next_step_proof) is not in its dump, but o1js's
+# wrap witness carries it as field 12: stepproof001 pairs with w002, stepproof002 with w004.
+for pair in 001:w002_cs005 002:w004_cs005; do
+  node -e 'const w=JSON.parse(require("fs").readFileSync(process.argv[1]));console.log(JSON.stringify([w.external[12]]))' \
+    "$out/${pair#*:}.json" | gzip -9nc > "$fixtures/stepproof${pair%%:*}_public.json.gz"
+done
 cargo run --quiet -p zk-prover --example vk_hashes

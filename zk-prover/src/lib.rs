@@ -31,7 +31,7 @@ use mina_curves::pasta::Fp;
 /// A step proof and its public input.
 pub use ledger::proofs::transaction::ProofWithPublic as StepProof;
 
-/// Shape of `land`'s step circuit (`cs003`).
+/// Shape of `land`'s step circuit (`cs003`) and `setup`'s (`cs004`).
 pub use ledger::proofs::toon1561::{StepLand, StepSetup};
 
 /// Shape of the wrap circuit of the toy `land` / `setup` program (`cs005`): 40 public inputs, and
@@ -43,9 +43,6 @@ impl ProofConstants for WrapLandSetup {
     const PREVIOUS_CHALLENGES: usize = 2;
     const ROWS: usize = 6798;
 }
-
-/// Shape of `setup`'s step circuit (`cs004`).
-pub use ledger::proofs::toon1561::StepSetup;
 
 /// A compiled step circuit with its prover index.
 pub struct StepCircuit {
