@@ -23,12 +23,17 @@ fn fixture(name: &str) -> Vec<u8> {
 /// `land`'s step proof, with the public input o1js proved it under: the hash of the proof's
 /// `messages_for_next_step_proof`, which is also field 12 of o1js's wrap witness.
 fn step_proof() -> ProofWithPublic<Fp> {
-    let b64 = String::from_utf8(fixture("stepproof002.b64")).unwrap();
+    step_proof_of("002")
+}
+
+/// `stepproof001` is `setup`'s, `stepproof002` `land`'s.
+fn step_proof_of(n: &str) -> ProofWithPublic<Fp> {
+    let b64 = String::from_utf8(fixture(&format!("stepproof{n}.b64"))).unwrap();
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(b64.trim())
         .unwrap();
     let proof = rmp_serde::from_slice(&bytes).unwrap();
-    let public: Vec<String> = serde_json::from_slice(&fixture("stepproof002_public.json")).unwrap();
+    let public: Vec<String> = serde_json::from_slice(&fixture(&format!("stepproof{n}_public.json"))).unwrap();
     let public_input = public.iter().map(|s| Fp::from_str(s).unwrap()).collect();
     ProofWithPublic {
         proof,
@@ -38,7 +43,11 @@ fn step_proof() -> ProofWithPublic<Fp> {
 
 /// o1js's witness of the wrap circuit for that proof: the public input, then the rest.
 fn o1js_wrap_witness() -> Vec<Fq> {
-    let json: serde_json::Value = serde_json::from_slice(&fixture("w004_cs005.json")).unwrap();
+    o1js_wrap_witness_of("w004_cs005")
+}
+
+fn o1js_wrap_witness_of(name: &str) -> Vec<Fq> {
+    let json: serde_json::Value = serde_json::from_slice(&fixture(&format!("{name}.json"))).unwrap();
     json["external"]
         .as_array()
         .unwrap()
@@ -75,7 +84,10 @@ fn wrap_circuit() -> WrapCircuit {
 }
 
 fn assert_equals_o1js(witness: &zk_prover::wrap::WrapWitness) {
-    let expected = o1js_wrap_witness();
+    assert_equals(witness, &o1js_wrap_witness());
+}
+
+fn assert_equals(witness: &zk_prover::wrap::WrapWitness, expected: &[Fq]) {
     if let Some(i) = witness.first_difference(&expected) {
         panic!(
             "the wrap witness first differs from o1js's at index {i}: ours {:?}, o1js {:?} \
@@ -157,4 +169,21 @@ fn a_program_that_verifies_proofs_is_refused() {
     })
     .unwrap_err();
     assert!(err.to_string().contains("#32"), "{err:#}");
+}
+
+/// `setup`'s step proof (`stepproof001`, branch 1) wraps to o1js's witness (`w002_cs005`) at every
+/// index: one wrap circuit, two methods, two step keys.
+#[test]
+fn setup_wrap_witness_equals_o1js_at_every_index() {
+    let [land, setup] = step_circuits();
+    let features = union_features(&[step_features(land.index()), step_features(setup.index())]);
+    let witness = wrap_witness(WrapParams {
+        max_proofs_verified: 0,
+        step_circuits: &[&land, &setup],
+        branch: 1,
+        features,
+        step_proof: &step_proof_of("001"),
+    })
+    .unwrap();
+    assert_equals(&witness, &o1js_wrap_witness_of("w002_cs005"));
 }

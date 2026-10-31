@@ -29,4 +29,10 @@ for pair in 001:w002_cs005 002:w004_cs005; do
   node -e 'const w=JSON.parse(require("fs").readFileSync(process.argv[1]));console.log(JSON.stringify([w.external[12]]))' \
     "$out/${pair#*:}.json" | gzip -9nc > "$fixtures/stepproof${pair%%:*}_public.json.gz"
 done
+# The Rust wrap proofs of both step proofs, in the form o1js's `verify` reads (o1js/src/rust-wrap.test.ts).
+rust=$(mktemp -d)
+cargo run --quiet --release -p zk-prover --example rust_wrap_proofs -- "$rust"
+for m in land setup; do
+  gzip -9nc "$rust/rust_${m}_proof.json" > "$fixtures/rust_${m}_proof.json.gz"
+done
 cargo run --quiet -p zk-prover --example vk_hashes

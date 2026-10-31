@@ -132,7 +132,7 @@ pub fn wrap<C: ProofConstants>(
     let step_proof = params.step_proof;
     let Prepared {
         witness,
-        statement,
+        mut statement,
         x_hat_evals,
     } = prepare(params)?;
 
@@ -146,6 +146,16 @@ pub fn wrap<C: ProofConstants>(
         })
         .collect();
     let proof = circuit.prove::<C>(&witness, prev_challenges)?;
+
+    // A Pickles proof carries `old_bulletproof_challenges` at length 2, padded in front with the
+    // dummy challenges (`Wrap_hack.pad_proof`). The circuit absorbed them already, in their expanded
+    // form; the proof holds the 128-bit prechallenges.
+    let wrap_messages = &mut statement.proof_state.messages_for_next_wrap_proof;
+    while wrap_messages.old_bulletproof_challenges.len() < 2 {
+        let prechallenges = ledger::proofs::unfinalized::dummy_ipa_wrap_challenges()
+            .map(|[lo, hi]| Fq::from(ark_ff::BigInteger256::new([lo, hi, 0, 0])));
+        wrap_messages.old_bulletproof_challenges.insert(0, prechallenges);
+    }
 
     let proof = WrapProof {
         proof,
