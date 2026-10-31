@@ -15,7 +15,7 @@ const MINA: u64 = 1_000_000_000;
 /// Asks for a request proof of `state` and checks every public input against zk-note.
 fn request_matches(b: &mut TxBuilder, chain: &Chain, note: &zk_toon_tx_builder::Note, state: NoteState, n: Field, balance: u64) {
     let session = keypair(777).public.into_compressed();
-    let request_time = b.local().now().unwrap();
+    let request_time = b.local().slot().unwrap();
     let input = RequestProofInput {
         vault: chain.vault.clone(),
         note: note.clone(),
@@ -70,7 +70,7 @@ fn a_real_request_proof_verifies() {
     let chain = Chain::new(&mut b);
     let note = deposit_note(&mut b, &chain, 7007, DEPOSIT_SIZES[0]);
     let (state, n) = genesis(&note, 5);
-    let request_time = b.local().now().unwrap();
+    let request_time = b.local().slot().unwrap();
     let proof = b
         .request_proof(&RequestProofInput {
             vault: chain.vault.clone(),

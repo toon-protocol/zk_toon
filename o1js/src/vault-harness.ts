@@ -6,7 +6,7 @@ import * as policy from './policy.js';
 import { signClearance } from './clearance.js';
 import { commitSecret } from './primitives.js';
 import {
-  CLOSE_WINDOW_MS, PendingEscape, SWEEP_BATCH_SIZE, SweptNote, VAULT_URI, Vault, VaultAction, batchReducer, setupFields,
+  CLOSE_WINDOW_SLOTS, PendingEscape, SWEEP_BATCH_SIZE, SweptNote, VAULT_URI, Vault, VaultAction, batchReducer, setupFields,
 } from './vault.js';
 import { VaultMirror } from './vault-mirror.js';
 import { WithdrawalKind, WithdrawalProgram, WithdrawalProof, WithdrawalPublic } from './withdrawal.js';
@@ -19,11 +19,8 @@ type Account = Local['testAccounts'][number];
 type Tx = Awaited<ReturnType<typeof Mina.transaction>>;
 export type Note = { secret: bigint; size: bigint; depositTime: bigint };
 
-/** The network's timestamp is that of the current slot's start. */
-export const now = () => {
-  const { genesisTimestamp, slotTime } = Mina.getNetworkConstants();
-  return genesisTimestamp.toBigInt() + Mina.getNetworkState().globalSlotSinceGenesis.toBigint() * slotTime.toBigInt();
-};
+/** The chain's current slot. */
+export const now = () => Mina.getNetworkState().globalSlotSinceGenesis.toBigint();
 export const balanceOf = (pk: PublicKey) => Mina.getBalance(pk).toBigInt();
 
 let nextSecret = 1000n;
@@ -31,11 +28,8 @@ let nextSecret = 1000n;
 export function vaultHarness(Local: Local) {
   const [payer, deployer, alice, bob, treasuryAccount] = Local.testAccounts;
 
-  /** Moves the chain's clock forward by at least `ms`. */
-  const advance = (ms: bigint) => {
-    const slot = Mina.getNetworkConstants().slotTime.toBigInt();
-    Local.incrementGlobalSlot(Number((ms + slot - 1n) / slot));
-  };
+  /** Moves the chain forward by `slots`. */
+  const advance = (slots: bigint) => Local.incrementGlobalSlot(Number(slots));
 
   /** A fresh vault on the shared chain, with its own state key and an off-chain mirror. */
   async function freshVault({ setup = true } = {}) {
@@ -106,7 +100,7 @@ export function vaultHarness(Local: Local) {
           })
         );
       },
-      /** Deposits a note, by default named at the current block time, and returns it. */
+      /** Deposits a note, by default named at the current slot, and returns it. */
       async deposit(size = policy.DEPOSIT_SIZES[0], o: { depositTime?: bigint } = {}): Promise<Note> {
         const secret = nextSecret++;
         const depositTime = o.depositTime ?? now();
@@ -140,7 +134,7 @@ export function vaultHarness(Local: Local) {
         const cursor = vault.sweepCursor.get().toBigInt();
         const countable = (i: number) =>
           i < SWEEP_BATCH_SIZE && cursor + BigInt(i) < mirror.tree.nextIndex &&
-          policy.expiryOf(mirror.tree.depositAt(cursor + BigInt(i)).depositTime.toBigInt()) + CLOSE_WINDOW_MS <= now();
+          policy.expiryOf(mirror.tree.depositAt(cursor + BigInt(i)).depositTime.toBigInt()) + CLOSE_WINDOW_SLOTS <= now();
         let count = 0;
         while (o.count === undefined && countable(count)) count++;
         await send(await sweepTx(o.count ?? count));

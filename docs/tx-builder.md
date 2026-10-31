@@ -89,7 +89,7 @@ vault's state. A note must be reduced before anything can be built from it.
 | `feePayer` | pays `size` and the fee |
 | `commitment` | `commit_secret(secret)`; the secret itself never crosses the interface for a deposit |
 | `size` | one of the vault's deposit sizes |
-| `depositTime` | the block time the deposit lands at, to within one slot (90 s) |
+| `depositTime` | the slot the deposit lands at, to within one slot |
 
 Result: `{"zkappCommand": {…}}`, the proved and signed transaction as o1js `Transaction.toJSON()`
 produces it. It is ready for Mina GraphQL's `sendZkapp`.
@@ -99,7 +99,7 @@ produces it. It is ready for Mina GraphQL's `sendZkapp`.
 | param | |
 |---|---|
 | `vault`, `feePayer`, `note`, `state` | as above |
-| `requestTime` | the close must land within 10 minutes after it |
+| `requestTime` | a slot; the close must land within 7 slots (10 minutes, rounded up) after it |
 | `destination` | where the balance goes |
 | `clearance` | the zk edge's clearance of this state's nullifier to `destination` |
 
@@ -112,7 +112,7 @@ proof's public inputs, in the layout `zk_note::withdrawal` documents.
 |---|---|
 | `vault`, `feePayer`, `note`, `state`, `requestTime`, `destination` | as for `mutualClose` |
 | `conceded` | what the escape gives up, at most the balance |
-| `validUntil` | the last block time the escape may land at, at or after `requestTime` and before the note's expiry |
+| `validUntil` | the last slot the escape may land at, at or after `requestTime` and before the note's expiry |
 
 Result: as for `mutualClose`. `publicInputFields[5]` is the next state's nullifier.
 
@@ -171,8 +171,8 @@ These let tests show that the vault accepts what the builder builds.
 | `local.deployVault` | `stateKey`, `treasury` | `{"vault": <address>}`, deployed and set up |
 | `local.submit` | `zkappCommand` | `{}`, or a `rejected` failure |
 | `local.reduce` | `vault` | `{}`, after reducing every pending action as a keeper would |
-| `local.advance` | `ms` | `{}`, after moving the clock forward at least `ms` |
-| `local.now` | | `{"now": <ms>}` |
+| `local.advance` | `slots` | `{}`, after moving the chain forward `slots` |
+| `local.slot` | | `{"slot": <slot>}` |
 | `local.balance` | `publicKey` | `{"balance": <nanomina>}` |
 | `local.vaultState` | `vault` | the vault's roots, next leaf index, state key, treasury and creation time |
 | `local.graphql` | `endpoint` (`mina` or `archive`), `request` | the answer to one of the challenger adapter's named GraphQL operations (`VaultState`, `EscapeEvents`, `SendChallenge`, `ChallengeStatus`), shaped as the daemon or archive answers it; a refused send is a GraphQL error |

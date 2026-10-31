@@ -1,4 +1,8 @@
-// The vault zkApp. A deposit moves a fixed size into the vault and dispatches an action; a mutual close
+// The vault zkApp. Time is measured in slots (ADR 0007, GLOSSARY: Slot): every time the vault stores or
+// proves is a slot, and it reads chain time only through `this.currentSlot.requireBetween`, never a
+// `network.*` precondition, so its verification key does not depend on the network's constants.
+//
+// A deposit moves a fixed size into the vault and dispatches an action; a mutual close
 // checks a withdrawal proof and the zk edge's clearance and dispatches an action; an escape checks an
 // escape proof and dispatches an action; after the challenge window anyone can finalize an escape, which
 // dispatches an action too. Within the window, a challenger may defeat an escape with a request proof at its
@@ -17,7 +21,7 @@
 // stays the same, and the vault's verification key is replaceable only after a Mina hard fork
 // (`impossibleDuringCurrentVersion`), after a fork notice. No owner action can stop or delay an escape.
 import {
-  AccountUpdate, Bool, Experimental, Field, IndexedMerkleMap, Permissions, Poseidon, Provable, PublicKey, Signature,
+  AccountUpdate, Bool, Experimental, Field, IndexedMerkleMap, Mina, Permissions, Poseidon, Provable, PublicKey, Signature,
   SmartContract, State, Struct, UInt32, UInt64, Unconstrained, declareMethods, declareState,
 } from 'o1js';
 import * as policy from './policy.js';
@@ -29,8 +33,6 @@ import { tagToBigint } from './primitives.js';
 
 /** How many recent note-tree roots the vault remembers. */
 export const ROOT_RING_LENGTH = 8;
-/** Mesa slots are 90 s. */
-export const SLOT_MS = 90_000n;
 
 /** The zkApp URI the shared harnesses deploy a vault with: the location of its fork notices. */
 export const VAULT_URI = 'https://example.org/toon-vault';
@@ -41,8 +43,8 @@ export const VAULT_URI = 'https://example.org/toon-vault';
  * proof needs more than 2^16 rows, and the vault doesn't compile (#16). `npm run keys` compiles it.
  */
 export const REDUCE_BATCH_SIZE = 4;
-/** How long after its `requestTime` a mutual close may land: the connector's request-time window. */
-export const CLOSE_WINDOW_MS = policy.REQUEST_MAX_AGE_MS;
+/** How many slots after its `requestTime` a mutual close may land: the connector's request-time window. */
+export const CLOSE_WINDOW_SLOTS = policy.REQUEST_MAX_AGE_SLOTS;
 /** Notes a sweep walks per call, at most. */
 export const SWEEP_BATCH_SIZE = 16;
 /** The nullifier set holds up to 2^(height − 1) nullifiers. */
@@ -73,7 +75,7 @@ export enum ActionKind {
  * A pending escape, as the reduce records it. The vault stores only its hash, at key `nullifier` of the
  * pending escapes. `amount` is the escaping state's balance and `size` the note's deposit size; finalizing
  * pays `amount − conceded` to `destination` and the rest of `size` to the treasury. Anyone may finalize
- * once the block time reaches `deadline`.
+ * once the current slot reaches `deadline`.
  *
  * Before `deadline`, a defeat (a request proof at `nextNullifier`) finishes the record without paying, and
  * a raise (a request proof at `nullifier`) replaces it with one whose `conceded` is lifted.
@@ -118,11 +120,11 @@ export class EscapeUpdate extends Struct({ pending: Bool, record: PendingEscape 
 
 /**
  * The vault's one fixed-width action. Each kind uses some fields and leaves the rest zero:
- * - a deposit: `commitment`, `size` and `time` (its deposit time);
- * - a mutual close: `nullifier`, `amount`, `size`, `destination` and `time` (its request time);
+ * - a deposit: `commitment`, `size` and `time` (its deposit slot);
+ * - a mutual close: `nullifier`, `amount`, `size`, `destination` and `time` (its request slot);
  * - an escape: those of a close, plus `nextNullifier`, `validUntil` and `conceded`;
- * - a finalize or a defeat: the pending escape it finishes, with `time` its deadline;
- * - a raise: the pending escape as raised, with `time` its deadline and `commitment` the hash of the
+ * - a finalize or a defeat: the pending escape it finishes, with `time` its deadline slot;
+ * - a raise: the pending escape as raised, with `time` its deadline slot and `commitment` the hash of the
  *   record it replaces;
  * - a sweep: `size`, the vault's expired total when it was dispatched.
  * Every dispatched action has `conceded ≤ amount ≤ size`.
@@ -195,7 +197,7 @@ export class VaultAction extends Struct({
 
 /**
  * A note a sweep walks past: the deposit as the reduce made it a leaf, and the leaf's witness. A sweep
- * uses each note's size and deposit time, which are public at deposit anyway, and nothing of its fate.
+ * uses each note's size and deposit slot, which are public at deposit anyway, and nothing of its fate.
  */
 export class SweptNote extends Struct({ commitment: Field, size: UInt64, depositTime: UInt64, path: NoteWitness }) {
   /** The notes at `from` onwards in `tree`, `count` of them, padded to a sweep batch with the empty slot after them. */
@@ -217,6 +219,13 @@ export const setupFields = (vault: PublicKey, stateKey: PublicKey, treasury: Pub
   Field(tagToBigint(SETUP_TAG)),
   vault.x, vault.isOdd.toField(), stateKey.x, stateKey.isOdd.toField(), treasury.x, treasury.isOdd.toField(),
 ];
+
+/** Requires the current slot to be within `[lower, upper]`: the vault's only read of chain time. */
+function requireSlotBetween(contract: SmartContract, lower: UInt64, upper: UInt64) {
+  contract.currentSlot.requireBetween(lower.toUInt32(), upper.toUInt32());
+}
+/** The last slot there is: no upper bound. */
+const LAST_SLOT = UInt64.from(UInt32.MAXINT().toBigint());
 
 /**
  * Precondition on a payee: its account exists, so a payout to it opens no account and cannot fail for want
@@ -320,15 +329,15 @@ export class Vault extends SmartContract {
     });
   }
 
-  /** Pins the creation time to the block timestamp (within a slot) and records the policy. */
+  /** Pins the creation slot to the including block's (within a slot) and records the policy. */
   init() {
     super.init();
-    const now = this.network.timestamp.get();
-    this.network.timestamp.requireBetween(now, now.add(UInt64.from(SLOT_MS)));
+    const now = Provable.witness(UInt64, () => UInt64.from(Mina.getNetworkState().globalSlotSinceGenesis.toBigint()));
+    requireSlotBetween(this, now, now.add(1));
     this.creationTime.set(now);
     this.depositSizes.set(DepositSizes.fromPolicy());
-    this.noteLifetime.set(UInt64.from(policy.NOTE_LIFETIME_MS));
-    this.challengeWindow.set(UInt64.from(policy.CHALLENGE_WINDOW_MS));
+    this.noteLifetime.set(UInt64.from(policy.NOTE_LIFETIME_SLOTS));
+    this.challengeWindow.set(UInt64.from(policy.CHALLENGE_WINDOW_SLOTS));
     this.actionState.set(BatchReducer.initialActionState);
     this.actionStack.set(BatchReducer.initialActionStack);
     this.noteRoot.set(emptyNoteRoot());
@@ -357,7 +366,7 @@ export class Vault extends SmartContract {
 
   async deposit(commitment: Field, size: UInt64, depositTime: UInt64) {
     this.depositSizes.getAndRequireEquals().has(size).assertTrue('not a deposit size');
-    this.network.timestamp.requireBetween(depositTime, depositTime.add(UInt64.from(SLOT_MS)));
+    requireSlotBetween(this, depositTime, depositTime.add(1));
     const payer = AccountUpdate.createSigned(this.sender.getAndRequireSignature());
     payer.send({ to: this, amount: size });
     batchReducer.dispatch(VaultAction.deposit(commitment, size, depositTime));
@@ -382,7 +391,7 @@ export class Vault extends SmartContract {
       .assertTrue('bad clearance');
 
     const action = VaultAction.mutualClose(pub);
-    this.network.timestamp.requireBetween(action.time, action.time.add(UInt64.from(CLOSE_WINDOW_MS)));
+    requireSlotBetween(this, action.time, action.time.add(UInt64.from(CLOSE_WINDOW_SLOTS)));
     // A payout to an account that does not exist would fail the reduce, and stall every action queued behind it.
     requireAccountExists(pub.destination);
 
@@ -407,7 +416,7 @@ export class Vault extends SmartContract {
     new RootRing(this.rootRing.getAndRequireEquals()).contains(pub.root).assertTrue('root not in the ring');
 
     const action = VaultAction.escape(pub);
-    this.network.timestamp.requireBetween(action.time, action.validUntil);
+    requireSlotBetween(this, action.time, action.validUntil);
     // Finalizing pays the destination, so it must exist, as for a close.
     requireAccountExists(pub.destination);
 
@@ -418,13 +427,13 @@ export class Vault extends SmartContract {
   }
 
   /**
-   * Permissionless, once the block time reaches the escape's deadline. Checks that `escape` is pending,
+   * Permissionless, once the current slot reaches the escape's deadline. Checks that `escape` is pending,
    * then dispatches a finalize; the reduce pays it.
    */
   async finalize(escape: PendingEscape, escapes: PendingEscapes) {
     escapes.root.assertEquals(this.pendingEscapesRoot.getAndRequireEquals(), 'not the vault pending escapes');
     escapes.getOption(escape.nullifier).orElse(0n).assertEquals(escape.hash(), 'no such pending escape');
-    this.network.timestamp.requireBetween(escape.deadline, UInt64.MAXINT());
+    requireSlotBetween(this, escape.deadline, LAST_SLOT);
     batchReducer.dispatch(VaultAction.finalize(escape));
   }
 
@@ -460,23 +469,23 @@ export class Vault extends SmartContract {
 
   /**
    * Permissionless. Walks the next `count` notes (at most a batch) from the sweep cursor, each of which
-   * must have expired by the block time, adds their sizes to the expired total, and dispatches a sweep of
+   * must have expired by the current slot, adds their sizes to the expired total, and dispatches a sweep of
    * that total; the reduce pays the treasury what the expired notes left (ADR 0005). Refused while
    * nothing has expired. A note counts only once a close proven before its expiry can no longer land,
-   * at `expiry + CLOSE_WINDOW_MS`; an escape lands before its note's expiry. So every withdrawal of a
+   * at `expiry + CLOSE_WINDOW_SLOTS`; an escape lands before its note's expiry. So every withdrawal of a
    * counted note was dispatched before the sweep, and the reduce applies it first.
    *
    * `notes` holds a batch: the walked notes in index order, padded with anything (`SweptNote.batch` builds one).
-   * `now` is at most the block time. Deposit times may run up to a slot out of index order; a note
+   * `now` is at most the current slot. Deposit slots may run up to a slot out of index order; a note
    * expiring later than the one after it holds that one back until it expires too.
    */
   async sweepExpired(count: UInt32, notes: Unconstrained<SweptNote[]>, now: UInt64) {
     this.treasury.getAndRequireEquals().isEmpty().assertFalse('setup has not run');
-    this.network.timestamp.requireBetween(now, UInt64.MAXINT());
+    requireSlotBetween(this, now, LAST_SLOT);
     const root = this.noteRoot.getAndRequireEquals();
     let cursor = this.sweepCursor.getAndRequireEquals();
     let expired = this.expiredTotal.getAndRequireEquals();
-    const lapse = UInt64.from(policy.NOTE_LIFETIME_MS + CLOSE_WINDOW_MS);
+    const lapse = UInt64.from(policy.NOTE_LIFETIME_SLOTS + CLOSE_WINDOW_SLOTS);
 
     for (let i = 0; i < SWEEP_BATCH_SIZE; i++) {
       const walks = count.greaterThan(UInt32.from(i));
@@ -508,12 +517,12 @@ export class Vault extends SmartContract {
     evidence.publicInput.vault.equals(stateKey).assertTrue('not the state key');
   }
 
-  /** `escape` is pending as named, and the block time is before its deadline. */
+  /** `escape` is pending as named, and the current slot is before its deadline. */
   private checkChallengeable(escape: PendingEscape, escapes: PendingEscapes) {
     escapes.root.assertEquals(this.pendingEscapesRoot.getAndRequireEquals(), 'not the vault pending escapes');
     escapes.getOption(escape.nullifier).orElse(0n).assertEquals(escape.hash(), 'no such pending escape');
-    // A recorded deadline is a full window after a reduce's block time, so never zero.
-    this.network.timestamp.requireBetween(UInt64.zero, escape.deadline.sub(1));
+    // A recorded deadline is a full window after a reduce's slot, so never zero.
+    requireSlotBetween(this, UInt64.zero, escape.deadline.sub(1));
   }
 
   /**
@@ -534,7 +543,7 @@ export class Vault extends SmartContract {
    * So of a raise, a defeat and a finalize of one escape in one batch, only the first applies.
    * Each change to a pending escape is emitted as an `escape` event ({@link EscapeUpdate}).
    *
-   * `now` pins the block time to within a slot after it.
+   * `now` pins the current slot to within a slot after it.
    */
   async reduce(
     batch: VaultBatch, proof: VaultBatchProof, witnesses: Unconstrained<NoteWitness[]>, given: NullifierSet,
@@ -545,9 +554,9 @@ export class Vault extends SmartContract {
     const nullifiers = given.clone();
     const escapes = givenEscapes.clone();
     escapes.root.assertEquals(this.pendingEscapesRoot.getAndRequireEquals(), 'not the vault pending escapes');
-    this.network.timestamp.requireBetween(now, now.add(UInt64.from(SLOT_MS)));
-    // The block time is at most `now + SLOT_MS`, so the window is never shorter than its full length.
-    const deadline = now.add(UInt64.from(SLOT_MS)).add(this.challengeWindow.getAndRequireEquals());
+    requireSlotBetween(this, now, now.add(1));
+    // The current slot is at most `now + 1`, so the window is never shorter than its full length.
+    const deadline = now.add(1).add(this.challengeWindow.getAndRequireEquals());
     let root = this.noteRoot.getAndRequireEquals();
     let next = this.nextLeafIndex.getAndRequireEquals();
     const ring = new RootRing(this.rootRing.getAndRequireEquals());
