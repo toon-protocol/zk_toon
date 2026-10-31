@@ -1,7 +1,8 @@
 //! Wrap `land`'s and `setup`'s step proofs (`stepproof002`, `stepproof001`) in Rust and write each
 //! as `rust_<method>_proof.json` in the directory given: `land_proof.json`'s shape, with `proof` the
 //! Rust wrap proof in the form o1js's `verify` reads for a program (`maxProofsVerified` 0), for
-//! `o1js/src/rust-wrap.test.ts`. `fixture-gen/regenerate.sh --write` runs it.
+//! `o1js/src/rust-wrap.test.ts`. Also `rust_witness_land_proof.json`, the same for `land` proved from
+//! the Rust step witness rather than o1js's step proof. `fixture-gen/regenerate.sh --write` runs it.
 
 use std::{io::Read, str::FromStr};
 
@@ -9,7 +10,9 @@ use base64::Engine as _;
 use ledger::proofs::transaction::ProofWithPublic;
 use mina_curves::pasta::Fp;
 use zk_prover::{
+    land_program::LandProgram,
     verify::WrapProof,
+    witness::land::LandInputs,
     wrap::{deferred::step_features, union_features, wrap, WrapCircuit, WrapParams},
     StepCircuit, StepLand, StepSetup, WrapLandSetup,
 };
@@ -69,5 +72,13 @@ fn main() -> anyhow::Result<()> {
         json["proof"] = WrapProof::from_prover(&proved.proof).to_o1js_program_base64()?.into();
         std::fs::write(out.join(format!("rust_{method}_proof.json")), serde_json::to_vec(&json)?)?;
     }
+
+    // `fixture-gen/prove-local.mjs`'s call: `landed` is 0, and the blinding value is its counter's 4.
+    let inputs: serde_json::Value = serde_json::from_slice(&fixture("inputs.json"))?;
+    let inputs = LandInputs::from_json(&inputs, 0, Fp::from(4u64))?;
+    let proved = LandProgram::load(fixture)?.prove_land(&inputs)?;
+    let mut json: serde_json::Value = serde_json::from_slice(&fixture("land_proof.json"))?;
+    json["proof"] = proved.proof.to_o1js_program_base64()?.into();
+    std::fs::write(out.join("rust_witness_land_proof.json"), serde_json::to_vec(&json)?)?;
     Ok(())
 }
