@@ -8,6 +8,24 @@ import { Fp } from './node_modules/o1js/dist/node/bindings/crypto/finite-field.j
 let blinding = 0n;
 Fp.random = () => ++blinding;
 const OUT = process.env.SPIKE_DUMP;
+// The public input o1js proves a method against: the account update's hash and its calls' hash.
+function publicInput(tx) {
+  const au = tx.transaction.accountUpdates.find((a) => a.publicKey.toBase58() === zkAddr.toBase58());
+  return au.toPublicInput(tx.transaction);
+}
+// What the Rust verifier checks: the proof o1js attached to the zkApp's account update, its public
+// input and the program's verification key.
+function writeProof(method, tx, input) {
+  const proof = JSON.parse(tx.toJSON()).accountUpdates.find((a) => a.body.publicKey === zkAddr.toBase58()).authorization.proof;
+  fs.writeFileSync(`${OUT}/${method}_proof.json`, JSON.stringify({
+    program: 'land',
+    maxProofsVerified: 0,
+    verificationKey: { data: verificationKey.data, hash: verificationKey.hash.toString() },
+    proof,
+    publicInputFields: [input.accountUpdate.toString(), input.calls.toString()],
+    publicOutputFields: [],
+  }));
+}
 const Local = await Mina.LocalBlockchain({ proofsEnabled: true });
 Mina.setActiveInstance(Local);
 // TOY KEYS: small fixed scalars so the fixtures are reproducible. Never use them for anything else.
@@ -20,14 +38,19 @@ const { verificationKey } = await Land.compile();
 let tx = await Mina.transaction(fee, async () => { AccountUpdate.fundNewAccount(fee); await zk.deploy(); });
 await tx.sign([fee.key, zkKey]).send();
 tx = await Mina.transaction(fee, async () => { await zk.setup(payer); });
-await tx.prove(); await tx.sign([fee.key]).send();
+const setupInput = publicInput(tx);
+await tx.prove();
+writeProof('setup', tx, setupInput);
+await tx.sign([fee.key]).send();
 const cumulative = UInt64.from(5);
 const sig = Signature.create(payerKey, cumulative.toFields());
 tx = await Mina.transaction(fee, async () => { await zk.land(cumulative, sig); });
 globalThis.__spikeTrace = []; globalThis.__spikeMark = true;
 fs.writeFileSync(`${OUT}/land.unproved.tx.json`, tx.toJSON());
+const landInput = publicInput(tx);
 const t = Date.now();
 await tx.prove();
+writeProof('land', tx, landInput);
 console.log('land prove ms', Date.now() - t);
 fs.writeFileSync(`${OUT}/land.proved.tx.json`, tx.toJSON());
 await tx.sign([fee.key]).send();

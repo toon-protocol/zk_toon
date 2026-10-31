@@ -44,6 +44,9 @@ impl ProofConstants for WrapLandSetup {
     const ROWS: usize = 6798;
 }
 
+/// Shape of `setup`'s step circuit (`cs004`).
+pub use ledger::proofs::toon1561::StepSetup;
+
 /// A compiled step circuit with its prover index.
 pub struct StepCircuit {
     prover: Prover<Fp>,
@@ -72,6 +75,20 @@ impl StepCircuit {
     /// The kimchi prover index, from which the step verification key is read.
     pub fn index(&self) -> &ledger::proofs::ProverIndex<Fp> {
         &self.prover.index
+    }
+}
+
+impl StepCircuit {
+    /// The step circuit's verification key hash: kimchi's digest of its verifier index, which
+    /// Pickles absorbs for the step key, as a decimal field element. It depends on the circuit
+    /// alone, so a rerun of o1js's compile gives the same value (see [`pins`]).
+    pub fn vk_hash(&mut self) -> String {
+        use ark_ff::PrimeField;
+        let digest = self
+            .prover
+            .index
+            .compute_verifier_index_digest::<<Fp as ledger::proofs::field::FieldWitness>::FqSponge>();
+        digest.into_bigint().to_string()
     }
 }
 
