@@ -1,5 +1,5 @@
 // The named proofs-on set: the tests that compile the circuits and prove for real, to show that the
-// circuits and the vault agree. Each is declared by its title here, and the gate fails unless every
+// circuits and the vault agree, and that o1js still compiles what zk-prover mirrors. Each is declared by its title here, and the gate fails unless every
 // one ran exactly once and passed (`npm run proofs-on -- <vitest JSON report>`). Every other o1js
 // test runs with proofs off.
 export const PROOFS_ON = {

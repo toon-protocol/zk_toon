@@ -56,6 +56,7 @@ each test uses its entry as its title:
 | `escape` | `vault-escape.test.ts` | an escape withdrawal proof, bound to its destination, then finalized |
 | `defeat` | `vault-challenge.test.ts` | a request proof that defeats an escape at its next nullifier |
 | `vault` | `keys.test.ts` | the vault compiles, and a deployed vault carries the published code hash |
+| `landVk` | `land-program.test.ts` | nothing proved: this o1js compiles `zk-prover`'s `land` program to the pinned key |
 
 The gate runs `npm test` with vitest's JSON reporter and then `npm run proofs-on -- <report>`, which
 fails unless every named test ran exactly once and passed. A test that is skipped, marked todo,

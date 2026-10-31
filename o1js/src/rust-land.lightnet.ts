@@ -13,6 +13,12 @@ const REPO = fileURLToPath(new URL('../..', import.meta.url));
 
 type RustProof = { proof: string; programProof: string; publicInputFields: string[] };
 
+/** Puts a proof in the account update, in place of the one o1js would make. */
+function attachProof(update: AccountUpdate, proof: string) {
+  update.authorization = { proof };
+  update.lazyAuthorization = undefined;
+}
+
 function proveInRust(inputs: Record<string, string>): Promise<RustProof> {
   return new Promise((resolve, reject) => {
     const child = execFile(
@@ -100,8 +106,7 @@ describe('a Rust-proved land (proofs-on lightnet)', () => {
     };
     expect(await verify(json, vk.data)).toBe(true);
 
-    update.authorization = { proof: rust.proof };
-    update.lazyAuthorization = undefined;
+    attachProof(update, rust.proof);
     const outcome = await submit(tx);
     console.log('rust-proved land:', outcome);
     expect(outcome).toEqual({ status: 'included', errors: [] });
@@ -111,8 +116,7 @@ describe('a Rust-proved land (proofs-on lightnet)', () => {
 
   it('a second one applies on the state the first left', async () => {
     const { tx, update, rust } = await rustProvedLand(9);
-    update.authorization = { proof: rust.proof };
-    update.lazyAuthorization = undefined;
+    attachProof(update, rust.proof);
     const outcome = await submit(tx);
     console.log('second rust-proved land:', outcome);
     expect(outcome).toEqual({ status: 'included', errors: [] });
@@ -124,11 +128,11 @@ describe('a Rust-proved land (proofs-on lightnet)', () => {
   it('the chain refuses a real proof of another land', async () => {
     const other = await rustProvedLand(20);
     const { tx, update } = await rustProvedLand(21);
-    update.authorization = { proof: other.rust.proof };
-    update.lazyAuthorization = undefined;
+    attachProof(update, other.rust.proof);
     const outcome = await submit(tx);
     console.log('proof of another land:', outcome);
     expect(outcome.status).toBe('rejected');
+    expect(outcome.errors.join('\n')).toMatch(/Invalid_proof/);
     await fetchAccount({ publicKey: zkapp.address });
     expect(zkapp.landed.get().toString()).toBe('9');
   });
