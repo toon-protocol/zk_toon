@@ -54,7 +54,8 @@ Durations come from `SLOT_SECONDS = 90`, defined once per language, and `SLOTS_P
 Durations of a minute or so round **up** to whole slots. These constants are part of the verification
 key, so a fork that changes slot length changes them with the key.
 
-The zk edge's freshness check takes slots. How the edge gets its current slot is connector#1511.
+The zk edge's freshness check takes slots. How the zk edge gets its current slot is
+toon-protocol/connector#1511.
 
 ## Considered Options
 
@@ -62,11 +63,14 @@ The zk edge's freshness check takes slots. How the edge gets its current slot is
   hand-worked fork anchor built into the key, and it keeps a `network.*` precondition, which "Time" in
   `docs/design/scheme_batch_settlement_mina.md` says is checked against the parent block rather than
   the including one.
-- **Keep the edge's `requestTime` in milliseconds:** rejected. The vault compares it with chain time,
-  and the request circuit compares it with `depositTime`, so both sides would need a conversion.
+- **Keep the zk edge's `requestTime` in milliseconds:** rejected. The vault compares it with chain time,
+  and the request proof compares it with `depositTime`, so both sides would need a conversion.
 
 ## Consequences
 
-- The vault and `zk-note` change in a follow-up slice (#54): the code and its mirror in
+- The vault and `zk-note` change in a follow-up slice (#59): the code and its mirror in
   `zk-note/src/policy.rs` move to slots, and the verification keys are regenerated.
-- A test can now fail if a vault method's time check depends on `Mina.getNetworkConstants()`.
+- That slice adds a test that fails if a vault method's time check depends on
+  `Mina.getNetworkConstants()`.
+- ADR 0005's sweep counts a note from `expiry + CLOSE_WINDOW_MS`; under this decision that window is
+  the request max age in slots, so the sweep's threshold becomes `expiry` plus 7 slots.
