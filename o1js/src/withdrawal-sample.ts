@@ -2,7 +2,7 @@
 import { Bool, Field, PrivateKey, PublicKey, Scalar, Signature } from 'o1js';
 import { commit } from './balance.js';
 import { NoteTree } from './note-tree.js';
-import { DEPOSIT_SIZES, expiryOf } from './policy.js';
+import { DEPOSIT_SIZES, REQUEST_MAX_AGE_SLOTS, SLOTS_PER_DAY, expiryOf } from './policy.js';
 import { commitSecret, nextAnchor, nullifier } from './primitives.js';
 import { stateFields } from './state.js';
 import { WithdrawalKind, WithdrawalPrivate, WithdrawalPublic } from './withdrawal.js';
@@ -30,7 +30,7 @@ export interface WithdrawalOptions {
 }
 
 /** The default `validUntil` of an escape sample, after its `requestTime`. */
-export const ESCAPE_VALIDITY_MS = 10n * 60_000n;
+export const ESCAPE_VALIDITY_SLOTS = REQUEST_MAX_AGE_SLOTS;
 
 /** Inputs for the note at `o.index` of `tree`, which must hold that note. */
 export function buildWithdrawal(tree: NoteTree, o: WithdrawalOptions) {
@@ -50,7 +50,7 @@ export function buildWithdrawal(tree: NoteTree, o: WithdrawalOptions) {
     kind: Field(o.kind), vault, root: tree.root, nullifier: current,
     nextNullifier: isEscape ? nullifier(secret, nextAnchor(current)) : Field(0),
     amount: Field(balance), size: Field(o.size), destination: o.destination,
-    validUntil: Field(isEscape ? o.validUntil ?? o.requestTime + ESCAPE_VALIDITY_MS : 0n),
+    validUntil: Field(isEscape ? o.validUntil ?? o.requestTime + ESCAPE_VALIDITY_SLOTS : 0n),
     requestTime: Field(o.requestTime), conceded: Field(isEscape ? o.conceded ?? 0n : 0n),
   });
   const priv = new WithdrawalPrivate({
@@ -72,10 +72,10 @@ export function sampleTree(o: { secret: bigint; size: bigint; depositTime: bigin
 }
 
 export const defaultWithdrawal = (kind = WithdrawalKind.mutualClose): Omit<WithdrawalOptions, 'index'> => {
-  const depositTime = 1_700_000_000_000n;
+  const depositTime = 900_000n;
   return {
     kind, secret: 123456789012345678901234567890n, size: DEPOSIT_SIZES[0], depositTime,
-    requestTime: depositTime + 8n * 86_400_000n, signed: false, balance: 4_000_000_000n, blinding: 777_000_111n,
+    requestTime: depositTime + 8n * SLOTS_PER_DAY, signed: false, balance: 4_000_000_000n, blinding: 777_000_111n,
     stateKey: PrivateKey.fromBigInt(1n), destination: PrivateKey.fromBigInt(7n).toPublicKey(),
   };
 };

@@ -52,14 +52,14 @@ impl LocalChain<'_> {
         self.0.call("local.reduce", json!({ "vault": vault.into_address() })).map(|_| ())
     }
 
-    /// Moves the chain's clock forward by at least `ms`.
-    pub fn advance(&mut self, ms: u64) -> Result<(), Error> {
-        self.0.call("local.advance", json!({ "ms": ms.to_string() })).map(|_| ())
+    /// Moves the chain forward by `slots`.
+    pub fn advance(&mut self, slots: u64) -> Result<(), Error> {
+        self.0.call("local.advance", json!({ "slots": slots.to_string() })).map(|_| ())
     }
 
-    /// The chain's current block time, in ms.
-    pub fn now(&mut self) -> Result<u64, Error> {
-        parse_u64(&self.0.call("local.now", json!({}))?["now"])
+    /// The chain's current slot.
+    pub fn slot(&mut self) -> Result<u64, Error> {
+        parse_u64(&self.0.call("local.slot", json!({}))?["slot"])
     }
 
     /// An account's balance, in nanomina.

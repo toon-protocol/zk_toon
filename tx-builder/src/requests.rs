@@ -105,7 +105,7 @@ pub struct Deposit {
     pub fee_payer: FeePayer,
     pub commitment: Field,
     pub size: u64,
-    /// The block time the deposit lands at, to within a slot (90 s).
+    /// The slot the deposit lands at, to within a slot.
     pub deposit_time: u64,
 }
 
@@ -159,7 +159,7 @@ pub struct Escape {
     pub request_time: u64,
     pub destination: CompressedPubKey,
     pub conceded: u64,
-    /// The last block time the escape may land at; before the note's expiry.
+    /// The last slot the escape may land at; before the note's expiry.
     pub valid_until: u64,
 }
 

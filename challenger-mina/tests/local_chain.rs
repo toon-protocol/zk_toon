@@ -16,7 +16,7 @@ use common::keypair;
 use mina_signer::{CompressedPubKey, Keypair};
 use serde_json::{json, Value};
 use zk_note::balance::{commit, Scalar};
-use zk_note::policy::{DEPOSIT_SIZES, TIERS};
+use zk_note::policy::{DEPOSIT_SIZES, REQUEST_MAX_AGE_SLOTS, TIERS};
 use zk_note::state::{sign_state, StateMessage};
 use zk_note::{commit_secret, genesis_anchor, next_anchor, nullifier, Field};
 use zk_toon_challenger::{EscapeId, PortError, VaultChainPort};
@@ -93,7 +93,7 @@ fn chain(b: &mut TxBuilder) -> Chain {
 }
 
 fn deposit_note(b: &mut TxBuilder, c: &Chain, secret: u64) -> Note {
-    let deposit_time = b.local().now().unwrap();
+    let deposit_time = b.local().slot().unwrap();
     let note = Note { secret: Field::from(secret), size: SMALL, deposit_time };
     let tx = b
         .deposit(&Deposit {
@@ -126,7 +126,7 @@ fn state(c: &Chain, note: &Note, steps: usize, balance: u64) -> (NoteState, Fiel
 }
 
 fn escape(b: &mut TxBuilder, c: &Chain, note: &Note, state: NoteState, conceded: u64) {
-    let request_time = b.local().now().unwrap();
+    let request_time = b.local().slot().unwrap();
     let tx = b
         .escape(&Escape {
             vault: c.vault.clone(),
@@ -136,7 +136,7 @@ fn escape(b: &mut TxBuilder, c: &Chain, note: &Note, state: NoteState, conceded:
             request_time,
             destination: c.alice.clone(),
             conceded,
-            valid_until: request_time + 10 * 60_000,
+            valid_until: request_time + REQUEST_MAX_AGE_SLOTS,
         })
         .unwrap();
     b.local().submit(&tx).unwrap();
@@ -144,7 +144,7 @@ fn escape(b: &mut TxBuilder, c: &Chain, note: &Note, state: NoteState, conceded:
 
 /// A request proof at `state`, recorded as the zk edge records it when it grants an allowance.
 fn record_request(b: &mut TxBuilder, c: &Chain, note: &Note, state: NoteState, tier: u64, evidence: &Recorded) {
-    let request_time = b.local().now().unwrap();
+    let request_time = b.local().slot().unwrap();
     let proof = b
         .request_proof(&RequestProofInput {
             vault: c.vault.clone(),

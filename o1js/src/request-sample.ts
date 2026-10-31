@@ -2,7 +2,7 @@
 import { Bool, Field, Group, PrivateKey, Scalar, Signature } from 'o1js';
 import { commit, rerandomise } from './balance.js';
 import { NoteTree } from './note-tree.js';
-import { DEPOSIT_SIZES, TIERS, expiryOf, subsidyPeriod } from './policy.js';
+import { DEPOSIT_SIZES, SLOTS_PER_DAY, SUBSIDY_PERIOD_SLOTS, TIERS, expiryOf, subsidyPeriod } from './policy.js';
 import {
   authTag, commitSecret, genesisAnchor, nextAnchor, nullifier, periodNullifier, type RequestContext,
 } from './primitives.js';
@@ -33,10 +33,10 @@ export interface SampleOptions {
 }
 
 export const defaultSample = (): SampleOptions => {
-  const depositTime = 1_700_000_000_000n;
+  const depositTime = 900_000n;
   return {
     secret: 123456789012345678901234567890n, before: 3, size: DEPOSIT_SIZES[0], depositTime,
-    requestTime: depositTime + 8n * 86_400_000n, tier: TIERS[1], signed: false,
+    requestTime: depositTime + 8n * SLOTS_PER_DAY, tier: TIERS[1], signed: false,
     balance: 4_000_000_000n, blinding: 777_000_111n, rerandom: 424_242n, vaultSecret: 1n,
     ctx: { sessionKeyX: 31337n, sessionKeyIsOdd: true, expiry: depositTime + 9n * 86_400_000n },
   };
@@ -120,7 +120,7 @@ export function buildRequest(tree: NoteTree, index: bigint, o: SampleOptions): S
 }
 
 /** The vault creation time of the subsidised vector samples: 10 days before the default deposit. */
-const VECTOR_VAULT_CREATION = defaultSample().depositTime - 10n * 86_400_000n;
+const VECTOR_VAULT_CREATION = defaultSample().depositTime - 10n * SLOTS_PER_DAY;
 
 /**
  * The samples the shared vector file pins: one genesis state and one signed state, unsubsidised; then
@@ -132,8 +132,8 @@ export const VECTOR_SAMPLES: SampleOptions[] = [
   { ...defaultSample(), tier: TIERS[0], subsidy: { vaultCreation: VECTOR_VAULT_CREATION } },
   {
     ...defaultSample(), tier: TIERS[0], signed: true, step: 2, subsidy: { vaultCreation: VECTOR_VAULT_CREATION },
-    requestTime: VECTOR_VAULT_CREATION + 3n * 7n * 86_400_000n,
-    ctx: { ...defaultSample().ctx, expiry: VECTOR_VAULT_CREATION + 3n * 7n * 86_400_000n + 60_000n },
+    requestTime: VECTOR_VAULT_CREATION + 3n * SUBSIDY_PERIOD_SLOTS,
+    ctx: { ...defaultSample().ctx, expiry: VECTOR_VAULT_CREATION + 3n * SUBSIDY_PERIOD_SLOTS + 1n },
   },
 ];
 
@@ -175,10 +175,10 @@ export function requestVector(s: Sample, o: SampleOptions) {
  * honest one passes the zk edge's period check (`subsidyPeriodHolds`).
  */
 export const SUBSIDY_PERIOD_SAMPLES: { vaultCreation: bigint; options: SampleOptions }[] = (() => {
-  const DAY = 86_400_000n;
+  const DAY = SLOTS_PER_DAY;
   const claim = (requestTime: bigint, provenWith: bigint): SampleOptions => ({
     ...defaultSample(), tier: TIERS[0], requestTime, subsidy: { vaultCreation: provenWith },
-    ctx: { ...defaultSample().ctx, expiry: requestTime + 60_000n },
+    ctx: { ...defaultSample().ctx, expiry: requestTime + 1n },
   });
   const { depositTime } = defaultSample();
   return [

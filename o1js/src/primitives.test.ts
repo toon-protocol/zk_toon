@@ -59,18 +59,19 @@ describe('shared vectors', () => {
     for (const r of file.requestProofs) expect(r.private.context.edge).toBe(r.public.vault.x);
   });
 
-  it('accept a requestTime 10 minutes behind to 1 minute ahead', () => {
-    const now = 1_700_000_000_000n;
-    const min = policy.MS_PER_MINUTE;
-    expect(policy.isRequestTimeFresh(now - 10n * min, now)).toBe(true);
-    expect(policy.isRequestTimeFresh(now - 10n * min - 1n, now)).toBe(false);
-    expect(policy.isRequestTimeFresh(now + min, now)).toBe(true);
-    expect(policy.isRequestTimeFresh(now + min + 1n, now)).toBe(false);
+  it('accept a requestTime 7 slots behind to 1 slot ahead of the current slot', () => {
+    const slot = 900_000n;
+    const [age, lead] = [policy.REQUEST_MAX_AGE_SLOTS, policy.REQUEST_MAX_LEAD_SLOTS];
+    expect([age, lead]).toEqual([7n, 1n]);
+    expect(policy.isRequestTimeFresh(slot - age, slot)).toBe(true);
+    expect(policy.isRequestTimeFresh(slot - age - 1n, slot)).toBe(false);
+    expect(policy.isRequestTimeFresh(slot + lead, slot)).toBe(true);
+    expect(policy.isRequestTimeFresh(slot + lead + 1n, slot)).toBe(false);
   });
 
   it('agree at week boundaries', () => {
-    const c = 1_690_000_000_000n;
-    const w = policy.SUBSIDY_PERIOD_MS;
+    const c = 890_000n;
+    const w = policy.SUBSIDY_PERIOD_SLOTS;
     expect(policy.subsidyPeriod(c, c - 1n)).toBeUndefined();
     expect(policy.subsidyPeriod(c, c + w - 1n)).toBe(0n);
     expect(policy.subsidyPeriod(c, c + w)).toBe(1n);

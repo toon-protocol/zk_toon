@@ -12,7 +12,7 @@ import { authTag, commitSecret, genesisAnchor, nextAnchor, nullifier } from './p
 import { RequestPrivate, RequestProgram, RequestProof, RequestPublic, subsidyPeriodHolds } from './request.js';
 import { expiryOf } from './policy.js';
 import { PendingEscape, PendingEscapes, VAULT_URI, Vault, batchReducer, setupFields } from './vault.js';
-import { VaultKeeper, chainNow, escapeEvents, pendingEscapesView, vaultView } from './vault-view.js';
+import { VaultKeeper, chainSlot, escapeEvents, pendingEscapesView, vaultView } from './vault-view.js';
 import type { VaultMirror } from './vault-mirror.js';
 import { WithdrawalKind, WithdrawalPrivate, WithdrawalProgram, WithdrawalPublic } from './withdrawal.js';
 
@@ -429,12 +429,11 @@ export async function createBuilder(options: BuilderOptions) {
       return {};
     },
     async 'local.advance'(p) {
-      const slot = Mina.getNetworkConstants().slotTime.toBigInt();
-      local!.incrementGlobalSlot(Number((u64(p.ms, 'ms') + slot - 1n) / slot));
+      local!.setGlobalSlot(Number(chainSlot() + u64(p.slots, 'slots')));
       return {};
     },
-    async 'local.now'() {
-      return { now: chainNow().toString() };
+    async 'local.slot'() {
+      return { slot: chainSlot().toString() };
     },
     async 'local.balance'(p) {
       return { balance: Mina.getBalance(publicKey(p.publicKey, 'publicKey')).toBigInt().toString() };
@@ -447,7 +446,7 @@ export async function createBuilder(options: BuilderOptions) {
     async 'local.graphql'(p) {
       const request = obj(p.request, 'request');
       const variables = obj(request.variables ?? {}, 'request.variables');
-      const time = { protocolState: { blockchainState: { utcDate: chainNow().toString() } } };
+      const time = { protocolState: { blockchainState: { utcDate: chainSlot().toString() } } };
       switch (`${p.endpoint}:${request.operationName}`) {
         case 'mina:VaultState': {
           const vault = publicKey(variables.vault, 'vault');

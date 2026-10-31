@@ -32,7 +32,7 @@ export class WithdrawalPublic extends Struct({
   size: Field,
   /** Where the balance goes; an ownership proof binds the destination its holder wants cleared. */
   destination: PublicKey,
-  /** The last block time an escape may land at; zero otherwise. `requestTime ≤ validUntil < expiry`. */
+  /** The last slot an escape may land at; zero otherwise. `requestTime ≤ validUntil < expiry`. */
   validUntil: Field,
   requestTime: Field,
   /** What an escape gives up of its balance, at most the balance; zero otherwise. */

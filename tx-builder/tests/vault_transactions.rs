@@ -5,7 +5,7 @@ mod common;
 use common::*;
 use zk_note::clearance::{sign_clearance, ClearanceMessage};
 use zk_note::balance::Scalar;
-use zk_note::policy::{DEPOSIT_SIZES, TIERS};
+use zk_note::policy::{DEPOSIT_SIZES, REQUEST_MAX_AGE_SLOTS, TIERS};
 use zk_note::withdrawal::{KIND_ESCAPE, KIND_MUTUAL_CLOSE};
 use zk_note::{commit_secret, Field};
 use zk_toon_tx_builder::{
@@ -22,7 +22,7 @@ fn a_deposit_is_accepted_and_becomes_a_note_at_the_reduce() {
     let chain = Chain::new(&mut b);
     let before = chain.vault_state(&mut b);
 
-    let deposit_time = b.local().now().unwrap();
+    let deposit_time = b.local().slot().unwrap();
     let tx = b
         .deposit(&Deposit {
             vault: chain.vault.clone(),
@@ -53,7 +53,7 @@ fn a_mutual_close_is_accepted_and_pays_at_the_reduce() {
     let state_key = chain.state_key.public.into_compressed();
     let clearance = sign_clearance(&chain.state_key, &ClearanceMessage::new(&state_key, n, &chain.alice));
 
-    let request_time = b.local().now().unwrap();
+    let request_time = b.local().slot().unwrap();
     let tx = b
         .mutual_close(&MutualClose {
             vault: chain.vault.clone(),
@@ -83,7 +83,7 @@ fn an_escape_is_accepted_and_spends_both_nullifiers_at_the_reduce() {
     let chain = Chain::new(&mut b);
     let note = deposit_note(&mut b, &chain, 3003, SMALL);
     let (state, n) = signed_state(&chain, &note, 3 * MINA, 88);
-    let request_time = b.local().now().unwrap();
+    let request_time = b.local().slot().unwrap();
     let escape = Escape {
         vault: chain.vault.clone(),
         fee_payer: chain.payer.clone(),
@@ -92,7 +92,7 @@ fn an_escape_is_accepted_and_spends_both_nullifiers_at_the_reduce() {
         request_time,
         destination: chain.alice.clone(),
         conceded: MINA / 10,
-        valid_until: request_time + 10 * 60_000,
+        valid_until: request_time + REQUEST_MAX_AGE_SLOTS,
     };
 
     let tx = b.escape(&escape).unwrap();
@@ -116,7 +116,7 @@ fn an_escape_is_accepted_and_spends_both_nullifiers_at_the_reduce() {
 
 /// `note` escaped from `state` and the escape recorded by a reduce, conceding `conceded`.
 fn recorded_escape(b: &mut TxBuilder, chain: &Chain, note: &Note, state: NoteState, conceded: u64) {
-    let request_time = b.local().now().unwrap();
+    let request_time = b.local().slot().unwrap();
     let tx = b
         .escape(&Escape {
             vault: chain.vault.clone(),
@@ -126,7 +126,7 @@ fn recorded_escape(b: &mut TxBuilder, chain: &Chain, note: &Note, state: NoteSta
             request_time,
             destination: chain.alice.clone(),
             conceded,
-            valid_until: request_time + 10 * 60_000,
+            valid_until: request_time + REQUEST_MAX_AGE_SLOTS,
         })
         .unwrap();
     b.local().submit(&tx).unwrap();
@@ -135,7 +135,7 @@ fn recorded_escape(b: &mut TxBuilder, chain: &Chain, note: &Note, state: NoteSta
 
 /// A request proof of tier `tier` at `state`, as the zk edge records it for an allowance.
 fn request_at(b: &mut TxBuilder, chain: &Chain, note: &Note, state: NoteState, tier: u64) -> RequestProof {
-    let request_time = b.local().now().unwrap();
+    let request_time = b.local().slot().unwrap();
     b.request_proof(&RequestProofInput {
         vault: chain.vault.clone(),
         note: note.clone(),
