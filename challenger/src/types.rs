@@ -3,7 +3,8 @@ use crate::ports::PortError;
 /// A nullifier, 32 bytes.
 pub type Nullifier = [u8; 32];
 
-/// Sloteconds since the Unix epoch.
+/// A global slot, counted from the network's original genesis (ADR 0007). A count of slots also
+/// uses this type.
 pub type Slot = u64;
 
 /// An escape is identified by the current nullifier it consumed.

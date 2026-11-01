@@ -40,8 +40,8 @@ fn the_recorded_vault_holds_one_open_escape_as_its_note_escaped() {
         .unwrap()
         .parse()
         .unwrap();
-    // A full two-day challenge window of 90 s slots, from a reduce at most a slot before `now`.
-    let window = 2 * 24 * 3600 / 90;
+    // A full challenge window, from a reduce at most a slot before `now`.
+    let window = zk_note::policy::CHALLENGE_WINDOW_SLOTS;
     assert!(escapes[0].deadline > now + window - 1 && escapes[0].deadline <= now + window + 1);
 }
 
@@ -82,8 +82,7 @@ fn escape_with_deadline(deadline: u64) -> zk_toon_challenger::Escape {
     zk_toon_challenger::Escape { id, next_nullifier: next, conceded: 0, balance: 50, deadline }
 }
 
-/// The chain's tip, as the daemon answers it: a realistic block time in milliseconds, which is
-/// nowhere near a slot, and the slot.
+/// How many escapes the adapter reports open, at a tip whose slot is `now`.
 fn open_at(now: u64, deadline: u64) -> usize {
     let e = escape_with_deadline(deadline);
     let chain = Scripted::new(now, &[e]);
@@ -92,7 +91,8 @@ fn open_at(now: u64, deadline: u64) -> usize {
     port.escapes().unwrap().len()
 }
 
-/// The scripted chain, with a realistic millisecond `utcDate` beside the slot.
+/// The scripted chain's tip, as the daemon answers it: a realistic `utcDate` in milliseconds, which
+/// is nowhere near a slot, beside the slot.
 struct TipWithClock(Scripted);
 
 impl Graphql for TipWithClock {

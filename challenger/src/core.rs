@@ -6,7 +6,7 @@ use crate::types::*;
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// The least time before a deadline at which the challenger still submits. It leaves room for
+    /// The fewest slots before a deadline at which the challenger still submits. It leaves room for
     /// Mina's inclusion time.
     pub min_lead: Slot,
 }
