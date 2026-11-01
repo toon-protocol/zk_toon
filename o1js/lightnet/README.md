@@ -77,3 +77,12 @@ before a block, and the tests check the key and `x` are unchanged afterwards. Th
 really differ. This confirms the order within a command only. It does not exercise
 `impossibleDuringCurrentVersion` and its fallback to `signature` after a hard fork, which a lightnet
 can't do. There is no LocalBlockchain counterpart: with proofs off, both circuits get the same dummy key.
+
+## Aiming a vault deploy at a slot
+
+A vault deploy can aim. `Vault.deploy({ zkappUri, slot })` makes `init` record `slot` as `creationTime` and
+require the current slot to be in `[slot, slot + 1]`, the same two-slot range a deposit or reduce uses. A
+block before `slot` or more than one slot after it refuses the deploy with
+`Valid_while_precondition_unsatisfied`. Without `slot`, `init` takes the network's current slot, as on a
+local chain. Land a deploy on a lightnet or devnet by passing the slot your landing helper has chosen,
+rather than retrying at the tip's slot or swapping the active Mina instance.

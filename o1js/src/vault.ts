@@ -305,9 +305,22 @@ export class Vault extends SmartContract {
   /**
    * Deploys with the account's permissions fixed (ADR 0006) and its zkApp URI set, once: the URI names where
    * fork notices appear. The vault has no pause.
+   *
+   * `slot` is the slot to aim at: the creation slot `init` records, and the first of the two slots the deploy
+   * can land in. Omitted, `init` takes the network's current slot.
    */
-  async deploy({ zkappUri, ...args }: NonNullable<Parameters<SmartContract['deploy']>[0]> & { zkappUri: string }) {
-    await super.deploy(args);
+  async deploy({
+    zkappUri,
+    slot,
+    ...args
+  }: NonNullable<Parameters<SmartContract['deploy']>[0]> & { zkappUri: string; slot?: bigint }) {
+    // `init()` takes no arguments, so the slot waits here for the length of this deploy and no longer.
+    this.aimedSlot = slot;
+    try {
+      await super.deploy(args);
+    } finally {
+      this.aimedSlot = undefined;
+    }
     this.account.zkappUri.set(zkappUri);
     this.account.permissions.set({
       editState: Permissions.proof(),
@@ -329,10 +342,15 @@ export class Vault extends SmartContract {
     });
   }
 
-  /** Pins the creation slot to the including block's (within a slot) and records the policy. */
+  /** The slot the running `deploy` aims at, for `init` to read; not state, so not part of the key. */
+  private aimedSlot?: bigint;
+
+  /** Pins the creation slot to the aimed slot, else the network's (within a slot of the including block's), and records the policy. */
   init() {
     super.init();
-    const now = Provable.witness(UInt64, () => UInt64.from(Mina.getNetworkState().globalSlotSinceGenesis.toBigint()));
+    const now = Provable.witness(UInt64, () =>
+      UInt64.from(this.aimedSlot ?? Mina.getNetworkState().globalSlotSinceGenesis.toBigint()),
+    );
     requireSlotBetween(this, now, now.add(1));
     this.creationTime.set(now);
     this.depositSizes.set(DepositSizes.fromPolicy());
