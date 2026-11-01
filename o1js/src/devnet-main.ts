@@ -114,7 +114,8 @@ async function inclusion(hash: string) {
 }
 
 const proveEstimates = new Map<string, number>();
-const isSlotMiss = (failure: unknown) => JSON.stringify(failure).includes('Protocol_state_precondition_unsatisfied');
+/** `currentSlot` is the command's `validWhile`; a network precondition fails under the other name. */
+const isSlotMiss = (failure: unknown) => /Valid_while_precondition_unsatisfied|Protocol_state_precondition_unsatisfied/.test(JSON.stringify(failure));
 
 /**
  * Proves and lands one command, journalling each attempt. `build` gets the slot to aim at. With `aimed`, the

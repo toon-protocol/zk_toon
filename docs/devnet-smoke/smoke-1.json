@@ -18,7 +18,17 @@
       "root": "22727574297925682950089078401894528063352625304526049057074810308057651764626",
       "valid": true,
       "proveSeconds": 7
-    }
+    },
+    "payees.before-exits": {
+      "destination": "1000000000",
+      "treasury": "1000000000"
+    },
+    "reduce-exits.actions": 2,
+    "payees.after-close": {
+      "destination": "10900000000",
+      "treasury": "1100000000"
+    },
+    "escapeDeadline": "932656"
   },
   "done": [
     "accounts",
@@ -27,7 +37,10 @@
     "deposit-close",
     "deposit-escape",
     "reduce-deposits",
-    "request-proof"
+    "request-proof",
+    "close",
+    "escape",
+    "reduce-exits"
   ],
   "attempts": [
     {
@@ -93,10 +106,60 @@
       "proveSeconds": 44,
       "inclusionSeconds": 78,
       "fee": "100000000"
+    },
+    {
+      "step": "close",
+      "hash": "5JtvkPwpFgz9UE7vZ25avUckksVwCvkiJR3XGRkGms14dG4FaTro",
+      "sentSlot": "930700",
+      "landedSlot": "930706",
+      "height": "583298",
+      "proveSeconds": 54,
+      "failure": [
+        {
+          "index": "2",
+          "failures": [
+            "Cancelled"
+          ]
+        },
+        {
+          "index": "1",
+          "failures": [
+            "Valid_while_precondition_unsatisfied"
+          ]
+        }
+      ],
+      "fee": "100000000"
+    },
+    {
+      "step": "close",
+      "hash": "5JuDHtRDNJfcAfyU66XQQ6PqxwKr79Qw6xmPjSEY4ooGcns7y2RY",
+      "sentSlot": "930728",
+      "landedSlot": "930731",
+      "height": "583310",
+      "proveSeconds": 42,
+      "inclusionSeconds": 214,
+      "fee": "100000000"
+    },
+    {
+      "step": "escape",
+      "hash": "5JtgJxGB3zqh5vQqWy2A9ZhSFR4X6WD9ALsXwtA83u75CLYKVvwm",
+      "sentSlot": "930731",
+      "landedSlot": "930732",
+      "height": "583311",
+      "proveSeconds": 19,
+      "inclusionSeconds": 82,
+      "fee": "100000000"
+    },
+    {
+      "step": "reduce-exits-0",
+      "hash": "5JuPcVKqvizDfrzR795jhS7nNJpGZrBMFVrhAepytkVLGgSj2m6p",
+      "target": "930735",
+      "sentSlot": "930734",
+      "landedSlot": "930735",
+      "height": "583313",
+      "proveSeconds": 31,
+      "inclusionSeconds": 82,
+      "fee": "100000000"
     }
-  ],
-  "sent": {
-    "step": "close",
-    "hash": "5JtvkPwpFgz9UE7vZ25avUckksVwCvkiJR3XGRkGms14dG4FaTro"
-  }
+  ]
 }
