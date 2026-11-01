@@ -86,6 +86,19 @@ function replay(events: string[][]) {
 }
 
 /**
+ * A mirror of `vault` rebuilt wholly from the chain, ready for its next reduce (`nextReduce`), and how many
+ * actions wait for one. Its pending escapes are the chain's, but it doesn't list their records.
+ */
+export async function reduceMirror(vault: Vault) {
+  const mirror = await vaultView(vault);
+  mirror.escapes = (await pendingEscapesView(vault, { localChain: false })).escapes;
+  const reduced = (await actions(vault.address, vault.actionState.get())).length;
+  const all = await actions(vault.address);
+  all.slice(reduced).forEach((a) => mirror.dispatched(a));
+  return { mirror, pending: all.length - reduced };
+}
+
+/**
  * The action-stack program's domain. `prepareBatches` hands a batch with no recursion a dummy proof at 2^14,
  * and a method that takes a dummy of the wrong domain can't be proved: `Checked.inv` fails in Pickles's
  * `scalars_env`. The proof isn't verified for such a batch, so one of the right domain does.
