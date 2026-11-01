@@ -33,11 +33,8 @@ pub fn load_vk(b64: &str) -> anyhow::Result<VerificationKey> {
     VerificationKey::try_from(&wire).map_err(|e| anyhow::anyhow!("bad verification key: {e:?}"))
 }
 
-/// o1js writes a proof at its own `maxProofsVerified`; a side-loaded verifier reads it at the
-/// maximum, 2. Pickles' `Wrap_hack.pad_proof` front-extends
-/// `messages_for_next_wrap_proof.old_bulletproof_challenges` to length 2 with
-/// `Dummy.Ipa.Wrap.challenges`; the step-side lists stay as they are.
-fn pad_proof(sexp: &mut rsexp::Sexp) -> anyhow::Result<()> {
+/// `messages_for_next_wrap_proof.old_bulletproof_challenges` of a proof's sexp.
+fn old_challenges(sexp: &mut rsexp::Sexp) -> anyhow::Result<&mut Vec<rsexp::Sexp>> {
     use rsexp::Sexp;
     fn field<'a>(record: &'a mut Sexp, name: &str) -> anyhow::Result<&'a mut Sexp> {
         let Sexp::List(fields) = record else {
@@ -62,6 +59,29 @@ fn pad_proof(sexp: &mut rsexp::Sexp) -> anyhow::Result<()> {
     let Sexp::List(chals) = chals else {
         anyhow::bail!("not a list")
     };
+    Ok(chals)
+}
+
+/// This crate's `SexpOf` writes a 64-bit limb as `0x` and 16 hex digits; OCaml writes the 16 digits
+/// alone. (A field element is `0x` and 64 digits, and stays.)
+fn hex_limbs(sexp: &mut rsexp::Sexp) {
+    match sexp {
+        rsexp::Sexp::Atom(a) => {
+            if a.len() == 18 && a.starts_with(b"0x") {
+                a.drain(..2);
+            }
+        }
+        rsexp::Sexp::List(items) => items.iter_mut().for_each(hex_limbs),
+    }
+}
+
+/// o1js writes a proof at its own `maxProofsVerified`; a side-loaded verifier reads it at the
+/// maximum, 2. Pickles' `Wrap_hack.pad_proof` front-extends
+/// `messages_for_next_wrap_proof.old_bulletproof_challenges` to length 2 with
+/// `Dummy.Ipa.Wrap.challenges`; the step-side lists stay as they are.
+fn pad_proof(sexp: &mut rsexp::Sexp) -> anyhow::Result<()> {
+    use rsexp::Sexp;
+    let chals = old_challenges(sexp)?;
     // Written by hand: this crate's `SexpOf` for a hex64 limb emits `0x…`, which its own `OfSexp`
     // refuses; OCaml writes 16 bare hex digits.
     let atom = |s: &str| Sexp::Atom(s.as_bytes().to_vec());
@@ -86,6 +106,32 @@ fn pad_proof(sexp: &mut rsexp::Sexp) -> anyhow::Result<()> {
 }
 
 impl WrapProof {
+    /// A proof made by [`crate::wrap::wrap`].
+    pub fn from_prover(proof: &ledger::proofs::wrap::WrapProof) -> Self {
+        Self(proof.into())
+    }
+
+    fn sexp(&self) -> rsexp::Sexp {
+        use rsexp::SexpOf;
+        let mut sexp = PicklesProofProofsVerifiedMaxStableV2::from(self.0.clone()).sexp_of();
+        hex_limbs(&mut sexp);
+        sexp
+    }
+
+    /// The proof as o1js writes it into a transaction (`proof`): URL-safe base64 of the sexp, at
+    /// `maxProofsVerified` 2. The inverse of [`WrapProof::from_o1js_base64`].
+    pub fn to_o1js_base64(&self) -> String {
+        base64::engine::general_purpose::URL_SAFE.encode(self.sexp().to_bytes_mach())
+    }
+
+    /// The proof as o1js's `verify` reads a `JsonProof` for a program that verifies no proofs
+    /// (`maxProofsVerified` 0): [`WrapProof::to_o1js_base64`] without the two dummy wrap challenges.
+    pub fn to_o1js_program_base64(&self) -> anyhow::Result<String> {
+        let mut sexp = self.sexp();
+        old_challenges(&mut sexp)?.clear();
+        Ok(base64::engine::general_purpose::URL_SAFE.encode(sexp.to_bytes_mach()))
+    }
+
     /// Decode o1js's URL-safe base64 sexp proof (`proof`).
     pub fn from_o1js_base64(b64: &str) -> anyhow::Result<Self> {
         use rsexp::OfSexp;

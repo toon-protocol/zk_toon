@@ -1,15 +1,30 @@
 # Handoff for #30
 
-Done (commit "zk-prover: verifier + wrap fixtures"):
-- `zk-prover/src/verify.rs`: `load_vk`, `WrapProof::from_o1js_base64`, `fields`, `verify` (ported from toon-1512). Test `tests/verify.rs` verifies o1js's real `land` proof (`fixtures/land_proof.json.gz`) and refuses a tampered input. Note: a trailing zero public field is implicit, so dropping it still verifies.
-- Fixtures copied gzipped from zk-note-vectors@spike-1561-rust-prover: cs004 (setup step), cs005 (wrap circuit), w004_cs005, stepproof002.b64.
+#30 is narrowed (triage 2026-10-30): the generalised wrap prover only. Done:
 
-Not done (all of the wrap prover):
-1. Wrap prover in `zk-prover`: generalised copy of the fork's private `wrap_main`/`deferred_values`/`make_public_input`/`choose_key`
-   (`crates/ledger/src/proofs/wrap.rs` in ~/.cargo/git/checkouts/mina-rust-*/*/; 2987 lines) with N, step-key list and feature flags (lookup / `Opt`) as parameters, from Mina aa93c444 `wrap_main.ml` + `wrap_verifier.ml`. Apache-2.0 headers, LICENSE-APACHE, NOTICE, `license` in Cargo.toml. Test: witness == w004_cs005 at every index (report first mismatch).
-2. Verify the Rust wrap proof under o1js's program VK (hash 98709477…69766) — needs the program VK data; regenerate via fixture-gen.
-3. Extend `fixture-gen` (o1js 3.1.0 + patch) to write land+setup circuits, step proofs, wrap witnesses, VK hashes; capture setup's step proof + wrap witness; README command. Spike patches: `rust/` and `spike-1561/o1js/patches` in the spike branch.
-4. o1js test in `o1js/` loading the Rust wrap proof and `verify`ing against the compiled VK.
-5. Pins test: compute VK hashes from committed circuits; extend `pins.rs` with Mina commit aa93c444, setup/land step VK hashes, program VK hash, regeneration steps.
-6. setup test: same as land.
-First `cargo test` takes ~6 min cold (mina-tree build).
+- `zk-prover/src/wrap/`: `wrap::<C>(WrapParams, &WrapCircuit)` returns the wrap proof and
+  `WrapWitness`; `wrap_witness` returns the witness alone. N (`max_proofs_verified`), the step
+  circuits (one key per method) and the feature flags are parameters. Only N=0 is supported;
+  N>0 returns an error naming #32.
+- `tests/wrap.rs`: the witness equals `w004_cs005` at every index (the failure reports the first
+  differing index), satisfies cs005's constraints, and the proof verifies against cs005's kimchi
+  verifier index.
+- Not in #30 any more: `fixture-gen` for `land` + `setup`, the `setup` fixtures, the VK-hash pins
+  test (#55); verifying the wrap proof under the program VK in Rust and o1js, tamper refusal, the
+  `setup` witness check (#56).
+
+Things #55 / #56 need to know:
+
+- The OCaml reference is Mina `228c409a` (the commit o1js v3.1.0 bundles; Pickles lives at
+  `src/lib/crypto/pickles` there), not `aa93c444`. The difference that matters: each round of the
+  endo gate has an extra `inv` witness, which mina-rust's `endo` lacks (`wrap/endo.rs`).
+- The wrap circuit's prover index has 2 previous challenges (`WrapLandSetup`); the spike's
+  `WrapLand` says 0.
+- `WrapOutput.proof` is the fork's `WrapProof` (proof, statement, prev_evals), what a Pickles proof
+  is built from.
+- `stepproof002_public.json.gz` is the public input o1js proved `stepproof002` under; `fixture-gen`
+  should write it with the step proof (it is `w004_cs005`'s field 12).
+- The fork keeps `Witness`'s vectors private, so `WrapWitness::of_witness` reads them from the
+  `Debug` output. A fork PR making `Witness::aux()`/`primary` public would remove that.
+- The `setup` branch of `exists_messages` (the lookup messages absent, `Maybe(false, dummy)`) is
+  ported but untested until #55 captures `setup`'s step proof.
