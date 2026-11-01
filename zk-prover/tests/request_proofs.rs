@@ -16,6 +16,11 @@ fn strs(v: &serde_json::Value) -> Vec<&str> {
     v.as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect()
 }
 
+fn ledger_hash(vk: &ledger::VerificationKey) -> String {
+    use ark_ff::PrimeField;
+    vk.hash().into_bigint().to_string()
+}
+
 /// A JsonProof's decoded proof and public input fields.
 fn parse(json_proof: &serde_json::Value) -> (WrapProof, Vec<Fp>) {
     let proof = WrapProof::from_o1js_base64(json_proof["proof"].as_str().unwrap()).unwrap();
@@ -26,6 +31,8 @@ fn parse(json_proof: &serde_json::Value) -> (WrapProof, Vec<Fp>) {
 fn verifies_both_request_proofs_and_refuses_tampering() {
     let f = fixtures();
     let vk = load_vk(f["verificationKey"]["data"].as_str().unwrap()).unwrap();
+    // The committed hash is the hash of the committed key, as Mina computes it.
+    assert_eq!(ledger_hash(&vk), f["verificationKey"]["hash"].as_str().unwrap());
     for name in ["unsubsidised", "subsidised"] {
         let (proof, public) = parse(&f[name]["proof"]);
         assert!(verify(&vk, &public, &proof), "{name} proof is refused");
@@ -53,7 +60,7 @@ fn the_subsidised_proof_is_in_a_period_of_the_vault_created_at_the_fixtures_slot
     assert_eq!(subsidised.check_subsidy_period(creation), Ok(()));
     // A vault created a period earlier would put the same request one period later.
     assert!(matches!(
-        subsidised.check_subsidy_period(creation - SUBSIDY_PERIOD_SLOTS),
+        subsidised.check_subsidy_period(creation.checked_sub(SUBSIDY_PERIOD_SLOTS).expect("a vault created a period earlier")),
         Err(SubsidyPeriodError::WrongPeriod { .. })
     ));
 

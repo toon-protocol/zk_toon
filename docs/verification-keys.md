@@ -80,7 +80,7 @@ The file is committed, made from one commit: an unsubsidised and a subsidised `R
 (each o1js's `JsonProof`, its `publicInput` being `RequestPublic`'s fields), the request
 `verificationKey` (`data` and `hash`) they verify under, the `vaultCreation` slot the subsidised proof's
 period counts from, and a real `zk-toon-withdrawal` proof with its own key, which the request key must
-refuse. `buildRequestFixtures` (`o1js/src/request-fixtures.ts`) takes a note tree and index, the vault
+refuse. `buildRequestFixtures` (`o1js/src/request-fixtures.ts`) takes a note tree and index, the state
 key, the request slot and the vault creation slot, and defaults them to sample values; all times are
 slots. Proofs are randomised, so the gate never regenerates them: `npm test` fails if the committed
 key differs from the one `RequestProgram` compiles to, and `zk-prover/tests/request_proofs.rs` verifies

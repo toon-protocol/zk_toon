@@ -3,9 +3,10 @@
 // they verify under, and a real proof from another program, which that key must refuse. Every proof is
 // built through `buildRequest`, so a caller can pass any tree (#67 passes a real vault's); all times
 // are in slots (ADR 0007).
-import { Cache, PrivateKey, verify, type JsonProof } from 'o1js';
-import type { PublishedKey } from './keys.js';
-import { NoteTree } from './note-tree.js';
+import { Cache, Field as F, PrivateKey, verify, type JsonProof } from 'o1js';
+import { published, type PublishedKey } from './keys.js';
+import { NoteTree, depositLeaf } from './note-tree.js';
+import { commitSecret } from './primitives.js';
 import { TIERS } from './policy.js';
 import { RequestProgram, subsidyPeriodHolds } from './request.js';
 import { VECTOR_VAULT_CREATION, buildRequest, defaultSample, sampleTreeFor, type SampleOptions } from './request-sample.js';
@@ -16,9 +17,13 @@ export interface RequestFixtureInputs {
   /** The tree the proofs are over, and the index of the note in it. Default: the sample tree. */
   tree?: NoteTree;
   index?: bigint;
-  /** The note and request the proofs are for (its tier, subsidy and vault key are set by the fields below). */
+  /**
+   * The note and request the proofs are for: its `secret`, `size` and `depositTime` must be those of the
+   * note at `index`. Its subsidy, state key and request slot are set by the fields below, and the
+   * subsidised proof takes the first tier and expires the slot after the request.
+   */
   note?: Partial<SampleOptions>;
-  /** The vault's secret key: the key that signs state and the proofs' `vault`. */
+  /** The state key's secret: the key that signs the note's state, whose public key is the proofs' `vault`. */
   vaultSecret?: bigint;
   /** The vault's creation slot, which the subsidised proof's period counts from. */
   vaultCreation?: bigint;
@@ -40,9 +45,6 @@ export interface RequestFixtures {
   otherProgram: PublishedKeyProof & { name: string };
 }
 
-const published = (vk: { data: string; hash: { toString(): string } }): PublishedKey =>
-  ({ data: vk.data, hash: vk.hash.toString() });
-
 export async function buildRequestFixtures(
   inputs: RequestFixtureInputs,
   o1js: string,
@@ -57,6 +59,9 @@ export async function buildRequestFixtures(
     throw new Error('give a tree and the note index together, or neither');
   }
   const { tree, index } = inputs.tree !== undefined ? { tree: inputs.tree, index: inputs.index! } : sampleTreeFor(options);
+  // Caught here rather than as an unsatisfied constraint after minutes of compiling.
+  const leaf = depositLeaf(F(index), { commitment: commitSecret(F(options.secret)), size: F(options.size), depositTime: F(options.depositTime) });
+  if (!tree.leafAt(index).equals(leaf).toBoolean()) throw new Error(`the note given is not the one at index ${index} of the tree`);
 
   const plain = buildRequest(tree, index, { ...options, subsidy: undefined });
   const subsidy = buildRequest(tree, index, {

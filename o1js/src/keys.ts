@@ -26,7 +26,8 @@ export type Keys = {
   vault: { codeHash: string; methods: string[]; verificationKey: PublishedKey };
 };
 
-const published = (vk: { data: string; hash: { toString(): string } }): PublishedKey =>
+/** A compiled key in its published form. */
+export const published = (vk: { data: string; hash: { toString(): string } }): PublishedKey =>
   ({ data: vk.data, hash: vk.hash.toString() });
 
 /**
