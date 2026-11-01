@@ -27,15 +27,16 @@ declareState(OrderingProbe, { x: Field });
 /** Fee per command. LocalBlockchain ignores it; a lightnet needs one. */
 const FEE = 100_000_000;
 
-export type Outcome = { status: 'included' | 'rejected'; errors: string[] };
+/** `rejectedAt`: `safeSend` is a rejection before any block (proofs and signatures checked), `block` a failed command. */
+export type Outcome = { status: 'included' | 'rejected'; errors: string[]; rejectedAt?: 'safeSend' | 'block' };
 
 /** Sends a signed, proved command and waits for its block. */
-async function submit(tx: Mina.Transaction<false, false>, keys: PrivateKey[]): Promise<Outcome> {
+export async function submit(tx: Mina.Transaction<false, false>, keys: PrivateKey[]): Promise<Outcome> {
   await tx.prove();
   const sent = await tx.sign(keys).safeSend();
-  if (sent.status === 'rejected') return { status: 'rejected', errors: sent.errors.map(String) };
+  if (sent.status === 'rejected') return { status: 'rejected', errors: sent.errors.map(String), rejectedAt: 'safeSend' };
   const done = await sent.safeWait();
-  if (done.status === 'rejected') return { status: 'rejected', errors: done.errors.map(String) };
+  if (done.status === 'rejected') return { status: 'rejected', errors: done.errors.map(String), rejectedAt: 'block' };
   return { status: 'included', errors: [] };
 }
 

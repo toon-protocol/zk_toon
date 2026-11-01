@@ -23,8 +23,10 @@ archive API on 8282 and the account manager on 8181. `lightnet.sh status` says w
 
 A synced chain can still be stuck. The container's SNARK worker can die (`Snark worker died with signal
 sigsegv` in `docker logs`) while the daemon keeps producing blocks, and those blocks stay empty, so a
-command sits in the pool until o1js gives up with `Exceeded max attempts`. `lightnet.sh down` and `up`
-start a fresh chain.
+command sits in the pool until o1js gives up with `Exceeded max attempts`. The daemon's prover can also
+fail (`Prover failed to prove freshly generated transition` in `docker logs`), and then no block is added
+at all: `status` still says synced while the tip's slot stops moving. In either case, `lightnet.sh down`
+and `up` start a fresh chain.
 
 ## What they show
 
@@ -57,3 +59,21 @@ still matters: the new action state is accepted, and it was none of the five bef
 For a cursor checked this way, as `collect` would check `reduce`'s `actionCursor` (connector#1553),
 this means an action-state precondition alone does not reject a cursor that is up to four dispatch
 slots stale.
+
+`vk-ordering.lightnet.ts` (#35) answers this question: does Mina check an account update's proof against a
+verification key that an earlier account update in the same command installed? `VkProbeV1` and
+`VkProbeV2` have different keys. The zkApp is deployed with V1 and `setVerificationKey: signature`. Each
+command holds a signed update that sets V2's key (or none), then a call to `resume`, proved against V1
+or V2. V2's `resume` sets `x` to 2.
+
+| Update 1 | `resume` proved against | Result |
+| --- | --- | --- |
+| sets V2's key | V2 | applied: the account's key hash is V2's and `x` is 2 |
+| sets V2's key | V1 | rejected at `safeSend`: `Couldn't send zkApp command: (invalid (Invalid_proof (Pickles.verify dlog_check)))` |
+| none (control) | V2 | rejected at `safeSend`: `Couldn't send zkApp command: (invalid (Invalid_proof (Pickles.verify dlog_check)))` |
+
+The ordering holds: the proof is checked against the key the command installed. Both rejections happen
+before a block, and the tests check the key and `x` are unchanged afterwards. The control shows the keys
+really differ. This confirms the order within a command only. It does not exercise
+`impossibleDuringCurrentVersion` and its fallback to `signature` after a hard fork, which a lightnet
+can't do. There is no LocalBlockchain counterpart: with proofs off, both circuits get the same dummy key.
