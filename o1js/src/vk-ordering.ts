@@ -57,8 +57,8 @@ export function cachedAccount(address: PublicKey) {
 }
 
 /**
- * One command with two account updates on the zkApp: a signed one that sets `installKey` (if given),
- * then a call to `resume` of `circuit`, proved against it. Throws if the key update is not first.
+ * One command on the zkApp: a signed account update that sets `installKey` (if given), then a call to
+ * `resume` of `circuit`, proved against it. Throws if the command holds any other account updates or order.
  */
 export async function setKeyThenResume(
   zkappKey: PrivateKey,
@@ -77,7 +77,7 @@ export async function setKeyThenResume(
   });
   const sets = tx.transaction.accountUpdates.map((u) => u.body.update.verificationKey.isSome.toBoolean());
   const expected = installKey ? [true, false] : [false];
-  if (JSON.stringify(sets.slice(-expected.length)) !== JSON.stringify(expected)) {
+  if (JSON.stringify(sets) !== JSON.stringify(expected)) {
     throw Error(`account updates are not in the intended order: sets-key flags ${sets}`);
   }
   return submit(tx, [sender.key, zkappKey]);
