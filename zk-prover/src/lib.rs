@@ -11,7 +11,11 @@
 //! [`wrap::wrap`] wraps a step proof into the Pickles wrap proof of an o1js program: given the
 //! program's step circuits (one per method), its feature flags and its compiled wrap circuit, it
 //! returns the wrap proof and the wrap witness, which equals o1js's value for value.
+//!
+//! [`land_program::LandProgram`] puts these together: `land`'s arguments in, a proof for its
+//! transaction out.
 
+pub mod land_program;
 pub mod pins;
 pub mod verify;
 pub mod witness;

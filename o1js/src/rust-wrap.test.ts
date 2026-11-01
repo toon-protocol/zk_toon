@@ -21,9 +21,10 @@ const jsonProof = (f: Saved, over: Partial<JsonProof> = {}): JsonProof => ({
 });
 
 describe('the Rust wrap proof under the program verification key', () => {
-  for (const method of ['land', 'setup']) {
-    it(`${method}: o1js verifies it, and refuses a changed proof or public input`, async () => {
-      const rust: Saved = fixture(`rust_${method}_proof.json`);
+  // `rust_witness_land`: `land` wholly in Rust, the step witness too (#36).
+  for (const name of ['land', 'setup', 'witness_land']) {
+    it(`${name}: o1js verifies it, and refuses a changed proof or public input`, async () => {
+      const rust: Saved = fixture(`rust_${name}_proof.json`);
       expect(await verify(jsonProof(rust), vk)).toBe(true);
 
       const input = [...rust.publicInputFields];

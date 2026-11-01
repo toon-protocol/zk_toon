@@ -1,5 +1,5 @@
 // The named proofs-on set: the tests that compile the circuits and prove for real, to show that the
-// circuits and the vault agree. Each is declared by its title here, and the gate fails unless every
+// circuits and the vault agree, and that o1js still compiles what zk-prover mirrors. Each is declared by its title here, and the gate fails unless every
 // one ran exactly once and passed (`npm run proofs-on -- <vitest JSON report>`). Every other o1js
 // test runs with proofs off.
 export const PROOFS_ON = {
@@ -9,6 +9,7 @@ export const PROOFS_ON = {
   escape: 'proofs on: an escape with a real withdrawal proof is bound to its destination, and pays it after the window',
   defeat: 'proofs on: a real request proof at the next nullifier defeats an escape',
   vault: 'proofs on: the vault compiles, and a deployed vault carries the published code hash',
+  landVk: "proofs on: this o1js compiles zk-prover's land program to the pinned verification key",
 } as const;
 
 type Assertion = { title?: unknown; status?: unknown };

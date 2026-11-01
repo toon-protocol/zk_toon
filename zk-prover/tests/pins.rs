@@ -55,4 +55,11 @@ fn pins_match_the_manifests() {
     let lock: serde_json::Value =
         serde_json::from_slice(&std::fs::read(format!("{root}/../fixture-gen/package-lock.json")).unwrap()).unwrap();
     assert_eq!(lock["packages"]["node_modules/o1js"]["version"], pins::O1JS_VERSION);
+    // `o1js/src/land-program.test.ts` compiles the program with this package's o1js.
+    let package: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(format!("{root}/../o1js/package.json")).unwrap()).unwrap();
+    assert_eq!(package["dependencies"]["o1js"], pins::O1JS_VERSION);
+    let lock: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(format!("{root}/../o1js/package-lock.json")).unwrap()).unwrap();
+    assert_eq!(lock["packages"]["node_modules/o1js"]["version"], pins::O1JS_VERSION);
 }

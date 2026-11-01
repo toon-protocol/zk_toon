@@ -37,8 +37,8 @@ pub const PROGRAM_VK_HASH: &str =
 
 // To regenerate the fixtures (after bumping the fork rev, proof-systems or o1js):
 //
-// 1. Change the pin: `Cargo.toml`'s `rev`s, `fixture-gen/package.json`'s o1js version (and its
-//    patch) and the constants above.
+// 1. Change the pin: `Cargo.toml`'s `rev`s, `fixture-gen/package.json`'s and `o1js/package.json`'s
+//    o1js version (and the patch) and the constants above.
 // 2. Run `fixture-gen/regenerate.sh --write`. It rewrites `fixtures/` from o1js and prints the VK hashes.
 // 3. Put the printed hashes in the three `*_VK_HASH` constants. `tests/pins.rs` fails until they
 //    match the committed circuits and `inputs.json`.

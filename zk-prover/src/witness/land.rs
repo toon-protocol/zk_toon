@@ -57,6 +57,29 @@ pub struct LandInputs {
 pub struct LandWitness {
     pub primary: Vec<Fp>,
     pub aux: Vec<Fp>,
+    /// The account update's hash, the first field of the method's public input.
+    pub account_update_hash: Fp,
+}
+
+impl LandInputs {
+    /// Inputs in `inputs.json`'s form (`zkapp`, `payer`, `cumulative`, `sig`, `vk`, `vkHash`), with
+    /// what the file leaves out. The token id is MINA's, the only one `land` is proved for here.
+    pub fn from_json(v: &serde_json::Value, landed: u64, blinding: Fp) -> anyhow::Result<Self> {
+        let s = |k: &str| {
+            v[k].as_str().map(String::from).ok_or_else(|| anyhow::anyhow!("missing {k}"))
+        };
+        Ok(Self {
+            zkapp: s("zkapp")?,
+            payer: s("payer")?,
+            cumulative: s("cumulative")?.parse()?,
+            sig: s("sig")?,
+            landed,
+            token_id: Fp::from(1u64),
+            blinding,
+            vk: s("vk")?,
+            vk_hash: s("vkHash")?.parse().map_err(|_| anyhow::anyhow!("bad vkHash"))?,
+        })
+    }
 }
 
 impl From<LandWitness> for crate::StepWitness {
@@ -116,7 +139,7 @@ pub fn land_witness(inputs: &LandInputs) -> anyhow::Result<LandWitness> {
     let account_update_hash = method_and_wrapper(&mut cs, inputs)?;
     cs.set(1, account_update_hash);
     let public_input = step_statement_hash(&mut cs, inputs)?;
-    Ok(LandWitness { primary: vec![public_input], aux: cs.into_aux() })
+    Ok(LandWitness { primary: vec![public_input], aux: cs.into_aux(), account_update_hash })
 }
 
 /// Pickles' prelude, the wrapper, `land` and the account update hash. Returns that hash.

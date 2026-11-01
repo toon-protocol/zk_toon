@@ -221,5 +221,5 @@ _Avoid_: Contract hash, bytecode hash
 
 **Proofs-on set**:
 The named tests that compile the circuits and prove for real: the request proof, the subsidised proof,
-mutual close, escape, defeat and the vault's compile. The gate fails unless each ran and passed.
+mutual close, escape, defeat, the vault's compile and the compile of `zk-prover`'s `land` program. The gate fails unless each ran and passed.
 _Avoid_: Slow tests, integration tests

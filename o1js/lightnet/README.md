@@ -2,7 +2,7 @@
 
 Some questions only a chain that checks proofs can answer: a proofs-off chain accepts account updates
 the circuit forbids (connector#1554). These tests run against a single-node lightnet,
-`o1labs/mina-local-network:4.0.2-devnet` with `PROOF_LEVEL=full`. CI does not run them yet (#16).
+`o1labs/mina-local-network:4.0.2-devnet` with `PROOF_LEVEL=full`. CI does not run them.
 
 They are the files `src/*.lightnet.ts`. `npm test` skips them, and `npm run test:lightnet` runs only
 them. `src/lightnet.ts` connects o1js to the lightnet and lends each test file a funded account.
@@ -21,7 +21,16 @@ npm run test:lightnet          # proves and sends real commands: several minutes
 The container is named `zk-toon-lightnet` and listens on 127.0.0.1: the GraphQL API on 8080, the
 archive API on 8282 and the account manager on 8181. `lightnet.sh status` says whether it is synced.
 
+A synced chain can still be stuck. The container's SNARK worker can die (`Snark worker died with signal
+sigsegv` in `docker logs`) while the daemon keeps producing blocks, and those blocks stay empty, so a
+command sits in the pool until o1js gives up with `Exceeded max attempts`. `lightnet.sh down` and `up`
+start a fresh chain.
+
 ## What they show
+
+`rust-land.lightnet.ts` (#36) proves `land` with `zk-prover` alone: o1js builds the command and the Rust
+step witness, step proof and wrap proof go in it (the `prove_land` example, built on first use). The chain
+applies two in a row, and refuses a real proof of another `land`, which a proofs-off chain would accept.
 
 `ordering-probe.lightnet.ts` (#33) answers this question: in one zkApp command, does an account
 update's precondition see the ledger as earlier updates in that command left it? `OrderingProbe.write`

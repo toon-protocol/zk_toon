@@ -32,7 +32,7 @@ done
 # The Rust wrap proofs of both step proofs, in the form o1js's `verify` reads (o1js/src/rust-wrap.test.ts).
 rust=$(mktemp -d)
 cargo run --quiet --release -p zk-prover --example rust_wrap_proofs -- "$rust"
-for m in land setup; do
+for m in land setup witness_land; do
   gzip -9nc "$rust/rust_${m}_proof.json" > "$fixtures/rust_${m}_proof.json.gz"
 done
 cargo run --quiet -p zk-prover --example vk_hashes

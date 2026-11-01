@@ -25,18 +25,7 @@ fn fixture(name: &str) -> Vec<u8> {
 /// (`Fp.random()` replaced by a counter, which is at 4 for this call).
 fn land_inputs() -> LandInputs {
     let v: serde_json::Value = serde_json::from_slice(&fixture("inputs.json")).unwrap();
-    let s = |k: &str| v[k].as_str().unwrap().to_string();
-    LandInputs {
-        zkapp: s("zkapp"),
-        payer: s("payer"),
-        cumulative: s("cumulative").parse().unwrap(),
-        sig: s("sig"),
-        landed: 0,
-        token_id: Fp::from(1u64),
-        blinding: Fp::from(4u64),
-        vk: s("vk"),
-        vk_hash: Fp::from_str(&s("vkHash")).unwrap(),
-    }
+    LandInputs::from_json(&v, 0, Fp::from(4u64)).unwrap()
 }
 
 /// o1js's witness: the public input, then the auxiliary values.
