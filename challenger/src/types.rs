@@ -3,8 +3,9 @@ use crate::ports::PortError;
 /// A nullifier, 32 bytes.
 pub type Nullifier = [u8; 32];
 
-/// Milliseconds since the Unix epoch.
-pub type Millis = u64;
+/// A global slot, counted from the network's original genesis (ADR 0007). A count of slots also
+/// uses this type.
+pub type Slot = u64;
 
 /// An escape is identified by the current nullifier it consumed.
 pub type EscapeId = Nullifier;
@@ -20,7 +21,7 @@ pub struct Escape {
     /// The most the vault can pay this note.
     pub balance: u64,
     /// When the challenge window ends.
-    pub deadline: Millis,
+    pub deadline: Slot,
 }
 
 /// A request proof the zk edge recorded, as read through the evidence port.
@@ -52,7 +53,7 @@ pub enum AlarmReason {
     /// Evidence for this escape does not verify. Nothing is submitted.
     EvidenceInvalid,
     /// The deadline is too close (or past) to act on safely.
-    DeadlineTooClose { remaining: Millis },
+    DeadlineTooClose { remaining: Slot },
 }
 
 /// An action the challenger submitted to the vault.

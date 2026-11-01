@@ -27,12 +27,12 @@ fn op(name: &str, query: &str, variables: Value) -> Value {
     json!({ "operationName": name, "query": query, "variables": variables })
 }
 
-/// Daemon: the vault's app state and the chain tip's block time.
+/// Daemon: the vault's app state and the chain tip's slot.
 pub fn vault_state(vault: &str) -> Value {
     op(
         "VaultState",
         "query VaultState($vault: PublicKey!) { account(publicKey: $vault) { zkappState } \
-         bestChain(maxLength: 1) { protocolState { blockchainState { utcDate } } } }",
+         bestChain(maxLength: 1) { protocolState { consensusState { slotSinceGenesis } } } }",
         json!({ "vault": vault }),
     )
 }
@@ -56,7 +56,7 @@ pub fn send_zkapp(zkapp_command: &Value) -> Value {
     )
 }
 
-/// Daemon: the zkApp commands of the frontier's blocks, with their failures, the chain time, and the
+/// Daemon: the zkApp commands of the frontier's blocks, with their failures, the chain tip's slot, and the
 /// fee payer's commands still in the pool.
 pub fn challenge_status(fee_payer: &str) -> Value {
     op(
@@ -64,7 +64,7 @@ pub fn challenge_status(fee_payer: &str) -> Value {
         &format!(
             "query ChallengeStatus($feePayer: PublicKey!) {{ bestChain(maxLength: {FRONTIER_BLOCKS}) {{ \
              transactions {{ zkappCommands {{ hash failureReason {{ failures index }} }} }} \
-             protocolState {{ blockchainState {{ utcDate }} }} }} \
+             protocolState {{ consensusState {{ slotSinceGenesis }} }} }} \
              pooledZkappCommands(publicKey: $feePayer) {{ hash }} }}"
         ),
         json!({ "feePayer": fee_payer }),
@@ -85,7 +85,7 @@ pub fn data(response: &Value) -> Result<&Value, String> {
     }
 }
 
-/// A decimal string's value: Mina GraphQL's encoding of block times, amounts and lengths.
+/// A decimal string's value: Mina GraphQL's encoding of slots, amounts and lengths.
 pub fn decimal(v: &Value) -> Option<u64> {
     v.as_str().and_then(|s| s.parse().ok())
 }

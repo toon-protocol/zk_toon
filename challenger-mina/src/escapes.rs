@@ -29,7 +29,7 @@ pub struct PendingEscape {
     pub size: u64,
     pub destination_x: Field,
     pub destination_is_odd: bool,
-    /// When the challenge window ends, in ms.
+    /// When the challenge window ends, as a slot.
     pub deadline: u64,
 }
 

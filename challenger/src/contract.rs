@@ -7,7 +7,7 @@ use crate::types::*;
 /// Builds a port over a chain at time `now` holding exactly `escapes`.
 pub trait Harness {
     type Port: VaultChainPort;
-    fn port(now: Millis, escapes: Vec<Escape>) -> Self::Port;
+    fn port(now: Slot, escapes: Vec<Escape>) -> Self::Port;
 }
 
 /// A nullifier for tests. Nullifiers are Pallas field elements as 32 canonical little-endian bytes, so
@@ -18,7 +18,7 @@ fn id(n: u8) -> Nullifier {
     id
 }
 
-fn esc(n: u8, conceded: u64, balance: u64, deadline: Millis) -> Escape {
+fn esc(n: u8, conceded: u64, balance: u64, deadline: Slot) -> Escape {
     Escape { id: id(n), next_nullifier: id(n + 100), conceded, balance, deadline }
 }
 

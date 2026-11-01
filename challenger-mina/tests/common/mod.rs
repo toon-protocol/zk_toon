@@ -12,7 +12,7 @@ use mina_signer::{CompressedPubKey, Keypair, SecKey};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use zk_note::Field;
-use zk_toon_challenger::{Escape, EscapeId, Millis, PortError};
+use zk_toon_challenger::{Escape, EscapeId, Slot, PortError};
 use zk_toon_challenger_mina::escapes::{replay, PendingEscape, Update, PENDING_ESCAPES_ROOT_INDEX};
 use zk_toon_challenger_mina::{
     field_of_nullifier, Endpoint, Graphql, MinaChain, RequestProofs, Settings, TxSource,
@@ -21,7 +21,7 @@ use zk_toon_tx_builder::{Challenge, Defeat, FeePayer, Raise, Transaction};
 
 pub const FIXTURE: &str = include_str!("../fixtures/recorded-vault.json");
 /// SHA-256 of `fixtures/recorded-vault.json`. A changed recording must change this too.
-pub const FIXTURE_SHA256: &str = "90f83499f1135acdca4bf2fd351ede7081ec3ee9807399bfe7ff80524c7d5285";
+pub const FIXTURE_SHA256: &str = "a327d4a4c5758caf795dec73105aa84a6eee0a04a25b5ebf5e3b0c6c0c26af33";
 
 pub fn fixture() -> Value {
     let digest: String = Sha256::digest(FIXTURE.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
@@ -43,7 +43,7 @@ pub fn vault_key() -> CompressedPubKey {
 
 #[derive(Default)]
 pub struct State {
-    pub now: Millis,
+    pub now: Slot,
     pub updates: Vec<Update>,
     /// Hashes of the commands in blocks, with their failure if they failed.
     pub included: Vec<(String, Option<String>)>,
@@ -61,7 +61,7 @@ pub struct State {
     pub lose_sends: bool,
     pub status_reads: usize,
     /// How far the chain's clock moves on each status read.
-    pub advance_per_read: Millis,
+    pub advance_per_read: Slot,
     /// Commands accepted but not yet in a block, with their effect.
     pool: Vec<(String, Update)>,
 }
@@ -87,7 +87,7 @@ fn strings(fields: &[Field]) -> Value {
 }
 
 impl Scripted {
-    pub fn new(now: Millis, escapes: &[Escape]) -> Self {
+    pub fn new(now: Slot, escapes: &[Escape]) -> Self {
         let s = Scripted::default();
         {
             let mut st = s.0.borrow_mut();
@@ -122,7 +122,7 @@ impl Scripted {
                 let mut response = fixture["vaultState"].clone();
                 let (root, _) = replay(&st.updates);
                 response["data"]["account"]["zkappState"][PENDING_ESCAPES_ROOT_INDEX] = json!(zk_note::field_to_string(root));
-                response["data"]["bestChain"][0]["protocolState"]["blockchainState"]["utcDate"] = json!(st.now.to_string());
+                response["data"]["bestChain"][0]["protocolState"]["consensusState"]["slotSinceGenesis"] = json!(st.now.to_string());
                 Ok(response)
             }
             "EscapeEvents" => {
@@ -188,7 +188,7 @@ impl Scripted {
     }
 }
 
-fn status(included: &[(String, Option<String>)], now: Millis, pooled: Vec<Value>) -> Value {
+fn status(included: &[(String, Option<String>)], now: Slot, pooled: Vec<Value>) -> Value {
     let commands: Vec<Value> = included
         .iter()
         .map(|(h, f)| {
@@ -198,7 +198,7 @@ fn status(included: &[(String, Option<String>)], now: Millis, pooled: Vec<Value>
         .collect();
     json!({ "data": {
         "bestChain": [{ "transactions": { "zkappCommands": commands },
-                        "protocolState": { "blockchainState": { "utcDate": now.to_string() } } }],
+                        "protocolState": { "consensusState": { "slotSinceGenesis": now.to_string() } } }],
         "pooledZkappCommands": pooled,
     } })
 }

@@ -6,16 +6,16 @@ use crate::types::*;
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// The least time before a deadline at which the challenger still submits. It leaves room for
+    /// The fewest slots before a deadline at which the challenger still submits. It leaves room for
     /// Mina's inclusion time.
-    pub min_lead: Millis,
+    pub min_lead: Slot,
 }
 
 /// Decide what to do about one escape.
 ///
 /// A subsidised proof can defeat but never raise (ADR 0001). A proof that does not verify yields
 /// an alarm and no submission.
-pub fn decide(escape: &Escape, evidence: &dyn EvidencePort, now: Millis, cfg: &Config) -> Result<Decision, PortError> {
+pub fn decide(escape: &Escape, evidence: &dyn EvidencePort, now: Slot, cfg: &Config) -> Result<Decision, PortError> {
     Ok(within_deadline(escape, from_evidence(escape, evidence)?, now, cfg))
 }
 
@@ -39,7 +39,7 @@ fn from_evidence(escape: &Escape, evidence: &dyn EvidencePort) -> Result<Decisio
 }
 
 /// Turn a submission into an alarm when the deadline is too close to act on safely.
-fn within_deadline(escape: &Escape, decision: Decision, now: Millis, cfg: &Config) -> Decision {
+fn within_deadline(escape: &Escape, decision: Decision, now: Slot, cfg: &Config) -> Decision {
     if !matches!(decision, Decision::Defeat | Decision::Raise { .. }) {
         return decision;
     }
@@ -65,7 +65,7 @@ impl<C: VaultChainPort, E: EvidencePort, J: Journal> Challenger<C, E, J> {
     /// One pass over the vault's open escapes. Safe to call repeatedly and after a restart: an
     /// action already journalled as submitted is not repeated, and every open escape is read
     /// afresh from the chain, so none is missed.
-    pub fn tick(&mut self, now: Millis) -> Result<Vec<Report>, PortError> {
+    pub fn tick(&mut self, now: Slot) -> Result<Vec<Report>, PortError> {
         let escapes = self.chain.escapes()?;
         let mut seen: HashSet<EscapeId> = self.journal.seen()?.into_iter().collect();
         let mut done = self.journal.submitted()?;
