@@ -10,7 +10,7 @@ import { commit } from './balance.js';
 import { signClearance } from './clearance.js';
 import { type Clock, minaKeyFromMnemonic, runKey, runSecret, sendPlan, targetSlot } from './devnet.js';
 import { buildKeys } from './keys.js';
-import { DEPOSIT_SIZES, TIERS } from './policy.js';
+import { DEPOSIT_SIZES, SLOT_SECONDS, TIERS } from './policy.js';
 import { commitSecret, genesisAnchor, nullifier } from './primitives.js';
 import { stateChain } from './request-sample.js';
 import { stateFields } from './state.js';
@@ -39,11 +39,11 @@ if (funder.toBase58() !== FUNDER_ADDRESS) throw Error(`the mnemonic derives ${fu
 // --- The run's keys and notes. ---
 const own = (label: string) => runSecret(funderKey.toBigInt(), run, label);
 const key = (label: string) => runKey(funderKey.toBigInt(), run, label);
-const vaultKey = key('vault');
+const upgradeKey = key('vault');
 const stateKey = key('state');
 const treasuryKey = key('treasury');
 const destinationKey = key('destination');
-const [vaultAddress, treasury, destination] = [vaultKey, treasuryKey, destinationKey].map((k) => k.toPublicKey()) as [PublicKey, PublicKey, PublicKey];
+const [vaultAddress, treasury, destination] = [upgradeKey, treasuryKey, destinationKey].map((k) => k.toPublicKey()) as [PublicKey, PublicKey, PublicKey];
 const vault = new Vault(vaultAddress);
 const SIZE = DEPOSIT_SIZES[0]!;
 const TIER = TIERS[1]!;
@@ -52,8 +52,8 @@ const closeBalance = SIZE - TIER;
 
 // --- The journal: public facts only, kept beside the write-up. ---
 type Attempt = {
-  step: string; hash: string; target?: string; sentSlot: string; landedSlot?: string; height?: string;
-  proveSeconds: number; inclusionSeconds?: number; failure?: unknown; fee: string;
+  step: string; hash: string; target?: string; sentSlot?: string; landedSlot?: string; height?: string;
+  proveSeconds?: number; inclusionSeconds?: number; failure?: unknown; fee: string;
 };
 type Journal = { run: string; vault: string; funder: string; treasury: string; destination: string; facts: Record<string, unknown>; done: string[]; attempts: Attempt[]; sent?: { step: string; hash: string } };
 const journalDir = new URL('../../docs/devnet-smoke/', import.meta.url);
@@ -110,12 +110,29 @@ async function inclusion(hash: string) {
     }
     await sleep(15_000);
   }
-  throw Error(`${hash} was not included within ${INCLUSION_TIMEOUT_MS / 60_000} minutes; see if it is still pooled before running again`);
+  throw Error(`${hash} was not included within ${INCLUSION_TIMEOUT_MS / 60_000} minutes; if it was dropped, remove \`sent\` from the journal before running again`);
 }
 
 const proveEstimates = new Map<string, number>();
-/** `currentSlot` is the command's `validWhile`; a network precondition fails under the other name. */
-const isSlotMiss = (failure: unknown) => /Valid_while_precondition_unsatisfied|Protocol_state_precondition_unsatisfied/.test(JSON.stringify(failure));
+/** `currentSlot`, the vault's only read of chain time, is the command's `validWhile`. */
+const isSlotMiss = (failure: unknown) => JSON.stringify(failure).includes('Valid_while_precondition_unsatisfied');
+
+/**
+ * A run stopped while a command was out: that command decides, so a resume doesn't send a second one.
+ * True if `step`'s command was out and applied; a slot miss is journalled, and leaves the step to try again.
+ */
+async function settleSent(step: string) {
+  if (journal.sent?.step !== step) return false;
+  const { hash } = journal.sent;
+  log(`${step}: looking for ${hash}, sent before this run stopped`);
+  const { block, failure } = await inclusion(hash);
+  const { slotSinceGenesis, blockHeight } = block.protocolState.consensusState;
+  journal.attempts.push({ step, hash, landedSlot: slotSinceGenesis, height: blockHeight, failure: failure ?? undefined, fee: FEE.toString() });
+  delete journal.sent;
+  saveJournal();
+  if (failure && !isSlotMiss(failure)) throw Error(`${step}: failed on chain: ${JSON.stringify(failure)}`);
+  return !failure;
+}
 
 /**
  * Proves and lands one command, journalling each attempt. `build` gets the slot to aim at. With `aimed`, the
@@ -123,16 +140,7 @@ const isSlotMiss = (failure: unknown) => /Valid_while_precondition_unsatisfied|P
  * its slot range is included as failed, and is tried again.
  */
 async function land(step: string, build: (target: bigint) => Promise<object>, { aimed = true } = {}) {
-  // A run stopped while a command was out: that command decides, so a resume doesn't send a second one.
-  if (journal.sent?.step === step) {
-    const { hash } = journal.sent;
-    log(`${step}: looking for ${hash}, sent before this run stopped`);
-    const { failure } = await inclusion(hash);
-    delete journal.sent;
-    saveJournal();
-    if (!failure) return;
-    if (!isSlotMiss(failure)) throw Error(`${step}: failed on chain: ${JSON.stringify(failure)}`);
-  }
+  if (await settleSent(step)) return;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const started = Date.now();
     const target = targetSlot(await clock(), started, proveEstimates.get(step) ?? 240_000);
@@ -225,6 +233,7 @@ const payees = async () => ({ destination: (await balance(destination)).toString
 
 /** Reduces every pending action, one command per batch. */
 async function reduceAll(name: string) {
+  if (journal.sent?.step.startsWith(`${name}-`) && (await settleSent(journal.sent.step))) return;
   for (let waited = 0; ; waited++) {
     await refresh();
     batchReducer.setContractInstance(vault);
@@ -260,6 +269,10 @@ const expectGrowth = (name: string, before: { destination: string; treasury: str
 // --- The smoke test. ---
 log(`run ${run}: vault ${vaultAddress.toBase58()}, funder balance ${await balance(funder)}`);
 const keys = await buildKeys();
+// What the run deployed is what it records: a later build of other code can't drive this vault.
+if (journal.facts.vaultCodeHash !== undefined && journal.facts.vaultCodeHash !== keys.vault.codeHash) {
+  throw Error(`this build's vault code hash ${keys.vault.codeHash} is not the deployed ${journal.facts.vaultCodeHash}`);
+}
 journal.facts.o1js = keys.o1js;
 journal.facts.vaultCodeHash = keys.vault.codeHash;
 journal.facts.requestKeyHash = keys.circuits.request.verificationKey.hash;
@@ -290,7 +303,7 @@ await step('deploy', () => land('deploy', async (target) => {
       AccountUpdate.fundNewAccount(funder);
       await vault.deploy({ zkappUri: VAULT_URI });
     });
-    return await sealed(tx, [vaultKey]);
+    return await sealed(tx, [upgradeKey]);
   } finally {
     Mina.setActiveInstance(network);
   }
@@ -299,7 +312,7 @@ await step('deploy', () => land('deploy', async (target) => {
 await step('setup', () => land('setup', async () => {
   await refresh(treasury);
   const statePub = stateKey.toPublicKey();
-  const signature = Signature.create(vaultKey, setupFields(vaultAddress, statePub, treasury));
+  const signature = Signature.create(upgradeKey, setupFields(vaultAddress, statePub, treasury));
   const tx = await Mina.transaction(payer, async () => {
     await vault.setup(statePub, treasury, signature);
   });
@@ -390,7 +403,7 @@ if (!journal.done.includes('finalize')) {
   const slot = await wallSlot();
   saveJournal();
   if (slot < deadline) {
-    const hours = (Number(deadline - slot) * 90) / 3600;
+    const hours = (Number(deadline - slot) * Number(SLOT_SECONDS)) / 3600;
     log(`the escape's window is open until slot ${deadline}, now ${slot}: about ${hours.toFixed(1)} hours. Run this again after that.`);
     process.exit(0);
   }
@@ -406,7 +419,7 @@ await step('finalize', () => land('finalize', async () => {
 
 journal.facts['reduce-final.actions'] = 1;
 await step('reduce-final', async () => {
-  await reduceAll('reduce-final');
+  await step('reduce-final-landed', () => reduceAll('reduce-final'));
   await sleep(30_000);
   const after = await payees();
   journal.facts['payees.after-finalize'] = after;
