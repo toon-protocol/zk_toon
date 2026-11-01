@@ -16,8 +16,8 @@
 //! The connector's zk edge depends on this crate (connector ADR 0080, decision 12) and fixes:
 //!
 //! - [`RequestContext::edge`] is the x-coordinate of the vault key the zk edge signs state under;
-//! - a `requestTime` is refused when it is more than [`policy::REQUEST_MAX_AGE_MS`] behind or
-//!   [`policy::REQUEST_MAX_LEAD_MS`] ahead of the zk edge's clock ([`policy::is_request_time_fresh`]);
+//! - a `requestTime` is refused when it is more than [`policy::REQUEST_MAX_AGE_SLOTS`] behind or
+//!   [`policy::REQUEST_MAX_LEAD_SLOTS`] ahead of the zk edge's current slot ([`policy::is_request_time_fresh`]);
 //! - subsidised proofs are refused until connector#1581; once accepted, every request proof must pass
 //!   [`request::RequestPublic::check_subsidy_period`] against the vault's `creationTime`, since the
 //!   circuit cannot bind a subsidised proof's period to the vault;

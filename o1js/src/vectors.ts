@@ -18,8 +18,8 @@ const SECRET = 123456789012345678901234567890n;
 const SECRET_B = 987654321n;
 /** Secrets of the vault keys the zk edge signs state under. */
 const VAULT_SECRETS = [1n, 987654321098765432109876543210n];
-const DAY = policy.MS_PER_DAY;
-const WEEK = policy.SUBSIDY_PERIOD_MS;
+const DAY = policy.SLOTS_PER_DAY;
+const WEEK = policy.SUBSIDY_PERIOD_SLOTS;
 const Q = Scalar.ORDER;
 
 const pointJson = (g: Group) => ({ x: s(g.x), y: s(g.y) });
@@ -59,7 +59,7 @@ export function buildVectors() {
     commitment: s(p.commitSecret(F(secret))),
   }));
 
-  const depositTime = 1_700_000_000_000n;
+  const depositTime = 900_000n;
   const leaves = [
     { index: 0n, secret: SECRET, size: policy.DEPOSIT_SIZES[0], depositTime },
     { index: 7n, secret: SECRET_B, size: policy.DEPOSIT_SIZES[2], depositTime: depositTime + DAY },
@@ -118,7 +118,7 @@ export function buildVectors() {
     periodNullifier: s(p.periodNullifier(F(secret), F(index), F(period))),
   }));
 
-  const creation = 1_690_000_000_000n;
+  const creation = 890_000n;
   const periodTimes: bigint[] = [
     creation - 1n, creation, creation + 1n,
     creation + WEEK - 1n, creation + WEEK, creation + WEEK + 1n,
@@ -142,11 +142,11 @@ export function buildVectors() {
   // A requestTime at and either side of each edge of the window around now.
   const now = depositTime;
   const requestDeltas = [
-    0n, -policy.REQUEST_MAX_AGE_MS, -policy.REQUEST_MAX_AGE_MS - 1n,
-    policy.REQUEST_MAX_LEAD_MS, policy.REQUEST_MAX_LEAD_MS + 1n,
+    0n, -policy.REQUEST_MAX_AGE_SLOTS, -policy.REQUEST_MAX_AGE_SLOTS - 1n,
+    policy.REQUEST_MAX_LEAD_SLOTS, policy.REQUEST_MAX_LEAD_SLOTS + 1n,
   ];
   const requestTimes = requestDeltas.map((delta) => ({
-    now: now.toString(), requestTime: (now + delta).toString(),
+    currentSlot: now.toString(), requestTime: (now + delta).toString(),
     fresh: policy.isRequestTimeFresh(now + delta, now),
   }));
 
@@ -162,13 +162,14 @@ export function buildVectors() {
   }));
 
   const policyJson = {
-    msPerDay: DAY.toString(),
-    noteLifetimeMs: policy.NOTE_LIFETIME_MS.toString(),
-    minSubsidyAgeMs: policy.MIN_SUBSIDY_AGE_MS.toString(),
-    subsidyPeriodMs: policy.SUBSIDY_PERIOD_MS.toString(),
-    challengeWindowMs: policy.CHALLENGE_WINDOW_MS.toString(),
-    requestMaxAgeMs: policy.REQUEST_MAX_AGE_MS.toString(),
-    requestMaxLeadMs: policy.REQUEST_MAX_LEAD_MS.toString(),
+    slotSeconds: policy.SLOT_SECONDS.toString(),
+    slotsPerDay: DAY.toString(),
+    noteLifetimeSlots: policy.NOTE_LIFETIME_SLOTS.toString(),
+    minSubsidyAgeSlots: policy.MIN_SUBSIDY_AGE_SLOTS.toString(),
+    subsidyPeriodSlots: policy.SUBSIDY_PERIOD_SLOTS.toString(),
+    challengeWindowSlots: policy.CHALLENGE_WINDOW_SLOTS.toString(),
+    requestMaxAgeSlots: policy.REQUEST_MAX_AGE_SLOTS.toString(),
+    requestMaxLeadSlots: policy.REQUEST_MAX_LEAD_SLOTS.toString(),
     tiers: policy.TIERS.map(String),
     depositSizes: policy.DEPOSIT_SIZES.map(String),
   };
@@ -267,9 +268,9 @@ export function buildVectors() {
   // challenger replaying the vault's escape events rebuilds it.
   const escapeRecords = [
     { nullifier: F(chain[0].nullifier), nextNullifier: F(chain[1].nullifier), amount: 3_000_000_000n,
-      conceded: 10_000_000n, size: 10_000_000_000n, destinationSecret: 77n, deadline: 1_700_172_800_000n },
+      conceded: 10_000_000n, size: 10_000_000_000n, destinationSecret: 77n, deadline: 901_920n },
     { nullifier: F(chain[2].nullifier), nextNullifier: F(12345), amount: 10_000_000_000n,
-      conceded: 0n, size: 10_000_000_000n, destinationSecret: 78n, deadline: 1_700_259_200_000n },
+      conceded: 0n, size: 10_000_000_000n, destinationSecret: 78n, deadline: 903_840n },
   ].map((r) => new PendingEscape({
     nullifier: r.nullifier, nextNullifier: r.nextNullifier, amount: UInt64.from(r.amount),
     conceded: UInt64.from(r.conceded), size: UInt64.from(r.size),
@@ -300,7 +301,7 @@ export function buildVectors() {
 
   return {
     description:
-      'Shared zk-note test vectors. Field elements are decimal strings; times are milliseconds. ' +
+      'Shared zk-note test vectors. Field elements are decimal strings; times are slots. ' +
       'Regenerate with `npm run vectors` in o1js/; the Rust crate and the o1js tests both reproduce every entry.',
     tags, policy: policyJson, poseidon, domainSeparation, commitment, leaves, nullifiers,
     authTags, periodNullifiers, periods, ages, requestTimes, membership,

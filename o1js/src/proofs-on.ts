@@ -9,6 +9,7 @@ export const PROOFS_ON = {
   escape: 'proofs on: an escape with a real withdrawal proof is bound to its destination, and pays it after the window',
   defeat: 'proofs on: a real request proof at the next nullifier defeats an escape',
   vault: 'proofs on: the vault compiles, and a deployed vault carries the published code hash',
+  constants: 'proofs on: the vault and the circuits compile to the same keys under other network constants',
   landVk: "proofs on: this o1js compiles zk-prover's land program to the pinned verification key",
 } as const;
 

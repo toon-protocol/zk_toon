@@ -27,7 +27,7 @@ fn malformed_requests_are_bad_input() {
     assert_eq!(kind, FailureKind::BadInput);
     assert!(message.contains("feePayer"), "{message}");
     // The builder still answers after a bad request.
-    assert!(b.local().now().is_ok());
+    assert!(b.local().slot().is_ok());
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn a_refused_proof_is_a_proving_failure_and_no_secret_leaves_the_builder() {
     let rerandom = 564_738_291_918_273_645u64;
     let note = deposit_note(&mut b, &chain, secret, DEPOSIT_SIZES[0]);
     let (state, _) = signed_state(&chain, &note, TIERS[0], blinding);
-    let request_time = b.local().now().unwrap();
+    let request_time = b.local().slot().unwrap();
     let mut input = RequestProofInput {
         vault: chain.vault.clone(),
         note: note.clone(),

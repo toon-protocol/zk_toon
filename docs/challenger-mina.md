@@ -20,7 +20,7 @@ state the same way. `nullifier_of_field` and `field_of_nullifier` implement it.
 ## Reading escapes and their deadlines
 
 An escape's deadline is set by the reduce that records it (a slot after the reduce's `now`, plus the
-challenge window), which the actions don't carry. So the vault's reduce emits an **`escape` event**
+challenge window, in slots), which the actions don't carry. So the vault's reduce emits an **`escape` event**
 for each pending escape it records, raises, finalizes or defeats (`EscapeUpdate` in
 `o1js/src/vault.ts`, nine fields: `pending`, then the record's `nullifier, nextNullifier, amount,
 conceded, size, destination.x, destination.isOdd, deadline`).
@@ -39,6 +39,13 @@ transaction's run of events back into emission order; if that doesn't rebuild th
 archive's order as listed. A lagging, reordered or lying archive is `Unavailable`, never a
 missing or invented escape; the challenger retries on its next tick. Open escapes are those pending
 with `deadline > now`.
+
+> **Not yet in slots (follow-up to #59).** A pending escape's `deadline` is now a slot (ADR 0007), but
+> this adapter still reads "now" as the tip's `utcDate` in milliseconds and `Millis` is the challenger's
+> unit, so on a real chain it would see every deadline as long past. It must read the tip's
+> `consensusState.slotSinceGenesis` and take its lead time in slots before it runs against a deployed
+> vault. The local chain in `tx-builder` answers `utcDate` with the slot, so the tests agree with
+> themselves.
 
 ## Submitting
 

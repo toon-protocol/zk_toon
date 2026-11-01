@@ -2,13 +2,13 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { PROOFS_ON } from './proofs-on.js';
 import { AccountUpdate, Bool, Field, Mina, Permissions, PrivateKey, UInt32, UInt64, VerificationKey, verify } from 'o1js';
 import * as policy from './policy.js';
-import { PendingEscape, SLOT_MS, VAULT_URI, batchReducer } from './vault.js';
+import { PendingEscape, VAULT_URI, batchReducer } from './vault.js';
 import { balanceOf, now, vaultHarness } from './vault-harness.js';
 import { WithdrawalKind, WithdrawalProgram, WithdrawalProof, WithdrawalPublic } from './withdrawal.js';
 
 const [SMALL] = policy.DEPOSIT_SIZES;
 const MINA = 1_000_000_000n;
-const WINDOW = policy.CHALLENGE_WINDOW_MS;
+const WINDOW = policy.CHALLENGE_WINDOW_SLOTS;
 const { escape: ESCAPE } = WithdrawalKind;
 
 // Proofs off: the contract logic runs, but no circuit is proven, except where a test compiles one.
@@ -198,12 +198,12 @@ describe('vault escape timing', () => {
     const note = await h.deposit(SMALL);
     await h.reduce();
     const t = now();
-    const expired = await h.withdrawalProof(note, { kind: ESCAPE, requestTime: t - 20n * policy.MS_PER_MINUTE, validUntil: t - 1n });
-    await expect(h.send(await h.escapeTx(expired))).rejects.toThrow(/Protocol_state_precondition_unsatisfied/);
+    const expired = await h.withdrawalProof(note, { kind: ESCAPE, requestTime: t - 20n, validUntil: t - 1n });
+    await expect(h.send(await h.escapeTx(expired))).rejects.toThrow(/Valid_while_precondition_unsatisfied/);
     const early = await h.withdrawalProof(note, { kind: ESCAPE, requestTime: t + 1n });
-    await expect(h.send(await h.escapeTx(early))).rejects.toThrow(/Protocol_state_precondition_unsatisfied/);
+    await expect(h.send(await h.escapeTx(early))).rejects.toThrow(/Valid_while_precondition_unsatisfied/);
     // At its validUntil, accepted.
-    const last = await h.withdrawalProof(note, { kind: ESCAPE, requestTime: t - 20n * policy.MS_PER_MINUTE, validUntil: t });
+    const last = await h.withdrawalProof(note, { kind: ESCAPE, requestTime: t - 20n, validUntil: t });
     await h.send(await h.escapeTx(last));
   });
 
@@ -213,11 +213,11 @@ describe('vault escape timing', () => {
     await h.reduce();
     const pending = h.mirror.pendingEscape(proof.publicInput.nullifier)!;
     const deadline = pending.deadline.toBigInt();
-    await expect(h.send(await h.finalizeTx(pending))).rejects.toThrow(/Protocol_state_precondition_unsatisfied/);
+    await expect(h.send(await h.finalizeTx(pending))).rejects.toThrow(/Valid_while_precondition_unsatisfied/);
     // A slot short of the deadline: still refused.
-    advance(deadline - now() - SLOT_MS);
+    advance(deadline - now() - 1n);
     expect(now()).toBeLessThan(deadline);
-    await expect(h.send(await h.finalizeTx(pending))).rejects.toThrow(/Protocol_state_precondition_unsatisfied/);
+    await expect(h.send(await h.finalizeTx(pending))).rejects.toThrow(/Valid_while_precondition_unsatisfied/);
     advance(deadline - now());
     await h.send(await h.finalizeTx(pending));
   });

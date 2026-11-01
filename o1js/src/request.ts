@@ -4,7 +4,7 @@ import { Bool, Field, Group, PublicKey, Scalar, Signature, Struct, ZkProgram } f
 import { rerandomise } from './balance.js';
 import { NoteWitness } from './note-tree.js';
 import { U64_BITS, checkNoteState } from './note-state.js';
-import { MIN_SUBSIDY_AGE_MS, SUBSIDY_PERIOD_MS, TIERS, subsidyPeriod } from './policy.js';
+import { MIN_SUBSIDY_AGE_SLOTS, SUBSIDY_PERIOD_SLOTS, TIERS, subsidyPeriod } from './policy.js';
 import { authTag, periodNullifier } from './primitives.js';
 
 /**
@@ -77,7 +77,7 @@ export function checkUnsubsidised(pub: RequestPublic, priv: RequestPrivate) {
 
 /**
  * The subsidised request (ADR 0001): besides the shared checks, the note is at least 7 days old at
- * `requestTime`, `period` is the whole weeks from `vaultCreation` to `requestTime`, `periodNullifier`
+ * `requestTime` (both slots), `period` is the whole weeks of slots from `vaultCreation` to `requestTime`, `periodNullifier`
  * is derived from the note's secret, index and that period, and `b` is the smallest tier.
  *
  * `vaultCreation` is a private input, not a public one: the public layout is fixed, and the circuit
@@ -92,17 +92,17 @@ export function checkSubsidised(pub: RequestPublic, priv: RequestPrivate, vaultC
   pub.subsidised.assertTrue();
   pub.tier.assertEquals(Field(TIERS[0]));
 
-  // Old enough: requestTime - depositTime >= 7 days. checkRequest bounds requestTime and depositTime.
-  pub.requestTime.sub(priv.depositTime).sub(Field(MIN_SUBSIDY_AGE_MS)).toBits(U64_BITS);
+  // Old enough: requestTime - depositTime >= 6,720 slots (7 days). checkRequest bounds requestTime and depositTime.
+  pub.requestTime.sub(priv.depositTime).sub(Field(MIN_SUBSIDY_AGE_SLOTS)).toBits(U64_BITS);
 
   // The period: period * week <= requestTime - vaultCreation < (period + 1) * week. Each side is
   // bounded to 64 bits, so a request before the creation time, or another period, wraps and fails.
   vaultCreation.toBits(U64_BITS);
   pub.period.toBits(U64_BITS);
   const elapsed = pub.requestTime.sub(vaultCreation);
-  const weekStart = pub.period.mul(Field(SUBSIDY_PERIOD_MS));
+  const weekStart = pub.period.mul(Field(SUBSIDY_PERIOD_SLOTS));
   elapsed.sub(weekStart).toBits(U64_BITS);
-  weekStart.add(Field(SUBSIDY_PERIOD_MS - 1n)).sub(elapsed).toBits(U64_BITS);
+  weekStart.add(Field(SUBSIDY_PERIOD_SLOTS - 1n)).sub(elapsed).toBits(U64_BITS);
 
   periodNullifier(priv.secret, priv.index, pub.period).assertEquals(pub.periodNullifier);
   checkRequest(pub, priv);

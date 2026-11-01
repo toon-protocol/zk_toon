@@ -3,9 +3,9 @@
 // a finalize caller and a challenger read pending escapes from it, and it follows their raises and defeats.
 import { Field, UInt64 } from 'o1js';
 import { NoteTree, NoteWitness } from './note-tree.js';
-import { CHALLENGE_WINDOW_MS } from './policy.js';
+import { CHALLENGE_WINDOW_SLOTS } from './policy.js';
 import {
-  ActionKind, NullifierSet, PendingEscape, PendingEscapes, REDUCE_BATCH_SIZE, SLOT_MS, VaultAction,
+  ActionKind, NullifierSet, PendingEscape, PendingEscapes, REDUCE_BATCH_SIZE, VaultAction,
 } from './vault.js';
 
 export class VaultMirror {
@@ -36,7 +36,7 @@ export class VaultMirror {
   }
 
   /**
-   * The inputs of the next reduce, which folds the oldest `batchSize` pending actions at block time
+   * The inputs of the next reduce, which folds the oldest `batchSize` pending actions at slot
    * `now` (the reduce's own argument): the nullifier set and pending escapes as they stand, and for each
    * action the empty note slot it checks against, padded to `batchSize`. Advances the mirror past that
    * batch, as the reduce will.
@@ -44,7 +44,7 @@ export class VaultMirror {
   nextReduce(now: bigint, batchSize = REDUCE_BATCH_SIZE) {
     const nullifiers = this.nullifiers.clone();
     const escapes = this.escapes.clone();
-    const deadline = UInt64.from(now + SLOT_MS + CHALLENGE_WINDOW_MS);
+    const deadline = UInt64.from(now + 1n + CHALLENGE_WINDOW_SLOTS);
     const spent = (n: Field) => this.nullifiers.isIncluded(n).toBoolean();
     const witnesses: NoteWitness[] = this.pending.splice(0, batchSize).map((a) => {
       const w = this.tree.witness(this.tree.nextIndex);

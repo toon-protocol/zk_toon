@@ -4,14 +4,13 @@ import { Field, Mina, PrivateKey, Provable, Signature, verify } from 'o1js';
 import * as policy from './policy.js';
 import { signClearance } from './clearance.js';
 import { commitSecret } from './primitives.js';
-import { NullifierSet, REDUCE_BATCH_SIZE, VaultAction, batchReducer } from './vault.js';
+import { CLOSE_WINDOW_SLOTS, NullifierSet, REDUCE_BATCH_SIZE, VaultAction, batchReducer } from './vault.js';
 import { balanceOf, now, vaultHarness } from './vault-harness.js';
 import { VaultMirror } from './vault-mirror.js';
 import { WithdrawalKind, WithdrawalProgram } from './withdrawal.js';
 import { buildWithdrawal } from './withdrawal-sample.js';
 
 const [SMALL, MEDIUM] = policy.DEPOSIT_SIZES;
-const MINUTE = policy.MS_PER_MINUTE;
 const MINA = 1_000_000_000n;
 
 // Proofs off: the contract logic runs, but no circuit is proven. The withdrawal program runs its
@@ -214,19 +213,19 @@ describe('vault mutual close', () => {
 
 // Its own vault, since LocalBlockchain records the actions of a transaction its preconditions reject.
 describe('vault mutual close timing', () => {
-  it('refuses a block time outside [requestTime, requestTime + 10 min]', async () => {
+  it('refuses a slot outside [requestTime, requestTime + 7 slots]', async () => {
     // Far enough past genesis that the window's lower edge is a real slot.
     Local.incrementGlobalSlot(100);
     const h = await freshVault();
     const note = await h.deposit(SMALL);
     await h.reduce();
     const t = now();
-    for (const requestTime of [t + 1n, t - 10n * MINUTE - 1n]) {
+    for (const requestTime of [t + 1n, t - CLOSE_WINDOW_SLOTS - 1n]) {
       const proof = await h.withdrawalProof(note, { requestTime });
-      await expect(h.send(await h.closeTx(proof, h.clearance(proof.publicInput)))).rejects.toThrow(/Protocol_state_precondition_unsatisfied/);
+      await expect(h.send(await h.closeTx(proof, h.clearance(proof.publicInput)))).rejects.toThrow(/Valid_while_precondition_unsatisfied/);
     }
     // At the window's edges, accepted.
-    for (const requestTime of [t, t - 10n * MINUTE]) {
+    for (const requestTime of [t, t - CLOSE_WINDOW_SLOTS]) {
       const proof = await h.withdrawalProof(note, { requestTime });
       await h.send(await h.closeTx(proof, h.clearance(proof.publicInput)));
     }

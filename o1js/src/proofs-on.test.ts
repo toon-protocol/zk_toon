@@ -16,8 +16,8 @@ function report(tests: { title: string; status: string }[]) {
 const allPassed = () => NAMES.map((title) => ({ title, status: 'passed' }));
 
 describe('the proofs-on set', () => {
-  it('names the request proof, close, escape, defeat and subsidised proof, the vault compile and the land key', () => {
-    expect(Object.keys(PROOFS_ON).sort()).toEqual(['close', 'defeat', 'escape', 'landVk', 'request', 'subsidised', 'vault']);
+  it('names the request proof, close, escape, defeat and subsidised proof, the vault compile, its network independence and the land key', () => {
+    expect(Object.keys(PROOFS_ON).sort()).toEqual(['close', 'constants', 'defeat', 'escape', 'landVk', 'request', 'subsidised', 'vault']);
     expect(new Set(NAMES).size).toBe(NAMES.length);
   });
 

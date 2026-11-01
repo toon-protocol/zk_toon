@@ -5,7 +5,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Mina } from 'o1js';
 import * as policy from './policy.js';
-import { CLOSE_WINDOW_MS, SWEEP_BATCH_SIZE, Vault, batchReducer } from './vault.js';
+import { CLOSE_WINDOW_SLOTS, SWEEP_BATCH_SIZE, Vault, batchReducer } from './vault.js';
 import { balanceOf, now, vaultHarness, type Note } from './vault-harness.js';
 import { RequestProgram } from './request.js';
 import { WithdrawalKind, WithdrawalProgram } from './withdrawal.js';
@@ -13,7 +13,7 @@ import { WithdrawalKind, WithdrawalProgram } from './withdrawal.js';
 const [SMALL, MEDIUM] = policy.DEPOSIT_SIZES;
 const [, , TOP_TIER] = policy.TIERS;
 const MINA = 1_000_000_000n;
-const LIFETIME = policy.NOTE_LIFETIME_MS;
+const LIFETIME = policy.NOTE_LIFETIME_SLOTS;
 const { escape: ESCAPE } = WithdrawalKind;
 
 // Proofs off: the contract logic runs, but no circuit is proven.
@@ -29,9 +29,9 @@ beforeAll(async () => {
   await batchReducer.compile();
 });
 
-/** The block time from which a sweep may count `note`: its expiry, plus the window a close may still land in. */
-const sweepableAt = (note: Note) => note.depositTime + LIFETIME + CLOSE_WINDOW_MS;
-/** Moves the clock to `t`, or not at all if it is already there. */
+/** The slot from which a sweep may count `note`: its expiry, plus the window a close may still land in. */
+const sweepableAt = (note: Note) => note.depositTime + LIFETIME + CLOSE_WINDOW_SLOTS;
+/** Moves the chain to slot `t`, or not at all if it is already there. */
 const advanceTo = (t: bigint) => {
   if (t > now()) advance(t - now());
 };
@@ -95,11 +95,11 @@ describe('an expiry sweep', () => {
     await expect(h.sweepTx(1, { from: 1n })).rejects.toThrow(/not the note at the sweep cursor/);
   });
 
-  it('waits for a note with a later deposit time than the note after it', async () => {
+  it('waits for a note with a later deposit slot than the note after it', async () => {
     const h = await freshVault();
-    // Deposit times may run up to a slot out of index order: a deposit names a time up to a slot old.
+    // Deposit slots may run up to a slot out of index order: a deposit names a slot up to a slot old.
     const first = await h.deposit(SMALL);
-    const second = await h.deposit(SMALL, { depositTime: first.depositTime - policy.MS_PER_MINUTE });
+    const second = await h.deposit(SMALL, { depositTime: first.depositTime - 1n });
     await h.reduce();
     advanceTo(sweepableAt(second));
     expect(now()).toBeLessThan(sweepableAt(first));
@@ -117,7 +117,7 @@ describe('a sweep never takes money that can still be claimed', () => {
     const h = await freshVault();
     const old = await h.deposit(SMALL);
     await h.reduce();
-    advance(30n * policy.MS_PER_DAY);
+    advance(30n * policy.SLOTS_PER_DAY);
     const live = await h.deposit(MEDIUM);
     await h.reduce();
     advanceTo(sweepableAt(old));
@@ -169,7 +169,7 @@ describe('a sweep never takes money that can still be claimed', () => {
     const h = await freshVault();
     const abandoned = await h.deposit(SMALL);
     await h.reduce();
-    advance(30n * policy.MS_PER_DAY);
+    advance(30n * policy.SLOTS_PER_DAY);
     const closed = await h.deposit(SMALL);
     await h.reduce();
     await h.close(await h.withdrawalProof(closed, { destination: bob }));
@@ -196,7 +196,7 @@ describe('a pending escape at expiry', () => {
   async function escapedNearExpiry(h: Harness) {
     const note = await h.deposit(SMALL);
     await h.reduce();
-    advanceTo(note.depositTime + LIFETIME - 30n * policy.MS_PER_MINUTE);
+    advanceTo(note.depositTime + LIFETIME - 20n);
     const proof = await h.withdrawalProof(note, {
       kind: ESCAPE, signed: true, balance: 3n * MINA, conceded: MINA / 10n, destination: alice,
       validUntil: note.depositTime + LIFETIME - 1n,

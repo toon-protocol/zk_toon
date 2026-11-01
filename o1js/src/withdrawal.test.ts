@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { Bool, Field, PrivateKey, Provable, Signature, verify } from 'o1js';
-import { DEPOSIT_SIZES, expiryOf } from './policy.js';
+import { DEPOSIT_SIZES, SLOT_SECONDS, expiryOf } from './policy.js';
 import { nextAnchor, nullifier } from './primitives.js';
 import { RequestProgram } from './request.js';
 import { WithdrawalKind, WithdrawalPrivate, WithdrawalProgram, WithdrawalPublic, checkWithdrawal } from './withdrawal.js';
@@ -73,7 +73,7 @@ describe('withdrawal proof constraints', () => {
   });
 
   it('refuse an expired note', async () => {
-    const expiry = expiryOf(1_700_000_000_000n);
+    const expiry = expiryOf(900_000n);
     const last = withdrawalSample({ requestTime: expiry - 1n });
     expect(await holds(mutualClose, last.pub, last.priv)).toBe(true);
     const s = withdrawalSample({ requestTime: expiry });
@@ -99,7 +99,7 @@ describe('withdrawal proof constraints', () => {
 });
 
 describe('escape proof constraints', () => {
-  const hour = 3_600_000n;
+  const hour = 3_600n / SLOT_SECONDS;
   const esc = (over: Parameters<typeof withdrawalSample>[0] = {}) =>
     withdrawalSample({ kind: escape, signed: true, balance: 4_000_000_000n, conceded: 10_000_000n, ...over });
 
@@ -130,7 +130,7 @@ describe('escape proof constraints', () => {
   });
 
   it('require requestTime ≤ validUntil < expiry', async () => {
-    const expiry = expiryOf(1_700_000_000_000n);
+    const expiry = expiryOf(900_000n);
     const requestTime = expiry - 2n * hour;
     for (const [validUntil, ok] of [
       [requestTime, true], [expiry - 1n, true], [requestTime - 1n, false], [expiry, false],

@@ -3,7 +3,7 @@ import { AccountUpdate, Field, Mina, PrivateKey, UInt64, Unconstrained } from 'o
 import * as policy from './policy.js';
 import { commitSecret, leaf } from './primitives.js';
 import { DepositLike, NoteTree, emptyNoteRoot, reduceWitnesses } from './note-tree.js';
-import { NullifierSet, PendingEscapes, REDUCE_BATCH_SIZE, ROOT_RING_LENGTH, SLOT_MS, VAULT_URI, Vault, batchReducer } from './vault.js';
+import { NullifierSet, PendingEscapes, REDUCE_BATCH_SIZE, ROOT_RING_LENGTH, VAULT_URI, Vault, batchReducer } from './vault.js';
 
 const [SMALL, MEDIUM] = policy.DEPOSIT_SIZES;
 
@@ -21,11 +21,7 @@ describe('vault deposit path', () => {
   let secret = 1n;
   let lastDeposit: DepositLike;
 
-  // The network's timestamp is that of the current slot's start.
-  const now = () => {
-    const { genesisTimestamp, slotTime } = Mina.getNetworkConstants();
-    return genesisTimestamp.toBigInt() + Mina.getNetworkState().globalSlotSinceGenesis.toBigint() * slotTime.toBigInt();
-  };
+  const now = () => Mina.getNetworkState().globalSlotSinceGenesis.toBigint();
   const balance = () => Mina.getBalance(vault.address).toBigInt();
   const send = async (tx: Awaited<ReturnType<typeof Mina.transaction>>) => {
     await tx.prove();
@@ -75,8 +71,8 @@ describe('vault deposit path', () => {
     expect(vault.creationTime.get().toBigInt()).toBe(deployTime);
     const sizes = vault.depositSizes.get();
     expect([sizes.a, sizes.b, sizes.c].map((s) => s.toBigInt())).toEqual([...policy.DEPOSIT_SIZES]);
-    expect(vault.noteLifetime.get().toBigInt()).toBe(policy.NOTE_LIFETIME_MS);
-    expect(vault.challengeWindow.get().toBigInt()).toBe(policy.CHALLENGE_WINDOW_MS);
+    expect(vault.noteLifetime.get().toBigInt()).toBe(policy.NOTE_LIFETIME_SLOTS);
+    expect(vault.challengeWindow.get().toBigInt()).toBe(policy.CHALLENGE_WINDOW_SLOTS);
     expect(vault.noteRoot.get().toBigInt()).toBe(emptyNoteRoot().toBigInt());
   });
 
@@ -134,12 +130,13 @@ describe('vault deposit path', () => {
 
   // Last: LocalBlockchain records the actions of a rejected transaction, so these leave actions behind
   // that a real chain would not hold; the earlier tests need a clean action list.
-  it('refuses a deposit time that does not match the block timestamp within one slot', async () => {
+  it('refuses a deposit slot that does not match the current slot within one slot', async () => {
+    Local.incrementGlobalSlot(10);
     const before = balance();
-    await expect(deposit(SMALL, now() + 2n * SLOT_MS)).rejects.toThrow();
-    await expect(deposit(SMALL, now() - 2n * SLOT_MS)).rejects.toThrow();
+    await expect(deposit(SMALL, now() + 1n)).rejects.toThrow();
+    await expect(deposit(SMALL, now() - 2n)).rejects.toThrow();
     expect(balance()).toBe(before);
-    await deposit(SMALL, now() - SLOT_MS / 2n);
+    await deposit(SMALL, now() - 1n);
     expect(balance()).toBe(before + SMALL);
   });
 });

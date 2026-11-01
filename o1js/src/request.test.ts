@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Bool, Field, Group, PrivateKey, Provable, Scalar, Signature, VerificationKey, verify } from 'o1js';
 import { commit, rerandomise } from './balance.js';
-import { TIERS, expiryOf } from './policy.js';
+import { SLOTS_PER_DAY, TIERS, expiryOf } from './policy.js';
 import { authTag, commitSecret, genesisAnchor, nextAnchor, nullifier, periodNullifier } from './primitives.js';
 import {
   RequestPrivate, RequestProgram, RequestPublic, checkSubsidised, checkUnsubsidised, subsidyPeriodHolds,
@@ -169,7 +169,7 @@ describe('request proof constraints', () => {
 });
 
 describe('subsidised request proof constraints', () => {
-  const DAY = 86_400_000n;
+  const DAY = SLOTS_PER_DAY;
   const { depositTime } = defaultSample();
   // The vault was created 10 days before the deposit; the default request is 8 days after it.
   const vaultCreation = depositTime - 10n * DAY;
@@ -249,7 +249,7 @@ describe('subsidised request proof constraints', () => {
 });
 
 describe("the zk edge's subsidy period check", () => {
-  const DAY = 86_400_000n;
+  const DAY = SLOTS_PER_DAY;
   const { depositTime } = defaultSample();
   const vaultCreation = depositTime - 10n * DAY;
   const claim = (requestTime: bigint, provenWith: bigint) =>
@@ -314,15 +314,15 @@ describe('request proof', () => {
   }, 900_000);
 
   it(PROOFS_ON.subsidised, async () => {
-    const sub = signedSample({ tier: TIERS[0], subsidy: { vaultCreation: defaultSample().depositTime - 10n * 86_400_000n } });
+    const sub = signedSample({ tier: TIERS[0], subsidy: { vaultCreation: defaultSample().depositTime - 10n * SLOTS_PER_DAY } });
     const { proof } = await RequestProgram.subsidised(sub.pub, sub.priv, sub.vaultCreation);
     expect(await verify(proof, verificationKey)).toBe(true);
     expect(proof.publicInput.subsidised.toBoolean()).toBe(true);
     expect(proof.publicInput.periodNullifier.toString()).toBe(sub.pub.periodNullifier.toString());
 
     // A proof made with a forged creation time verifies too: only the zk edge's period check refuses it.
-    const real = defaultSample().depositTime - 10n * 86_400_000n;
-    const forged = signedSample({ tier: TIERS[0], subsidy: { vaultCreation: real - 7n * 86_400_000n } });
+    const real = defaultSample().depositTime - 10n * SLOTS_PER_DAY;
+    const forged = signedSample({ tier: TIERS[0], subsidy: { vaultCreation: real - 7n * SLOTS_PER_DAY } });
     const forgedProof = (await RequestProgram.subsidised(forged.pub, forged.priv, forged.vaultCreation)).proof;
     expect(await verify(forgedProof, verificationKey)).toBe(true);
     expect(subsidyPeriodHolds(proof.publicInput, real)).toBe(true);

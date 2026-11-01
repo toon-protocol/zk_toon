@@ -39,7 +39,7 @@ async function recordedEscape(
   const note = await h.deposit(SMALL);
   await h.reduce();
   // Old enough for a subsidised allowance before it escapes, so the challenge window is still open.
-  if (o.oldEnoughForSubsidy) advance(policy.MIN_SUBSIDY_AGE_MS);
+  if (o.oldEnoughForSubsidy) advance(policy.MIN_SUBSIDY_AGE_SLOTS);
   const step = o.step ?? 1;
   const balance = step === 0 ? SMALL : o.balance ?? 3n * MINA;
   const proof = await h.withdrawalProof(note, {
@@ -289,13 +289,13 @@ describe('challenge timing', () => {
     const pending = h.mirror.pendingEscape(proof.publicInput.nullifier)!;
     const raiseEvidence = await h.requestProof(note, { balance, tier: TOP_TIER });
     const defeatEvidence = await h.requestProof(note, { step: 2, tier: TOP_TIER });
-    advance(pending.deadline.toBigInt() - now() - 2n * 90_000n);
+    advance(pending.deadline.toBigInt() - now() - 2n);
     expect(now()).toBeLessThan(pending.deadline.toBigInt());
     await h.send(await h.raiseTx(pending, raiseEvidence, MINA));
     await h.send(await h.defeatTx(pending, defeatEvidence));
     advance(pending.deadline.toBigInt() - now());
-    await expect(h.send(await h.raiseTx(pending, raiseEvidence, MINA))).rejects.toThrow(/Protocol_state_precondition_unsatisfied/);
-    await expect(h.send(await h.defeatTx(pending, defeatEvidence))).rejects.toThrow(/Protocol_state_precondition_unsatisfied/);
+    await expect(h.send(await h.raiseTx(pending, raiseEvidence, MINA))).rejects.toThrow(/Valid_while_precondition_unsatisfied/);
+    await expect(h.send(await h.defeatTx(pending, defeatEvidence))).rejects.toThrow(/Valid_while_precondition_unsatisfied/);
   });
 });
 

@@ -10,7 +10,7 @@
 //! `vault` and `destination` are Mina public keys, each two field elements `(x, isOdd)`. The proof's
 //! kinds: 1 mutual close, 2 escape, 3 ownership; 0 is invalid. A mutual close and an ownership proof
 //! have zero `nextNullifier`, `validUntil` and `conceded`. An escape publishes the next state's
-//! nullifier ([`WithdrawalPublic::escape_next_nullifier`]), `validUntil`, the last block time it may
+//! nullifier ([`WithdrawalPublic::escape_next_nullifier`]), `validUntil`, the last slot it may
 //! land at (`requestTime ≤ validUntil < expiry`), and `conceded`, what it gives up of its balance
 //! (`conceded ≤ amount`). `conceded` was appended by the escape (#9), so every other input keeps its
 //! position. Note expiry is not a public input.

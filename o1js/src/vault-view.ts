@@ -101,7 +101,7 @@ export class VaultKeeper {
 
     batchReducer.setContractInstance(vault);
     for (const { batch, proof } of await batchReducer.prepareBatches()) {
-      const now = chainNow();
+      const now = chainSlot();
       const { witnesses, nullifiers, escapes } = kept.mirror.nextReduce(now);
       const tx = await Mina.transaction(from, async () => {
         await vault.reduce(batch, proof, Unconstrained.from(witnesses), nullifiers, escapes, UInt64.from(now));
@@ -112,8 +112,7 @@ export class VaultKeeper {
   }
 }
 
-/** The network's timestamp: that of the current slot's start. */
-export function chainNow(): bigint {
-  const { genesisTimestamp, slotTime } = Mina.getNetworkConstants();
-  return genesisTimestamp.toBigInt() + Mina.getNetworkState().globalSlotSinceGenesis.toBigint() * slotTime.toBigInt();
+/** The chain's current slot. */
+export function chainSlot(): bigint {
+  return Mina.getNetworkState().globalSlotSinceGenesis.toBigint();
 }
