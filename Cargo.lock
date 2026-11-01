@@ -4012,6 +4012,7 @@ dependencies = [
  "rmp-serde",
  "rsexp",
  "serde_json",
+ "zk-note",
 ]
 
 [[package]]
