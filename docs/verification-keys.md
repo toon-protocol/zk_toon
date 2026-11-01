@@ -70,19 +70,41 @@ gate. A proofs-on vault transaction is left to the transaction builder against a
 ## The request-proof fixtures
 
 The connector's Rust verifier (toon-protocol/connector#1514) is tested against real request proofs,
-which the connector cannot make itself (its ADR 0080 forbids o1js). From `o1js/`, after `npm ci`:
+which the connector cannot make itself (its ADR 0080 forbids o1js), and against what a real vault's
+daemon and archive answer. One command makes both, from one commit, about 15 minutes. It needs Docker for
+the proofs-on lightnet (`o1js/lightnet/README.md`). From `o1js/`:
 
 ```
-npm run request-fixtures [-- out.json]   # prove and write test-vectors/request-proofs/request-proofs.json (~2 min)
+npm ci
+./lightnet/lightnet.sh up
+npm run request-fixtures [-- out-dir]   # writes recorded-vault.json and request-proofs.json to test-vectors/request-proofs/
 ```
 
-The file is committed, made from one commit: an unsubsidised and a subsidised `RequestProgram` proof
-(each o1js's `JsonProof`, its `publicInput` being `RequestPublic`'s fields), the request
-`verificationKey` (`data` and `hash`) they verify under, the `vaultCreation` slot the subsidised proof's
-period counts from, and a real `zk-toon-withdrawal` proof with its own key, which the request key must
-refuse. `buildRequestFixtures` (`o1js/src/request-fixtures.ts`) takes a note tree and index, the state
-key, the request slot and the vault creation slot, and defaults them to sample values; all times are
-slots. Proofs are randomised, so the gate never regenerates them: `npm test` fails if the committed
-key differs from the one `RequestProgram` compiles to, and `zk-prover/tests/request_proofs.rs` verifies
-the proofs against the committed key with `zk_prover::verify`. Rerun the command after any change to the
-request circuit.
+It deploys a vault, deposits two notes, reduces, escapes one note, reduces again and records the chain
+(`o1js/src/recorded-vault.ts`). Then it proves the requests for the unspent note over that vault's tree.
+
+`recorded-vault.json` holds GraphQL answers as they came:
+
+- `vaultState`: the daemon's `zkappState`, `actionState` and tip slot;
+- `actions`: the archive's actions, in the shape `escapeEvents` uses for events;
+- `escapeEvents`: the archive's events;
+- `named`: `consumedNullifier`, which an escape in the recording consumed, and `absentRoot` and
+  `absentNullifier`, which appear nowhere in it.
+
+`request-proofs.json` holds an unsubsidised and a subsidised `RequestProgram` proof (each o1js's
+`JsonProof`, its `publicInput` being `RequestPublic`'s fields), the request `verificationKey` (`data` and
+`hash`) they verify under, the `vaultCreation` slot the subsidised proof's period counts from, and a real
+`zk-toon-withdrawal` proof with its own key, which the request key must refuse. All times are slots.
+
+**The subsidised proof's `requestTime` is a slot the recorded chain has not reached.** A subsidised note
+must be 7 days old, which is 6,720 slots, or 37 hours of a 20-second lightnet, and a deposit can't name a
+past slot. So that proof is made at `depositTime + 6720`, while the unsubsidised proof is made at the
+recording's tip slot. A test of the zk edge's request-time window against the recorded tip can use the
+unsubsidised proof only.
+
+Proofs are randomised, so the gate never regenerates them. `npm test` fails if the committed key differs
+from the one `RequestProgram` compiles to. `zk-prover/tests/request_proofs.rs` verifies the proofs with
+`zk_prover::verify`, and checks without a lightnet that the two files agree: the root is in the recorded
+ring, `vault` is the recorded state key, `vaultCreation` is the recorded `creationTime`, both proofs pass
+`check_subsidy_period`, and their nullifiers aren't consumed. Rerun the command after any change to the
+request circuit or the vault.
