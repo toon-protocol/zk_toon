@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { AccountUpdate, Mina, PrivateKey } from 'o1js';
+import { AccountUpdate, Mina, PrivateKey, UInt64 } from 'o1js';
 import { VAULT_URI, Vault } from './vault.js';
+import { now } from './vault-harness.js';
 
 // Proofs off: the contract logic runs, but no circuit is proven.
 const Local = await Mina.LocalBlockchain({ proofsEnabled: false });
@@ -8,7 +9,6 @@ Mina.setActiveInstance(Local);
 
 describe('a vault deploy that names a slot', () => {
   const [deployer] = Local.testAccounts;
-  const now = () => Mina.getNetworkState().globalSlotSinceGenesis.toBigint();
 
   /** Deploys a fresh vault, aimed at `slot` if given, and returns it. */
   async function deploy(slot?: bigint) {
@@ -16,7 +16,7 @@ describe('a vault deploy that names a slot', () => {
     const vault = new Vault(key.toPublicKey());
     const tx = await Mina.transaction(deployer, async () => {
       AccountUpdate.fundNewAccount(deployer);
-      await vault.deploy({ zkappUri: VAULT_URI, slot });
+      await vault.deploy({ zkappUri: VAULT_URI, slot: slot === undefined ? undefined : UInt64.from(slot) });
     });
     await tx.prove();
     await tx.sign([deployer.key, key]).send();

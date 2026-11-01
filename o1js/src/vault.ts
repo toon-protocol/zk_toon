@@ -313,7 +313,7 @@ export class Vault extends SmartContract {
     zkappUri,
     slot,
     ...args
-  }: NonNullable<Parameters<SmartContract['deploy']>[0]> & { zkappUri: string; slot?: bigint }) {
+  }: NonNullable<Parameters<SmartContract['deploy']>[0]> & { zkappUri: string; slot?: UInt64 }) {
     // `init()` takes no arguments, so the slot waits here for the length of this deploy and no longer.
     this.aimedSlot = slot;
     try {
@@ -343,16 +343,19 @@ export class Vault extends SmartContract {
   }
 
   /** The slot the running `deploy` aims at, for `init` to read; not state, so not part of the key. */
-  private aimedSlot?: bigint;
+  private aimedSlot?: UInt64;
 
-  /** Pins the creation slot to the aimed slot, else the network's (within a slot of the including block's), and records the policy. */
+  /**
+   * Pins the creation slot to the aimed slot, else the network's (within a slot of the including block's), and
+   * records the policy.
+   */
   init() {
     super.init();
-    const now = Provable.witness(UInt64, () =>
-      UInt64.from(this.aimedSlot ?? Mina.getNetworkState().globalSlotSinceGenesis.toBigint()),
+    const created = Provable.witness(UInt64, () =>
+      this.aimedSlot ?? UInt64.from(Mina.getNetworkState().globalSlotSinceGenesis.toBigint()),
     );
-    requireSlotBetween(this, now, now.add(1));
-    this.creationTime.set(now);
+    requireSlotBetween(this, created, created.add(1));
+    this.creationTime.set(created);
     this.depositSizes.set(DepositSizes.fromPolicy());
     this.noteLifetime.set(UInt64.from(policy.NOTE_LIFETIME_SLOTS));
     this.challengeWindow.set(UInt64.from(policy.CHALLENGE_WINDOW_SLOTS));
