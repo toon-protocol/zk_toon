@@ -28,7 +28,7 @@ conceded, size, destination.x, destination.isOdd, deadline`).
 `escapes()` makes two reads:
 
 1. **Daemon** (`VaultState`): the vault's app state, whose field 24 is `pendingEscapesRoot`, and the
-   tip's block time, which is "now".
+   tip's `slotSinceGenesis`, which is "now".
 2. **Archive** (`EscapeEvents`): the vault's events, oldest block first, leaving out orphaned blocks
    and failed transactions.
 
@@ -39,13 +39,6 @@ transaction's run of events back into emission order; if that doesn't rebuild th
 archive's order as listed. A lagging, reordered or lying archive is `Unavailable`, never a
 missing or invented escape; the challenger retries on its next tick. Open escapes are those pending
 with `deadline > now`.
-
-> **Not yet in slots (follow-up to #59).** A pending escape's `deadline` is now a slot (ADR 0007), but
-> this adapter still reads "now" as the tip's `utcDate` in milliseconds and `Millis` is the challenger's
-> unit, so on a real chain it would see every deadline as long past. It must read the tip's
-> `consensusState.slotSinceGenesis` and take its lead time in slots before it runs against a deployed
-> vault. The local chain in `tx-builder` answers `utcDate` with the slot, so the tests agree with
-> themselves.
 
 ## Submitting
 

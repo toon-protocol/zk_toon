@@ -5,13 +5,13 @@ mod common;
 
 use common::*;
 use zk_toon_challenger::contract::{self, Harness};
-use zk_toon_challenger::{Escape, Millis};
+use zk_toon_challenger::{Escape, Slot};
 
 struct OverScriptedMina;
 
 impl Harness for OverScriptedMina {
     type Port = ScriptedChain;
-    fn port(now: Millis, escapes: Vec<Escape>) -> ScriptedChain {
+    fn port(now: Slot, escapes: Vec<Escape>) -> ScriptedChain {
         adapter(&Scripted::new(now, &escapes))
     }
 }

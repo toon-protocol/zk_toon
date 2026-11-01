@@ -15,7 +15,7 @@ pub struct FakeChain {
 
 #[derive(Default)]
 struct ChainState {
-    now: Millis,
+    now: Slot,
     escapes: Vec<Escape>,
     unavailable: bool,
     /// Every accepted submission, in order.
@@ -23,7 +23,7 @@ struct ChainState {
 }
 
 impl FakeChain {
-    pub fn new(now: Millis, escapes: Vec<Escape>) -> Self {
+    pub fn new(now: Slot, escapes: Vec<Escape>) -> Self {
         let c = Self::default();
         {
             let mut s = c.inner.borrow_mut();
@@ -32,7 +32,7 @@ impl FakeChain {
         }
         c
     }
-    pub fn set_now(&self, now: Millis) {
+    pub fn set_now(&self, now: Slot) {
         self.inner.borrow_mut().now = now;
     }
     pub fn add_escape(&self, e: Escape) {

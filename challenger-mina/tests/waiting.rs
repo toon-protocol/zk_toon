@@ -81,3 +81,18 @@ fn a_dropped_connection_while_reading_escapes_is_unavailable_not_empty() {
     let port = zk_toon_challenger_mina::MinaChain::new(settings, Down, Scripted::default(), AnyProof).unwrap();
     assert!(matches!(port.escapes(), Err(PortError::Unavailable(_))));
 }
+
+#[test]
+fn a_challenge_absent_from_the_chain_is_refused_only_once_the_tips_slot_reaches_the_deadline() {
+    let e = open_escape();
+    let deadline = e.deadline;
+    // The tip is a slot short of the deadline after the first read, and reaches it after the second.
+    let chain = Scripted::new(deadline - 2, &[e.clone()]);
+    chain.0.borrow_mut().lose_sends = true;
+    chain.0.borrow_mut().advance_per_read = 1;
+    let mut port = adapter(&chain);
+
+    assert!(matches!(port.submit_defeat(&e.id), Err(PortError::Refused(_))));
+    assert!(chain.0.borrow().sent >= 2, "sent again while the tip was short of the deadline");
+    assert!(chain.0.borrow().now >= deadline);
+}

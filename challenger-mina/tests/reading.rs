@@ -35,14 +35,14 @@ fn the_recorded_vault_holds_one_open_escape_as_its_note_escaped() {
     assert_eq!(escapes.len(), 1);
     assert_eq!((escapes[0].balance, escapes[0].conceded), (3 * MINA, MINA / 2));
     let recorded = fixture();
-    let now: u64 = recorded["vaultState"]["data"]["bestChain"][0]["protocolState"]["blockchainState"]["utcDate"]
+    let now: u64 = recorded["vaultState"]["data"]["bestChain"][0]["protocolState"]["consensusState"]["slotSinceGenesis"]
         .as_str()
         .unwrap()
         .parse()
         .unwrap();
-    // A full two-day challenge window, from a reduce at most a slot before `now`.
-    let window = 2 * 24 * 3600 * 1000;
-    assert!(escapes[0].deadline > now + window - 90_000 && escapes[0].deadline <= now + window + 90_000);
+    // A full two-day challenge window of 90 s slots, from a reduce at most a slot before `now`.
+    let window = 2 * 24 * 3600 / 90;
+    assert!(escapes[0].deadline > now + window - 1 && escapes[0].deadline <= now + window + 1);
 }
 
 /// The scripted chain, with the archive missing the last event.
@@ -72,4 +72,43 @@ fn an_archive_that_does_not_rebuild_the_vaults_root_is_unavailable_not_trusted()
     let settings = Settings { vault: vault_key(), fee_payer: fee_payer(), poll: Duration::ZERO };
     let port = MinaChain::new(settings, Lagging(chain.clone()), chain, AnyProof).unwrap();
     assert!(matches!(port.escapes(), Err(PortError::Unavailable(_))));
+}
+
+fn escape_with_deadline(deadline: u64) -> zk_toon_challenger::Escape {
+    let mut id = [1u8; 32];
+    id[31] = 0;
+    let mut next = [2u8; 32];
+    next[31] = 0;
+    zk_toon_challenger::Escape { id, next_nullifier: next, conceded: 0, balance: 50, deadline }
+}
+
+/// The chain's tip, as the daemon answers it: a realistic block time in milliseconds, which is
+/// nowhere near a slot, and the slot.
+fn open_at(now: u64, deadline: u64) -> usize {
+    let e = escape_with_deadline(deadline);
+    let chain = Scripted::new(now, &[e]);
+    let settings = Settings { vault: vault_key(), fee_payer: fee_payer(), poll: Duration::ZERO };
+    let port = MinaChain::new(settings, TipWithClock(chain.clone()), chain, AnyProof).unwrap();
+    port.escapes().unwrap().len()
+}
+
+/// The scripted chain, with a realistic millisecond `utcDate` beside the slot.
+struct TipWithClock(Scripted);
+
+impl Graphql for TipWithClock {
+    fn post(&self, endpoint: Endpoint, request: &Value) -> Result<Value, String> {
+        let mut response = self.0.post(endpoint, request)?;
+        if request["operationName"] == "VaultState" {
+            response["data"]["bestChain"][0]["protocolState"]["blockchainState"] = serde_json::json!({ "utcDate": "1793243264164" });
+        }
+        Ok(response)
+    }
+}
+
+#[test]
+fn an_escape_is_open_while_the_tips_slot_is_below_its_deadline_whatever_the_block_time() {
+    let deadline = 930_000;
+    assert_eq!(open_at(deadline - 1, deadline), 1, "open one slot before the deadline");
+    assert_eq!(open_at(deadline, deadline), 0, "not open at the deadline");
+    assert_eq!(open_at(deadline + 1, deadline), 0, "not open after it");
 }

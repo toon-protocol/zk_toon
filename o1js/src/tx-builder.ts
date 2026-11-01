@@ -446,7 +446,7 @@ export async function createBuilder(options: BuilderOptions) {
     async 'local.graphql'(p) {
       const request = obj(p.request, 'request');
       const variables = obj(request.variables ?? {}, 'request.variables');
-      const time = { protocolState: { blockchainState: { utcDate: chainSlot().toString() } } };
+      const time = { protocolState: { consensusState: { slotSinceGenesis: chainSlot().toString() } } };
       switch (`${p.endpoint}:${request.operationName}`) {
         case 'mina:VaultState': {
           const vault = publicKey(variables.vault, 'vault');

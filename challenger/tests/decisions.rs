@@ -5,7 +5,7 @@ use zk_toon_challenger::*;
 struct FakeHarness;
 impl contract::Harness for FakeHarness {
     type Port = FakeChain;
-    fn port(now: Millis, escapes: Vec<Escape>) -> FakeChain {
+    fn port(now: Slot, escapes: Vec<Escape>) -> FakeChain {
         FakeChain::new(now, escapes)
     }
 }
@@ -17,8 +17,8 @@ fn fake_passes_the_vault_chain_port_contract() {
 
 const ID: Nullifier = [1; 32];
 const NEXT: Nullifier = [2; 32];
-const DEADLINE: Millis = 100_000;
-const CFG: Config = Config { min_lead: 10_000 };
+const DEADLINE: Slot = 100_000;
+const CFG: Config = Config { min_lead: 5 };
 
 fn escape(conceded: u64, balance: u64) -> Escape {
     Escape { id: ID, next_nullifier: NEXT, conceded, balance, deadline: DEADLINE }
@@ -28,7 +28,7 @@ fn ev(nullifier: Nullifier, tier: u64, charge: impl Into<Option<u64>>, subsidise
     Evidence { nullifier, tier, charge: charge.into(), subsidised, verifies }
 }
 
-fn decide_with(e: &Escape, evidence: FakeEvidence, now: Millis) -> Decision {
+fn decide_with(e: &Escape, evidence: FakeEvidence, now: Slot) -> Decision {
     decide(e, &evidence, now, &CFG).unwrap()
 }
 
@@ -88,17 +88,17 @@ fn unverifying_evidence_is_never_submitted() {
 #[test]
 fn deadline_too_close_is_reported_not_skipped() {
     let evidence = FakeEvidence::default().with(ev(NEXT, 10, 3, false, true));
-    let late = DEADLINE - 5_000;
+    let late = DEADLINE - 4;
     assert_eq!(
         decide_with(&escape(0, 100), evidence.clone(), late),
-        Decision::Alarm(AlarmReason::DeadlineTooClose { remaining: 5_000 })
+        Decision::Alarm(AlarmReason::DeadlineTooClose { remaining: 4 })
     );
     let chain = FakeChain::new(late, vec![escape(0, 100)]);
     let mut c = Challenger::new(chain.clone(), evidence, MemoryJournal::default(), CFG);
     let reports = c.tick(late).unwrap();
     assert!(reports.contains(&Report::Alarm {
         escape: ID,
-        reason: AlarmReason::DeadlineTooClose { remaining: 5_000 }
+        reason: AlarmReason::DeadlineTooClose { remaining: 4 }
     }));
     assert!(chain.submissions().is_empty());
 }
@@ -172,9 +172,9 @@ fn a_submitted_action_is_not_alarmed_on_as_its_deadline_nears() {
     let evidence = FakeEvidence::default().with(ev(ID, 10, 7, false, true));
     let mut c = Challenger::new(chain.clone(), evidence, MemoryJournal::default(), CFG);
     c.tick(0).unwrap();
-    let stale = FakeChain::new(DEADLINE - 5_000, vec![escape(0, 100)]);
+    let stale = FakeChain::new(DEADLINE - 4, vec![escape(0, 100)]);
     c.chain = stale.clone();
-    assert!(c.tick(DEADLINE - 5_000).unwrap().is_empty());
+    assert!(c.tick(DEADLINE - 4).unwrap().is_empty());
     assert!(stale.submissions().is_empty());
 }
 
@@ -212,4 +212,21 @@ fn evidence_without_a_close_record_raises_to_the_tier() {
     assert_eq!(raise(10, 4), Decision::Raise { to: 4 });
     let d = decide_with(&escape(2, 100), FakeEvidence::default().with(ev(ID, 10, None, true, true)), 0);
     assert_eq!(d, Decision::NoOp);
+}
+
+#[test]
+fn the_lead_is_a_count_of_slots() {
+    let evidence = FakeEvidence::default().with(ev(NEXT, 10, 3, false, true));
+    // Five slots remain: as many as the lead asks for, so there is still time to act.
+    assert_eq!(decide_with(&escape(0, 100), evidence.clone(), DEADLINE - 5), Decision::Defeat);
+    // Four slots remain: too close.
+    assert_eq!(
+        decide_with(&escape(0, 100), evidence.clone(), DEADLINE - 4),
+        Decision::Alarm(AlarmReason::DeadlineTooClose { remaining: 4 })
+    );
+    // At the deadline the escape is no longer open: no time remains.
+    assert_eq!(
+        decide_with(&escape(0, 100), evidence, DEADLINE),
+        Decision::Alarm(AlarmReason::DeadlineTooClose { remaining: 0 })
+    );
 }

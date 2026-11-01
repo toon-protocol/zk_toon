@@ -7,7 +7,7 @@ use mina_signer::{CompressedPubKey, Keypair, SecKey};
 use serde_json::Value;
 use zk_note::request::RequestPublic;
 use zk_note::Field;
-use zk_toon_challenger::{Escape, EscapeId, Millis, PortError, VaultChainPort};
+use zk_toon_challenger::{Escape, EscapeId, Slot, PortError, VaultChainPort};
 use zk_toon_tx_builder::{Challenge, Defeat, FailureKind, FeePayer, Raise};
 
 use crate::escapes::{replay, PendingEscape, Update, PENDING_ESCAPES_ROOT_INDEX};
@@ -66,7 +66,7 @@ pub struct MinaChain<G, T, P> {
 
 /// The vault as read: the chain time and the pending escapes, deadlines included.
 struct VaultView {
-    now: Millis,
+    now: Slot,
     pending: Vec<PendingEscape>,
 }
 
@@ -94,7 +94,7 @@ impl<G: Graphql, T: TxSource, P: RequestProofs> MinaChain<G, T, P> {
             .and_then(Value::as_str)
             .and_then(|s| Field::from_str(s).ok())
             .ok_or_else(|| bad("no pending escapes root"))?;
-        let now = tip_time(&state["bestChain"]).ok_or_else(|| bad("no block time"))?;
+        let now = tip_slot(&state["bestChain"]).ok_or_else(|| bad("no slot"))?;
 
         let events = self.query(Endpoint::Archive, &graphql::escape_events(&self.vault))?;
         let orders = escape_updates(&events).map_err(|e| PortError::Unavailable(format!("escape events: {e}")))?;
@@ -122,7 +122,7 @@ impl<G: Graphql, T: TxSource, P: RequestProofs> MinaChain<G, T, P> {
     }
 
     /// Sends `challenge` and waits until its outcome is known.
-    fn submit(&self, challenge: Challenge, deadline: Millis) -> Result<(), PortError> {
+    fn submit(&self, challenge: Challenge, deadline: Slot) -> Result<(), PortError> {
         match self.send(&challenge) {
             Ok(()) => {}
             Err(PortError::Refused(why)) => return Err(PortError::Refused(why)),
@@ -174,7 +174,7 @@ impl<G: Graphql, T: TxSource, P: RequestProofs> MinaChain<G, T, P> {
         if pooled {
             return Ok(Outcome::Pooled);
         }
-        let now = tip_time(&status["bestChain"]).ok_or_else(|| PortError::Unavailable("no block time".into()))?;
+        let now = tip_slot(&status["bestChain"]).ok_or_else(|| PortError::Unavailable("no slot".into()))?;
         Ok(Outcome::Absent { now })
     }
 
@@ -188,12 +188,12 @@ enum Outcome {
     Included,
     Failed(String),
     Pooled,
-    Absent { now: Millis },
+    Absent { now: Slot },
 }
 
-/// The latest block time among `blocks` (Mina GraphQL's `bestChain`).
-fn tip_time(blocks: &Value) -> Option<Millis> {
-    blocks.as_array()?.iter().filter_map(|b| decimal(&b["protocolState"]["blockchainState"]["utcDate"])).max()
+/// The latest slot among `blocks` (Mina GraphQL's `bestChain`).
+fn tip_slot(blocks: &Value) -> Option<Slot> {
+    blocks.as_array()?.iter().filter_map(|b| decimal(&b["protocolState"]["consensusState"]["slotSinceGenesis"])).max()
 }
 
 /// The vault's `escape` events in the archive's response, oldest block first, leaving out those of

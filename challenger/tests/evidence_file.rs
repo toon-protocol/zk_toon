@@ -10,7 +10,7 @@ use zk_toon_challenger::*;
 
 const ID: u64 = 11;
 const NEXT: u64 = 12;
-const CFG: Config = Config { min_lead: 10_000 };
+const CFG: Config = Config { min_lead: 1 };
 
 fn nullifier(n: u64) -> Nullifier {
     zk_evidence::field_to_bytes(Field::from(n))
