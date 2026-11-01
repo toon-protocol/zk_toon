@@ -10,6 +10,7 @@
     "tx-builder": "tsx src/tx-builder-main.ts",
     "typecheck": "tsc --noEmit",
     "keys": "tsx src/keys-main.ts",
+    "request-fixtures": "tsx src/request-fixtures-main.ts",
     "proofs-on": "tsx src/proofs-on-main.ts",
     "test:lightnet": "vitest run --config vitest.lightnet.config.ts"
   },

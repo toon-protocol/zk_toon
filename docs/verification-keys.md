@@ -66,3 +66,23 @@ In the close, escape and defeat tests the circuit's proof is real and verified a
 the vault transaction itself runs on a local chain with proofs off: proving a vault transaction (the
 reduce is near 2^16 rows, and every action needs a reduce) would add minutes per transaction to the
 gate. A proofs-on vault transaction is left to the transaction builder against a real network.
+
+## The request-proof fixtures
+
+The connector's Rust verifier (toon-protocol/connector#1514) is tested against real request proofs,
+which the connector cannot make itself (its ADR 0080 forbids o1js). From `o1js/`, after `npm ci`:
+
+```
+npm run request-fixtures [-- out.json]   # prove and write test-vectors/request-proofs/request-proofs.json (~2 min)
+```
+
+The file is committed, made from one commit: an unsubsidised and a subsidised `RequestProgram` proof
+(each o1js's `JsonProof`, its `publicInput` being `RequestPublic`'s fields), the request
+`verificationKey` (`data` and `hash`) they verify under, the `vaultCreation` slot the subsidised proof's
+period counts from, and a real `zk-toon-withdrawal` proof with its own key, which the request key must
+refuse. `buildRequestFixtures` (`o1js/src/request-fixtures.ts`) takes a note tree and index, the state
+key, the request slot and the vault creation slot, and defaults them to sample values; all times are
+slots. Proofs are randomised, so the gate never regenerates them: `npm test` fails if the committed
+key differs from the one `RequestProgram` compiles to, and `zk-prover/tests/request_proofs.rs` verifies
+the proofs against the committed key with `zk_prover::verify`. Rerun the command after any change to the
+request circuit.

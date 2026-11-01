@@ -73,12 +73,18 @@ export function stateChain(secret: Field, step: number) {
   return { anchor, prevNullifier, prevAnchor };
 }
 
-export function buildSample(o: SampleOptions): Sample {
+/** The sample tree: `o.before` other deposits, then the sample's note, at the index returned. */
+export function sampleTreeFor(o: SampleOptions): { tree: NoteTree; index: bigint } {
   const tree = new NoteTree();
   for (let i = 0; i < o.before; i++) {
     tree.append({ commitment: commitSecret(F(BigInt(i + 1))), size: F(DEPOSIT_SIZES[0]), depositTime: F(o.depositTime) });
   }
   const index = tree.append({ commitment: commitSecret(F(o.secret)), size: F(o.size), depositTime: F(o.depositTime) });
+  return { tree, index };
+}
+
+export function buildSample(o: SampleOptions): Sample {
+  const { tree, index } = sampleTreeFor(o);
   return buildRequest(tree, index, o);
 }
 
@@ -119,8 +125,8 @@ export function buildRequest(tree: NoteTree, index: bigint, o: SampleOptions): S
   return { pub, priv, tree, vaultKey, stateCommitment, context, vaultCreation };
 }
 
-/** The vault creation time of the subsidised vector samples: 10 days before the default deposit. */
-const VECTOR_VAULT_CREATION = defaultSample().depositTime - 10n * SLOTS_PER_DAY;
+/** The vault creation slot of the subsidised vector samples: 10 days before the default deposit. */
+export const VECTOR_VAULT_CREATION = defaultSample().depositTime - 10n * SLOTS_PER_DAY;
 
 /**
  * The samples the shared vector file pins: one genesis state and one signed state, unsubsidised; then
