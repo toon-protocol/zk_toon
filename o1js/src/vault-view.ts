@@ -24,7 +24,7 @@ export async function actions(vault: PublicKey, endActionState?: Field): Promise
  */
 export async function vaultView(vault: Vault): Promise<VaultMirror> {
   const reduced = await actions(vault.address, vault.actionState.get());
-  const mirror = new VaultMirror();
+  const mirror = new VaultMirror(vault.challengeWindow.get().toBigInt());
   reduced.forEach((a) => mirror.dispatched(a));
   mirror.nextReduce(0n, reduced.length);
   if (!mirror.tree.root.equals(vault.noteRoot.get()).toBoolean()) throw Error('rebuilt note root is not the vault root');
@@ -86,6 +86,19 @@ function replay(events: string[][]) {
 }
 
 /**
+ * A mirror of `vault` rebuilt wholly from the chain, ready for its next reduce (`nextReduce`), and how many
+ * actions wait for one. Its pending escapes are the chain's, but it doesn't list their records.
+ */
+export async function reduceMirror(vault: Vault) {
+  const mirror = await vaultView(vault);
+  mirror.escapes = (await pendingEscapesView(vault, { localChain: false })).escapes;
+  const reduced = (await actions(vault.address, vault.actionState.get())).length;
+  const all = await actions(vault.address);
+  all.slice(reduced).forEach((a) => mirror.dispatched(a));
+  return { mirror, pending: all.length - reduced };
+}
+
+/**
  * The action-stack program's domain. o1js starts its chain of chunk proofs from a dummy proof at 2^14, and
  * `proveChunk` can't prove from a dummy of the wrong domain: `Checked.inv` fails in Pickles's `scalars_env`.
  * A batch with no recursion isn't verified, so a dummy of the right domain does there too.
@@ -107,7 +120,9 @@ export async function provableBatches() {
     maxUpdatesFinalProof: Number.MAX_SAFE_INTEGER,
   });
   // The instance `batchReducer.setContractInstance` was given; `contract()` only answers inside a method.
-  unlimited.setContractInstance((batchReducer as unknown as { _contract: Vault })._contract);
+  const contract = batchReducer._contract;
+  if (!contract) throw new Error('provableBatches: call batchReducer.setContractInstance(vault) first');
+  unlimited.setContractInstance(contract);
   const batches = await unlimited.prepareBatches();
   if (batches.length === 0) return [];
 
@@ -131,6 +146,8 @@ export async function provableBatches() {
   for (let i = chunks.length - 1; i >= 0; i--) {
     ({ proof } = await batchReducer.program.proveChunk(endActionState, proof, Bool(i < chunks.length - 1), chunks[i]));
   }
+  // o1js's own check: a chain that doesn't reach the lists left out fails here.
+  proof.publicOutput.actions.assertEquals(Field(remaining[0]!.stateBefore), 'Action stack mismatch');
   const witnesses = Unconstrained.from(lists.slice(0, maxUpdatesFinalProof));
   return batches.map(({ batch }) => ({ batch: { ...batch, isRecursive: Bool(true), witnesses }, proof }));
 }
@@ -143,8 +160,11 @@ export class VaultKeeper {
     this.vaults.set(vault.toBase58(), { mirror: new VaultMirror(), fed: 0 });
   }
 
-  /** Reduces every pending action of `vault`, one transaction per batch, sent from `from`. */
-  async reduce(vault: Vault, from: Account) {
+  /**
+   * Reduces every pending action of `vault`, one transaction per batch, sent from `from`.
+   * `beforeBatch` runs before each batch's transaction, with its index.
+   */
+  async reduce(vault: Vault, from: Account, beforeBatch?: (index: number) => void) {
     const kept = this.vaults.get(vault.address.toBase58());
     if (!kept) throw Error('not a vault this keeper deployed');
     const all = await actions(vault.address);
@@ -152,7 +172,9 @@ export class VaultKeeper {
     kept.fed = all.length;
 
     batchReducer.setContractInstance(vault);
+    let index = 0;
     for (const { batch, proof } of await provableBatches()) {
+      beforeBatch?.(index++);
       const now = chainSlot();
       const { witnesses, nullifiers, escapes } = kept.mirror.nextReduce(now);
       const tx = await Mina.transaction(from, async () => {

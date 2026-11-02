@@ -1,0 +1,218 @@
+{
+  "run": "short-1",
+  "build": {
+    "notice": "SHORT-WINDOW TEST BUILD: its challenge window is 2 slots, not the published 1920. Its window is state written at deploy, so its code hash 18683408031881884777656720181449885515444520266556316685557148949849565333999 and key hashes (see facts) can't tell it from a vault with the published window.",
+    "challengeWindowSlots": "2"
+  },
+  "vault": "B62qjFXFC2hvmf1WgrffgfZE5933FoZd4hu7vkDDKNFhhcaNQ4m2L4y",
+  "funder": "B62qp9YT9mw27enrwPR3gSPeRkXxAg1runhKK7mx6jj64Lq6EukJRTy",
+  "treasury": "B62qnLcBp3fhe3qMbSq43WD6173gTK2fuSNxK512jCTvZ6WqKsjqxEN",
+  "destination": "B62qrprZDExpNrPrYn7JymySjwn7m3b4UpaPueip7x66TZUzNoRCDNC",
+  "facts": {
+    "o1js": "3.1.0",
+    "vaultCodeHash": "18683408031881884777656720181449885515444520266556316685557148949849565333999",
+    "requestKeyHash": "17783576495452972973648719307576910001175195573379209737447262132918659765208",
+    "withdrawalKeyHash": "28877533772266448557051119453732424795096415066979773862017799580394750732454",
+    "reducerKeyHash": "1068455914940987064575851783351747747170540515314043943192078195676266005847",
+    "challengeWindowOnChain": "2",
+    "depositTime.close": "930934",
+    "depositTime.escape": "930937",
+    "reduce-deposits.actions": 2,
+    "requestProof": {
+      "requestTime": "930940",
+      "root": "22051908976129467513371100028728440473032807709824871360226619784605732914084",
+      "valid": true,
+      "proveSeconds": 8
+    },
+    "payees.before-exits": {
+      "destination": "1000000000",
+      "treasury": "1000000000"
+    },
+    "reduce-exits.actions": 2,
+    "payees.after-close": {
+      "destination": "10900000000",
+      "treasury": "1100000000"
+    },
+    "escapeDeadline": "930953",
+    "reduce-final.actions": 1,
+    "payees.after-finalize": {
+      "destination": "20890000000",
+      "treasury": "1110000000"
+    }
+  },
+  "done": [
+    "accounts",
+    "deploy",
+    "setup",
+    "deposit-close",
+    "deposit-escape",
+    "reduce-deposits",
+    "request-proof",
+    "close",
+    "escape",
+    "reduce-exits",
+    "finalize",
+    "reduce-final-landed",
+    "reduce-final",
+    "refund"
+  ],
+  "attempts": [
+    {
+      "step": "accounts",
+      "hash": "5JuJ6LHqs7qE29APjUgHjeQsrfozXd4egsasWH4r29kz84igtNp6",
+      "sentSlot": "930919",
+      "landedSlot": "930922",
+      "height": "583418",
+      "proveSeconds": 1,
+      "inclusionSeconds": 229,
+      "fee": "100000000"
+    },
+    {
+      "step": "deploy",
+      "hash": "5JtxFwSPPNiPqBdoAwowcshMQCt7i7s5HBxa4QuF1Ta8TzPBac5y",
+      "target": "930925",
+      "sentSlot": "930924",
+      "landedSlot": "930925",
+      "height": "583420",
+      "proveSeconds": 1,
+      "inclusionSeconds": 82,
+      "fee": "100000000"
+    },
+    {
+      "step": "setup",
+      "hash": "5Jv2vv7tGWnp7HU59fQi6u9PYxpbBqJqX8EYyrTcW4qkhgxXQWCi",
+      "sentSlot": "930925",
+      "landedSlot": "930927",
+      "height": "583421",
+      "proveSeconds": 9,
+      "inclusionSeconds": 163,
+      "fee": "100000000"
+    },
+    {
+      "step": "deposit-close",
+      "hash": "5Ju3V8bN9n4y3AucQch8oi2PJQddo8NZ84qnUsa2GR9XtucKHLKA",
+      "target": "930930",
+      "sentSlot": "930929",
+      "landedSlot": "930933",
+      "height": "583422",
+      "proveSeconds": 28,
+      "inclusionSeconds": 341,
+      "failure": [
+        {
+          "index": "3",
+          "failures": [
+            "Cancelled"
+          ]
+        },
+        {
+          "index": "2",
+          "failures": [
+            "Cancelled"
+          ]
+        },
+        {
+          "index": "1",
+          "failures": [
+            "Valid_while_precondition_unsatisfied"
+          ]
+        }
+      ],
+      "fee": "100000000"
+    },
+    {
+      "step": "deposit-close",
+      "hash": "5JuFuuW7uFvGNq6TeZ73hMnQeKJzeLKRRnGihLaHnnYGxb9vQyWF",
+      "target": "930934",
+      "sentSlot": "930933",
+      "landedSlot": "930934",
+      "height": "583423",
+      "proveSeconds": 6,
+      "inclusionSeconds": 82,
+      "fee": "100000000"
+    },
+    {
+      "step": "deposit-escape",
+      "hash": "5JtiiQMnco2dCFy1utyYTh4mfdUxwDx2fwe84qy2qc7oLV16Ms8G",
+      "target": "930937",
+      "sentSlot": "930936",
+      "landedSlot": "930937",
+      "height": "583425",
+      "proveSeconds": 6,
+      "inclusionSeconds": 82,
+      "fee": "100000000"
+    },
+    {
+      "step": "reduce-deposits-0",
+      "hash": "5JukszC9LJgrqc9YM61cwUvVUbUQy4HdgpZaKTD1gbNtgKbfMzVc",
+      "target": "930940",
+      "sentSlot": "930939",
+      "landedSlot": "930940",
+      "height": "583426",
+      "proveSeconds": 24,
+      "inclusionSeconds": 82,
+      "fee": "100000000"
+    },
+    {
+      "step": "close",
+      "hash": "5Jv62KHdgoXo7HiSShQupJMLgRKSdLENV56PW3wEMJtBY2j2yLpu",
+      "sentSlot": "930940",
+      "landedSlot": "930943",
+      "height": "583427",
+      "proveSeconds": 18,
+      "inclusionSeconds": 244,
+      "fee": "100000000"
+    },
+    {
+      "step": "escape",
+      "hash": "5Jv3uZgsLCtZQP3MKqzyCtRFPPX4gtqzuNbLZFdVJzbeXxttNc1k",
+      "sentSlot": "930943",
+      "landedSlot": "930947",
+      "height": "583428",
+      "proveSeconds": 14,
+      "inclusionSeconds": 341,
+      "fee": "100000000"
+    },
+    {
+      "step": "reduce-exits-0",
+      "hash": "5JuZDNFsGo5usCkyTiXW3JDNEq8DAkoGkV3cwKKiB8auySQa7L8L",
+      "target": "930950",
+      "sentSlot": "930949",
+      "landedSlot": "930950",
+      "height": "583429",
+      "proveSeconds": 29,
+      "inclusionSeconds": 82,
+      "fee": "100000000"
+    },
+    {
+      "step": "finalize",
+      "hash": "5JvS2ioCXAm9y4HUZYEDmGsTdjuPpYA9it6Qc2PG5aGeGmezLwZr",
+      "sentSlot": "930953",
+      "landedSlot": "930956",
+      "height": "583433",
+      "proveSeconds": 7,
+      "inclusionSeconds": 278,
+      "fee": "100000000"
+    },
+    {
+      "step": "reduce-final-0",
+      "hash": "5JuP7YkQJZqqG5fSH3gLxdPh4V69nScaiptZUgkLNnbDAD8FT6da",
+      "target": "930959",
+      "sentSlot": "930958",
+      "landedSlot": "930960",
+      "height": "583435",
+      "proveSeconds": 21,
+      "inclusionSeconds": 180,
+      "fee": "100000000"
+    },
+    {
+      "step": "refund",
+      "hash": "5JudtrS6c7egY3XfDck9JjgvyjdVdV4gK88WUq49Ehrs8L6vAjxs",
+      "sentSlot": "930960",
+      "landedSlot": "930961",
+      "height": "583436",
+      "proveSeconds": 2,
+      "inclusionSeconds": 50,
+      "fee": "100000000"
+    }
+  ]
+}

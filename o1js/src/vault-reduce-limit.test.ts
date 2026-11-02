@@ -50,12 +50,15 @@ describe('a vault with more action lists pending than a reduce takes', () => {
       await keeper.reduce(h.vault, payer);
       expect(await reducedAll()).toBe(true);
 
+     
       // Past the limit: the keeper has to prove the lists the reduce leaves out.
       Local.setProofsEnabled(false);
       await deposits(LIMIT + 1);
       Local.setProofsEnabled(true);
       expect(await reducedAll()).toBe(false);
-      await keeper.reduce(h.vault, payer);
+      // Every batch carries the same action-stack proof and takes the same `verifyIf` path, so the first
+      // reduce is proved for real and the rest, 25 more, are sent with proofs off.
+      await keeper.reduce(h.vault, payer, (i) => Local.setProofsEnabled(i === 0));
       expect(await reducedAll()).toBe(true);
     } finally {
       Local.setProofsEnabled(false);

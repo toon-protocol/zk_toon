@@ -92,5 +92,14 @@ connector's fixture set (`docs/verification-keys.md`). The run shows what a proo
   takes longer. `recorded-vault.ts` names a slot far enough ahead, sends in the slot before it, and rebuilds on a
   miss. A miss fails with `Valid_while_precondition_unsatisfied`, and the fee is still paid. The last run missed
   three times in six such commands.
-- A deploy can't aim: `init` reads the tip's slot, so it lands only if the next block is in the following
-  slot. The run retries it, which took 2, 3 and 4 attempts in three runs.
+- The run's deploy doesn't aim yet: it names no slot, so `init` reads the tip's slot, and it lands only if the
+  next block is in the following slot. The run retries it, which took 2, 3 and 4 attempts in three runs.
+
+## Aiming a vault deploy at a slot
+
+A vault deploy can aim. `Vault.deploy({ zkappUri, slot })` makes `init` record `slot` as `creationTime` and
+require the current slot to be in `[slot, slot + 1]`, the same two-slot range a deposit or reduce uses. A
+block before `slot` or more than one slot after it refuses the deploy with
+`Valid_while_precondition_unsatisfied`. Without `slot`, `init` takes the network's current slot, as on a
+local chain. Land a deploy on a lightnet or devnet by passing the slot your landing helper has chosen,
+rather than retrying at the tip's slot or swapping the active Mina instance.
