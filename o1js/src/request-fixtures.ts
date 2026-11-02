@@ -27,8 +27,10 @@ export interface RequestFixtureInputs {
   vaultSecret?: bigint;
   /** The vault's creation slot, which the subsidised proof's period counts from. */
   vaultCreation?: bigint;
-  /** The slot both requests are made at. */
+  /** The slot the unsubsidised request and the other program's proof are made at. */
   requestTime?: bigint;
+  /** The slot the subsidised request is made at, which a note must be 7 days old by. Default: `requestTime`. */
+  subsidisedRequestTime?: bigint;
 }
 
 export type PublishedKeyProof = { proof: JsonProof; verificationKey: PublishedKey };
@@ -64,8 +66,10 @@ export async function buildRequestFixtures(
   if (!tree.leafAt(index).equals(leaf).toBoolean()) throw new Error(`the note given is not the one at index ${index} of the tree`);
 
   const plain = buildRequest(tree, index, { ...options, subsidy: undefined });
+  const subsidisedTime = inputs.subsidisedRequestTime ?? requestTime;
   const subsidy = buildRequest(tree, index, {
-    ...options, tier: TIERS[0], subsidy: { vaultCreation }, ctx: { ...options.ctx, expiry: requestTime + 1n },
+    ...options, tier: TIERS[0], subsidy: { vaultCreation }, requestTime: subsidisedTime,
+    ctx: { ...options.ctx, expiry: subsidisedTime + 1n },
   });
   if (!subsidyPeriodHolds(subsidy.pub, vaultCreation)) throw new Error('the subsidised request is not in a period of the vault');
 

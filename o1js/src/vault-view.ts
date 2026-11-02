@@ -2,14 +2,16 @@
 // the nullifier set, rebuilt by replaying the actions the vault has reduced, and the pending escapes,
 // rebuilt by replaying its `escape` events. Also the local chain's keeper,
 // which reduces a vault's pending actions as a keeper would.
-import { Field, Mina, PublicKey, TokenId, UInt64, Unconstrained } from 'o1js';
-import { EscapeUpdate, PendingEscape, PendingEscapes, Vault, VaultAction, batchReducer } from './vault.js';
+import { Experimental, Field, Mina, PublicKey, TokenId, UInt64, Unconstrained } from 'o1js';
+import { EscapeUpdate, PendingEscape, PendingEscapes, Vault, VaultAction, VaultBatchProof, batchReducer } from './vault.js';
 import { VaultMirror } from './vault-mirror.js';
 
 type Account = Awaited<ReturnType<typeof Mina.LocalBlockchain>>['testAccounts'][number];
 
 /** Every action `vault` has dispatched, oldest first, up to `endActionState` when given. */
-async function actions(vault: PublicKey, endActionState?: Field): Promise<VaultAction[]> {
+export async function actions(vault: PublicKey, endActionState?: Field): Promise<VaultAction[]> {
+  // Nothing is reduced yet, and an archive asked for actions up to the empty state may answer with all of them.
+  if (endActionState?.equals(Experimental.BatchReducer.initialActionState).toBoolean()) return [];
   const lists = await Mina.fetchActions(vault, endActionState ? { endActionState } : undefined);
   if ('error' in lists) throw Error(`could not fetch the vault's actions: ${JSON.stringify(lists.error)}`);
   return lists.flatMap((l) => l.actions.map((a) => new VaultAction(VaultAction.fromFields(a.map((f) => Field(f))))));
@@ -22,7 +24,7 @@ async function actions(vault: PublicKey, endActionState?: Field): Promise<VaultA
  */
 export async function vaultView(vault: Vault): Promise<VaultMirror> {
   const reduced = await actions(vault.address, vault.actionState.get());
-  const mirror = new VaultMirror();
+  const mirror = new VaultMirror(vault.challengeWindow.get().toBigInt());
   reduced.forEach((a) => mirror.dispatched(a));
   mirror.nextReduce(0n, reduced.length);
   if (!mirror.tree.root.equals(vault.noteRoot.get()).toBoolean()) throw Error('rebuilt note root is not the vault root');
@@ -81,6 +83,34 @@ function replay(events: string[][]) {
     else records.delete(record.nullifier.toBigInt());
   }
   return { escapes, records };
+}
+
+/**
+ * A mirror of `vault` rebuilt wholly from the chain, ready for its next reduce (`nextReduce`), and how many
+ * actions wait for one. Its pending escapes are the chain's, but it doesn't list their records.
+ */
+export async function reduceMirror(vault: Vault) {
+  const mirror = await vaultView(vault);
+  mirror.escapes = (await pendingEscapesView(vault, { localChain: false })).escapes;
+  const reduced = (await actions(vault.address, vault.actionState.get())).length;
+  const all = await actions(vault.address);
+  all.slice(reduced).forEach((a) => mirror.dispatched(a));
+  return { mirror, pending: all.length - reduced };
+}
+
+/**
+ * The action-stack program's domain. `prepareBatches` hands a batch with no recursion a dummy proof at 2^14,
+ * and a method that takes a dummy of the wrong domain can't be proved: `Checked.inv` fails in Pickles's
+ * `scalars_env`. The proof isn't verified for such a batch, so one of the right domain does.
+ */
+const ACTION_STACK_DOMAIN_LOG2 = 15;
+
+/** `batchReducer.prepareBatches`, but provable on a chain that checks proofs. */
+export async function provableBatches() {
+  const { initialActionState: empty } = Experimental.BatchReducer;
+  const dummy = await VaultBatchProof.dummy(Field(0), { actions: empty, stack: empty }, 1, ACTION_STACK_DOMAIN_LOG2);
+  const batches = await batchReducer.prepareBatches();
+  return batches.map(({ batch, proof }) => ({ batch, proof: batch.isRecursive.toBoolean() ? proof : dummy }));
 }
 
 /** Reduces the vaults it tracks, keeping each one's full mirror, pending escapes included. */
