@@ -84,7 +84,10 @@ can't do. There is no LocalBlockchain counterpart: with proofs off, both circuit
 connector's fixture set (`docs/verification-keys.md`). The run shows what a proofs-on chain asks of a caller:
 
 - A reduce can't use `batchReducer.prepareBatches` as it is: its dummy proof has the wrong domain, and proving
-  fails with `Checked.inv` in `scalars_env`. Use `provableBatches` (`src/vault-view.ts`).
+  fails with `Checked.inv` in `scalars_env`. Past 100 pending action lists (`maxUpdatesFinalProof`) it fails
+  the same way even with recursion, because the lists the reduce leaves out are proved from that dummy, so a
+  vault anyone has pushed past 100 stays stuck. Use `provableBatches` (`src/vault-view.ts`), which proves them
+  from a dummy of the action-stack program's domain; `VaultKeeper.reduce` does.
 - A deposit and a reduce must land in the slot they name or the next, which here is 40 seconds, and proving
   takes longer. `recorded-vault.ts` names a slot far enough ahead, sends in the slot before it, and rebuilds on a
   miss. A miss fails with `Valid_while_precondition_unsatisfied`, and the fee is still paid. The last run missed

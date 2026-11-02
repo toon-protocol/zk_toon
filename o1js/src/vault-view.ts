@@ -2,8 +2,8 @@
 // the nullifier set, rebuilt by replaying the actions the vault has reduced, and the pending escapes,
 // rebuilt by replaying its `escape` events. Also the local chain's keeper,
 // which reduces a vault's pending actions as a keeper would.
-import { Experimental, Field, Mina, PublicKey, TokenId, UInt64, Unconstrained } from 'o1js';
-import { EscapeUpdate, PendingEscape, PendingEscapes, Vault, VaultAction, VaultBatchProof, batchReducer } from './vault.js';
+import { Bool, Experimental, Field, Mina, PublicKey, TokenId, UInt64, Unconstrained } from 'o1js';
+import { EscapeUpdate, PendingEscape, PendingEscapes, Vault, VaultAction, VaultBatchProof, batchReducer, REDUCE_BATCH_SIZE } from './vault.js';
 import { VaultMirror } from './vault-mirror.js';
 
 type Account = Awaited<ReturnType<typeof Mina.LocalBlockchain>>['testAccounts'][number];
@@ -86,18 +86,53 @@ function replay(events: string[][]) {
 }
 
 /**
- * The action-stack program's domain. `prepareBatches` hands a batch with no recursion a dummy proof at 2^14,
- * and a method that takes a dummy of the wrong domain can't be proved: `Checked.inv` fails in Pickles's
- * `scalars_env`. The proof isn't verified for such a batch, so one of the right domain does.
+ * The action-stack program's domain. o1js starts its chain of chunk proofs from a dummy proof at 2^14, and
+ * `proveChunk` can't prove from a dummy of the wrong domain: `Checked.inv` fails in Pickles's `scalars_env`.
+ * A batch with no recursion isn't verified, so a dummy of the right domain does there too.
  */
 const ACTION_STACK_DOMAIN_LOG2 = 15;
 
-/** `batchReducer.prepareBatches`, but provable on a chain that checks proofs. */
+/**
+ * `batchReducer.prepareBatches`, but provable on a chain that checks proofs, for any number of pending
+ * action lists. `prepareBatches` leaves the first `maxUpdatesFinalProof` lists to the reduce and proves the
+ * rest from a dummy of the wrong domain, so it throws past that. Here the batches come from a reducer that
+ * leaves every list to the reduce (so none recurses), and the lists past the limit are proved from a
+ * dummy of the action-stack program's domain.
+ */
 export async function provableBatches() {
   const { initialActionState: empty } = Experimental.BatchReducer;
+  const unlimited = new Experimental.BatchReducer({
+    actionType: VaultAction,
+    batchSize: REDUCE_BATCH_SIZE,
+    maxUpdatesFinalProof: Number.MAX_SAFE_INTEGER,
+  });
+  // The instance `batchReducer.setContractInstance` was given; `contract()` only answers inside a method.
+  unlimited.setContractInstance((batchReducer as unknown as { _contract: Vault })._contract);
+  const batches = await unlimited.prepareBatches();
+  if (batches.length === 0) return [];
+
   const dummy = await VaultBatchProof.dummy(Field(0), { actions: empty, stack: empty }, 1, ACTION_STACK_DOMAIN_LOG2);
-  const batches = await batchReducer.prepareBatches();
-  return batches.map(({ batch, proof }) => ({ batch, proof: batch.isRecursive.toBoolean() ? proof : dummy }));
+  const lists = batches[0].batch.witnesses.get();
+  const { maxUpdatesFinalProof } = batchReducer;
+  if (lists.length <= maxUpdatesFinalProof) return batches.map(({ batch }) => ({ batch, proof: dummy }));
+  // Proofs off, o1js's own dummy carries the stack the reduce reads, and is never checked.
+  if (!Mina.getProofsEnabled()) return batchReducer.prepareBatches();
+
+  const { maxUpdatesPerProof } = batchReducer.program;
+  const endActionState = batches[0].batch.onchainActionState;
+  const remaining = lists.slice(maxUpdatesFinalProof);
+  const chunks: Unconstrained<typeof lists>[] = [];
+  for (let k = 0; k < remaining.length; k += maxUpdatesPerProof) {
+    const chunk: typeof lists = [];
+    for (let j = 0; j < maxUpdatesPerProof; j++) chunk[j] = remaining[k + j];
+    chunks.push(Unconstrained.from(chunk));
+  }
+  let proof = dummy;
+  for (let i = chunks.length - 1; i >= 0; i--) {
+    ({ proof } = await batchReducer.program.proveChunk(endActionState, proof, Bool(i < chunks.length - 1), chunks[i]));
+  }
+  const witnesses = Unconstrained.from(lists.slice(0, maxUpdatesFinalProof));
+  return batches.map(({ batch }) => ({ batch: { ...batch, isRecursive: Bool(true), witnesses }, proof }));
 }
 
 /** Reduces the vaults it tracks, keeping each one's full mirror, pending escapes included. */
@@ -117,7 +152,7 @@ export class VaultKeeper {
     kept.fed = all.length;
 
     batchReducer.setContractInstance(vault);
-    for (const { batch, proof } of await batchReducer.prepareBatches()) {
+    for (const { batch, proof } of await provableBatches()) {
       const now = chainSlot();
       const { witnesses, nullifiers, escapes } = kept.mirror.nextReduce(now);
       const tx = await Mina.transaction(from, async () => {
