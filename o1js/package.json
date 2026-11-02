@@ -12,6 +12,7 @@
     "keys": "tsx src/keys-main.ts",
     "request-fixtures": "tsx src/request-fixtures-main.ts",
     "proofs-on": "tsx src/proofs-on-main.ts",
+    "devnet": "tsx src/devnet-main.ts",
     "test:lightnet": "vitest run --config vitest.lightnet.config.ts"
   },
   "dependencies": { "o1js": "3.1.0" },

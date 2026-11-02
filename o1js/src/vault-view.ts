@@ -24,7 +24,7 @@ export async function actions(vault: PublicKey, endActionState?: Field): Promise
  */
 export async function vaultView(vault: Vault): Promise<VaultMirror> {
   const reduced = await actions(vault.address, vault.actionState.get());
-  const mirror = new VaultMirror();
+  const mirror = new VaultMirror(vault.challengeWindow.get().toBigInt());
   reduced.forEach((a) => mirror.dispatched(a));
   mirror.nextReduce(0n, reduced.length);
   if (!mirror.tree.root.equals(vault.noteRoot.get()).toBoolean()) throw Error('rebuilt note root is not the vault root');
@@ -83,6 +83,19 @@ function replay(events: string[][]) {
     else records.delete(record.nullifier.toBigInt());
   }
   return { escapes, records };
+}
+
+/**
+ * A mirror of `vault` rebuilt wholly from the chain, ready for its next reduce (`nextReduce`), and how many
+ * actions wait for one. Its pending escapes are the chain's, but it doesn't list their records.
+ */
+export async function reduceMirror(vault: Vault) {
+  const mirror = await vaultView(vault);
+  mirror.escapes = (await pendingEscapesView(vault, { localChain: false })).escapes;
+  const reduced = (await actions(vault.address, vault.actionState.get())).length;
+  const all = await actions(vault.address);
+  all.slice(reduced).forEach((a) => mirror.dispatched(a));
+  return { mirror, pending: all.length - reduced };
 }
 
 /**
