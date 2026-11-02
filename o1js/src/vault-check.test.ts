@@ -8,7 +8,7 @@ import { commitSecret } from './primitives.js';
 import * as policy from './policy.js';
 import { RequestProgram } from './request.js';
 import { signClearance } from './clearance.js';
-import { LOCKED, LOOSENED, dispatch, forged as forgedBy, forgedClose as forgedCloseTo, phantomDeposit, writeReducedDeposit } from './vault-forge.js';
+import { LOCKED, LOOSENED, dispatch, dispatchTogether, forged as forgedBy, forgedClose as forgedCloseTo, phantomDeposit, writeReducedDeposit } from './vault-forge.js';
 import { ActionKind, CLOSE_WINDOW_SLOTS, DepositSizes, NullifierSet, PendingEscape, RootRing, Vault, VaultAction, batchReducer } from './vault.js';
 import { checkVault, chainReader, judgeVault, type VaultReader, type VaultSnapshot, type VaultVerdict } from './vault-check.js';
 import { balanceOf, now, vaultHarness } from './vault-harness.js';
@@ -48,6 +48,20 @@ const forgedEscape = () => new PendingEscape({
   deadline: UInt64.from(now() + 2000n),
 });
 const emptyStack = Experimental.BatchReducer.initialActionStack;
+/** Runs every reduce a vault outside the harness has pending. */
+const reduceAll = async (vault: Vault) => {
+  batchReducer.setContractInstance(vault);
+  const { mirror, pending } = await reduceMirror(vault);
+  expect(pending).toBeGreaterThan(0);
+  for (const { batch, proof } of await batchReducer.prepareBatches()) {
+    const { witnesses, nullifiers, escapes } = mirror.nextReduce(now());
+    const tx = await Mina.transaction(payer, async () => {
+      await vault.reduce(batch, proof, Unconstrained.from(witnesses), nullifiers, escapes, UInt64.from(now()));
+    });
+    await tx.prove();
+    await tx.sign([payer.key]).send();
+  }
+};
 
 describe('a vault that is what it says', () => {
   it('passes fresh, with nothing to replay', async () => {
@@ -239,10 +253,53 @@ describe('a vault whose state its actions do not explain', () => {
     expect(failed(await check(vault.address))).toEqual(['actions']);
   });
 
-  it('applies the actions of one account update oldest first, as a reduce does', async () => {
-    // Read in the order listed, the close would come first and be refused as claiming a note not yet deposited.
-    const vault = await forged({ write: (v) => dispatch(v, phantomDeposit(), forgedClose()) });
-    expect(failed(await check(vault.address))).toEqual(['balance']);
+});
+
+// Every action queued behind a failing reduce is stuck, so a victim's deposit never becomes a note it could escape with.
+describe('a vault whose reduce could never run', () => {
+  const backed = (...actions: VaultAction[]) => forged({
+    write: (v) => {
+      AccountUpdate.createSigned(deployer).send({ to: v.address, amount: UInt64.from(SMALL) });
+      dispatch(v, phantomDeposit(), ...actions);
+    },
+  });
+  const close = (over: Partial<VaultAction>) => new VaultAction({ ...forgedClose(), ...over });
+
+  it('passes with the same backed deposit alone, and that one reduces', async () => {
+    const vault = await backed();
+    expectPass(await check(vault.address));
+    await reduceAll(vault);
+    expectPass(await check(vault.address));
+  });
+
+  it.each<[string, () => VaultAction, string]>([
+    ['a deposit conceding more than its amount', () => new VaultAction({ ...phantomDeposit(9n), conceded: UInt64.from(1) }), 'actions'],
+    ['a sweep conceding more than its amount', () => new VaultAction({ ...VaultAction.sweep(UInt64.zero), conceded: UInt64.from(1) }), 'actions'],
+    ['a close to no account', () => forgedCloseTo(PrivateKey.random().toPublicKey()), 'payee'],
+  ])('is refused with %s, which fails the reduce', async (_name, action, refusal) => {
+    const vault = await backed(action());
+    expect(failed(await check(vault.address))).toEqual([refusal]);
+    await expect(reduceAll(vault)).rejects.toThrow();
+  });
+
+  it('is refused with more actions in one account update than a batch holds, which no batch can pop', async () => {
+    const finalize = VaultAction.finalize(forgedEscape());
+    const vault = await forged({ write: (v) => dispatchTogether(v, ...Array<VaultAction>(5).fill(finalize)) });
+    // Not reduced here: o1js's `prepareBatches` never gets past such an update, and runs out of memory trying.
+    expect(failed(await check(vault.address))).toEqual(['actions']);
+  });
+
+  it('is refused with two actions in one account update, which no method dispatches', async () => {
+    const vault = await forged({ write: (v) => dispatchTogether(v, phantomDeposit(), phantomDeposit(9n)) });
+    expect(failed(await check(vault.address))).toEqual(['actions']);
+  });
+
+  it.each<[string, Partial<VaultAction>]>([
+    ['a field set that its kind leaves empty', { validUntil: UInt64.from(1) }],
+    ['nullifier 0, which is no hash', { nullifier: Field(0) }],
+  ])('is refused with %s', async (_name, over) => {
+    const vault = await backed(close(over));
+    expect(failed(await check(vault.address))).toEqual(['actions']);
   });
 });
 
@@ -314,11 +371,10 @@ describe('what a pass does not show', () => {
         nullifiers.insert(close.nullifier, 1n);
         v.nullifierRoot.set(nullifiers.root);
         v.claimedTotal.set(close.size);
-        // One account update's actions, as if a reduce had folded them.
-        const hash = [deposit, close].reduce(
-          (acc, a) => AccountUpdate.Actions.pushEvent(acc, VaultAction.toFields(a)), AccountUpdate.Actions.empty()
-        ).hash;
-        v.actionState.set(AccountUpdate.Actions.updateSequenceState(emptyStack, hash));
+        // As if a reduce had folded both.
+        v.actionState.set([deposit, close].reduce(
+          (acc, a) => AccountUpdate.Actions.updateSequenceState(acc, AccountUpdate.Actions.fromList([VaultAction.toFields(a)]).hash), emptyStack
+        ));
       },
     });
     expect(await check(vault.address)).toEqual({ pass: true, dispatched: 2, reduced: 2 });
@@ -334,20 +390,7 @@ describe('what a pass does not show', () => {
 
     // The deployer closes the phantom note for real: its leaf is in the tree and its own nullifier is unspent.
     const before = balanceOf(bob);
-    const reduce = async () => {
-      batchReducer.setContractInstance(vault);
-      const { mirror, pending } = await reduceMirror(vault);
-      expect(pending).toBeGreaterThan(0);
-      for (const { batch, proof } of await batchReducer.prepareBatches()) {
-        const { witnesses, nullifiers, escapes } = mirror.nextReduce(now());
-        const tx = await Mina.transaction(payer, async () => {
-          await vault.reduce(batch, proof, Unconstrained.from(witnesses), nullifiers, escapes, UInt64.from(now()));
-        });
-        await tx.prove();
-        await tx.sign([payer.key]).send();
-      }
-    };
-    await reduce();
+    await reduceAll(vault);
     const view = await vaultView(vault);
     const { pub, priv } = buildWithdrawal(view.tree, {
       kind: WithdrawalKind.mutualClose, secret, index: 0n, size: SMALL, depositTime: deposit.time.toBigInt(), requestTime: now(),
@@ -360,7 +403,7 @@ describe('what a pass does not show', () => {
     });
     await tx.prove();
     await tx.sign([payer.key]).send();
-    await reduce();
+    await reduceAll(vault);
     expect(balanceOf(bob)).toBe(before + SMALL);
     expect(balanceOf(vault.address)).toBe(0n);
   });

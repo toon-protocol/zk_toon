@@ -5,7 +5,7 @@
 // account's action state, and its events only supply deadlines that the pending escapes root then has to confirm.
 //
 // `judgeVault` is the check itself, a pure function of a snapshot; `test-vectors/vault-check.json` holds snapshots
-// and their answers. A pass on a vault with history doesn't rule out a forged withdrawal hiding a note: see ADR 0008, "What a pass
+// and their answers. A pass on a vault with history doesn't rule out a forged close hiding a note: see ADR 0008, "What a pass
 // doesn't show".
 import { AccountUpdate, Experimental, Field, Mina, Permissions, PublicKey, Struct, TokenId, Types, UInt64, fetchAccount, fetchLastBlock } from 'o1js';
 import { NoteTree } from './note-tree.js';
@@ -63,6 +63,8 @@ export type VaultSnapshot = {
   actionState: string;
   appState: string[];
   treasuryExists: boolean;
+  /** Who the actions name as a payee and has no account. */
+  payeesWithoutAccount: string[];
   actions: string[][][];
   /** The fields of each `escape` event, in any order. */
   escapeEvents: string[][];
@@ -128,6 +130,8 @@ export async function readVault(address: PublicKey, reader: VaultReader): Promis
     reader.slot(), reader.actions(address), reader.events(address),
     treasury.isEmpty().toBoolean() ? undefined : reader.account(treasury),
   ]);
+  const payees = namedPayees(actions);
+  const found = await Promise.all(payees.map((p) => reader.account(p)));
   return {
     slot: slot.toString(),
     verificationKeyHash: account.zkapp.verificationKey?.hash.toString() ?? null,
@@ -137,9 +141,22 @@ export async function readVault(address: PublicKey, reader: VaultReader): Promis
     actionState: account.zkapp.actionState[0]!.toString(),
     appState: appState.map((f) => f.toString()),
     treasuryExists: treasuryAccount !== undefined,
+    payeesWithoutAccount: payees.filter((_, i) => !found[i]).map((p) => p.toBase58()),
     actions,
     escapeEvents: events,
   };
+}
+
+/** Everyone a close, an escape or what follows one names, once each. Actions that don't parse are `judgeVault`'s to refuse. */
+function namedPayees(actions: string[][][]): PublicKey[] {
+  try {
+    const named = actions.flat().map((l) => VaultAction.fromFields(l.map((f) => Field(f))))
+      .filter((a) => !a.kind.equals(ActionKind.deposit).toBoolean() && !a.kind.equals(ActionKind.sweep).toBoolean())
+      .map((a) => a.destination);
+    return [...new Map(named.map((p) => [p.toBase58(), p])).values()];
+  } catch {
+    return [];
+  }
 }
 
 /** Asks one question of `address`: can it be trusted as a vault of `codeHash`? A failed read refuses. */
@@ -186,6 +203,8 @@ function judge(s: VaultSnapshot, codeHash: string): VaultVerdict {
   if (state.stateKey.isEmpty().toBoolean()) refuse('setup', 'no state key: setup has not run');
   if (state.treasury.isEmpty().toBoolean()) refuse('setup', 'no treasury: setup has not run');
   else if (!s.treasuryExists) refuse('setup', 'the treasury has no account, so a reduce paying it would fail');
+  // A payout to no account fails the reduce, and stalls every action behind it. The vault's methods require the account.
+  for (const p of s.payeesWithoutAccount) refuse('payee', `${p} is named by an action and has no account`);
 
   const history = replayHistory(s, state, refuse);
   if (refusals.length > 0 || !history) return { pass: false, refusals };
@@ -245,8 +264,11 @@ function replayHistory(s: VaultSnapshot, state: VaultState, refuse: Refuse) {
 
   let actions: VaultAction[][];
   try {
-    // An account update lists its actions newest first; a reduce applies them oldest first.
-    actions = s.actions.map((l) => l.map(decodeAction).reverse());
+    // Each method dispatches once. A longer list can stall the reduce: it can't pop more than a batch from one update.
+    actions = s.actions.map((l) => {
+      if (l.length !== 1) throw Error(`an account update holds ${l.length} actions`);
+      return [decodeAction(l[0]!)];
+    });
   } catch (e) {
     refuse('actions', (e as Error).message);
     return undefined;
@@ -411,6 +433,19 @@ function checkRing(ring: RootRing, noteRoot: Field, noteRoots: Set<string>, refu
 
 const UINT64_END = 1n << 64n;
 
+const NAMING: (keyof VaultAction)[] = ['nullifier', 'nextNullifier', 'amount', 'conceded', 'size', 'destination', 'time'];
+const CLOSING: (keyof VaultAction)[] = ['nullifier', 'amount', 'size', 'time', 'destination'];
+/** The fields each kind's constructor sets on top of `VaultAction.none()`. */
+const FIELDS_SET: Record<number, (keyof VaultAction)[]> = {
+  [ActionKind.deposit]: ['commitment', 'size', 'time'],
+  [ActionKind.mutualClose]: CLOSING,
+  [ActionKind.escape]: [...CLOSING, 'nextNullifier', 'validUntil', 'conceded'],
+  [ActionKind.finalize]: NAMING,
+  [ActionKind.defeat]: NAMING,
+  [ActionKind.raise]: [...NAMING, 'commitment'],
+  [ActionKind.sweep]: ['size'],
+};
+
 /** An action as the vault could have dispatched it; anything else can only have been forged. */
 function decodeAction(fields: string[]): VaultAction {
   if (fields.length !== VaultAction.sizeInFields()) throw Error(`an action has ${fields.length} fields`);
@@ -420,10 +455,17 @@ function decodeAction(fields: string[]): VaultAction {
   if (a.destination.isOdd.toField().toBigInt() > 1n) throw Error('an action has a malformed destination');
   const kind = Number(a.kind.toBigInt());
   if (!(kind in ActionKind)) throw Error(`an action has kind ${a.kind}`);
+  const set = Object.fromEntries(FIELDS_SET[kind]!.map((name) => [name, a[name]]));
+  const bare = VaultAction.toFields(new VaultAction({ ...VaultAction.none(), kind: a.kind, ...set }));
+  if (VaultAction.toFields(a).some((f, i) => !f.equals(bare[i]!).toBoolean())) throw Error(`an action of kind ${a.kind} sets a field its kind leaves empty`);
   if (kind === ActionKind.sweep) return a;
   // A raise names the record it replaces by hash. Zero is what an unset key holds, so it would raise nothing into an escape.
   if (kind === ActionKind.raise && a.commitment.equals(0).toBoolean()) throw Error('a raise names no record');
   if (!policy.isDepositSize(size!)) throw Error(`an action names ${size}, not a deposit size`);
-  if (kind !== ActionKind.deposit && (conceded! > amount! || amount! > size!)) throw Error('an action has amounts out of order');
+  // The reduce's circuit is one for all kinds, so these fail its range checks whatever the kind.
+  if (conceded! > amount! || amount! > size!) throw Error('an action has amounts out of order');
+  // A nullifier is a hash, so 0 can only be forged.
+  if (kind !== ActionKind.deposit && a.nullifier.equals(0).toBoolean()) throw Error('an action has nullifier 0');
+  if (kind === ActionKind.escape && a.nextNullifier.equals(0).toBoolean()) throw Error('an escape has next nullifier 0');
   return a;
 }

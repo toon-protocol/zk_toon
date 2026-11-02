@@ -32,10 +32,15 @@ export const LOOSENED: { [K in keyof ReturnType<typeof LOCKED>]: () => ReturnTyp
   setVotingFor: Permissions.signature, setTokenSymbol: Permissions.signature, setDelegate: Permissions.impossible,
 };
 
-/** Writes `actions` to the vault's stream as one account update, under its key rather than a method. */
-export const dispatch = (vault: Vault, ...actions: VaultAction[]) => {
-  for (const a of actions) vault.self.body.actions = AccountUpdate.Actions.pushEvent(vault.self.body.actions, VaultAction.toFields(a));
+const withActions = (update: AccountUpdate, actions: VaultAction[]) => {
+  for (const a of actions) update.body.actions = AccountUpdate.Actions.pushEvent(update.body.actions, VaultAction.toFields(a));
 };
+/** Writes `actions` to the vault's stream under the upgrade key's signature, an account update each, as its methods do. */
+export const dispatch = (vault: Vault, ...actions: VaultAction[]) => {
+  for (const a of actions) withActions(AccountUpdate.createSigned(vault.address), [a]);
+};
+/** Writes `actions` to the vault's stream as one account update, which no method does. */
+export const dispatchTogether = (vault: Vault, ...actions: VaultAction[]) => withActions(vault.self, actions);
 
 /**
  * A vault its deployer forges: `init` and `deploy` run as published, `write` changes what it likes under the
@@ -55,19 +60,19 @@ export async function forged({ deployer, treasury }: { deployer: Account; treasu
     await vault.deploy({ zkappUri: VAULT_URI });
     vault.self.account.permissions.set(LOOSE);
   });
-  // Outside a method, `self` joins the transaction only when attached.
+  // Outside a method, `self` joins the transaction only when attached: first, so the updates `body` adds count its nonce.
   const write = (body: () => void) => signed(() => {
     vault.requireSignature();
-    body();
     AccountUpdate.attachToTransaction(vault.self);
+    body();
   });
+  // A minimum balance needs a balance to hold it.
+  if (o.timed) await signed(() => { AccountUpdate.createSigned(deployer).send({ to: vault.address, amount: UInt64.from(1) }); });
   await write(() => {
     vault.stateKey.set(o.stateKey ?? PrivateKey.random().toPublicKey());
     vault.treasury.set(treasury);
     o.write?.(vault);
     if (o.timed) {
-      // A minimum balance needs a balance to hold it.
-      AccountUpdate.createSigned(deployer).send({ to: vault.address, amount: UInt64.from(1) });
       vault.self.account.timing.set({
         initialMinimumBalance: UInt64.from(1), cliffTime: Mina.getNetworkState().globalSlotSinceGenesis.add(1000),
         cliffAmount: UInt64.from(0), vestingPeriod: UInt32.from(1),

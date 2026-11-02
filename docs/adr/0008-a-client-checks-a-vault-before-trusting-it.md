@@ -32,10 +32,16 @@ A pass means:
    expired, claimed and swept totals. Every root in `rootRing` was once the note root, and the newest is the current
    one. `actionState` is a point in the stream, and `actionStack` holds actions from the stream.
 6. At no point in the stream has a size paid out more often than it was deposited, no escape precedes every deposit
-   of its size, and no finalize, defeat or raise names an escape no reduce has recorded. At the end of the stream, no
-   size is claimed more often than it was deposited. Each sweep's total ends at a note, with every note it walks past
-   its expiry and the close window after it.
+   of its size, and no finalize, defeat or raise names an escape that was dispatched and no reduce has recorded yet.
+   At the end of the stream, no size is claimed more often than it was deposited. Each sweep's total ends at a note,
+   with every note it walks past its expiry and the close window after it.
 7. The balance covers all deposits, pending ones included, less what reduced actions paid.
+8. A reduce can process every action. Each account update holds one action, each action has only the fields its kind
+   sets, its amounts are in order, and everyone an action names as a payee has an account.
+   The reduce's circuit is the same for every kind, so a forged action that breaks one of these fails the reduce
+   whatever it claims to be, and every action behind it is stuck, including a victim's deposit. `vault-check.test.ts`
+   sees such reduces fail, except over-long updates: o1js's `prepareBatches` ran out of memory on one, so that test
+   only asserts the refusal. No nullifier is 0 either, since it's a hash; that one didn't fail a reduce. A passing check reads the node once per payee in the stream.
 
 Claims are judged only at the end because a stale escape can legitimately push them over: it spends other nullifiers
 than a close of the same note. So a vault refuses while a stale escape stands and passes again once it's defeated.
@@ -56,10 +62,11 @@ of these does harm if prefilled and is now checked too:
 - A forged `actionStack` lets a reduce pop actions that were never dispatched, skipping the stream altogether.
 - A prefilled pending escape, or a high `expiredTotal`, pays out of the vault.
 - A prefilled nullifier blocks a note.
+- An action a reduce can't process stalls the vault, and costs the forger nothing if it needs no backing.
 
 ## What a pass doesn't show
 
-**A forged withdrawal can hide a note, and the check passes that vault.** The deployer, under loose permissions,
+**A forged close can hide a note, and the check passes that vault.** The deployer, under loose permissions,
 dispatches a fake deposit and a fake close of it with an invented nullifier, writes the state a reduce would leave,
 and locks the account. Replay matches, and the books balance: one deposit, one payout, nothing held. No money ever
 moved. The phantom's leaf is in the tree and its real nullifier is unspent, so once a victim deposits, the deployer

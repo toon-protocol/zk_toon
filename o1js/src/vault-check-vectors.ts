@@ -5,7 +5,7 @@ import { writeFileSync } from 'node:fs';
 import { Field, Mina, PublicKey, UInt64 } from 'o1js';
 import * as policy from './policy.js';
 import { RequestProgram } from './request.js';
-import { batchReducer } from './vault.js';
+import { VaultAction, batchReducer } from './vault.js';
 import { chainReader, judgeVault, readVault } from './vault-check.js';
 import { LOOSENED, dispatch, forged, phantomDeposit } from './vault-forge.js';
 import { vaultHarness } from './vault-harness.js';
@@ -43,6 +43,7 @@ const prefilled: [string, Parameters<typeof forged>[1]][] = [
   ['a short challenge window', { write: (v) => v.challengeWindow.set(UInt64.from(1)) }],
   ['a prefilled note root', { write: (v) => v.noteRoot.set(Field(123)) }],
   ['a fake deposit no balance backs', { write: (v) => dispatch(v, phantomDeposit()) }],
+  ['a deposit no reduce can process', { write: (v) => dispatch(v, new VaultAction({ ...phantomDeposit(), conceded: UInt64.from(1) })) }],
 ];
 for (const [name, o] of prefilled) {
   const v = await forged({ deployer, treasury }, o);
