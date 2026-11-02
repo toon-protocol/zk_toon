@@ -50,7 +50,6 @@ describe('a vault with more action lists pending than a reduce takes', () => {
       await keeper.reduce(h.vault, payer);
       expect(await reducedAll()).toBe(true);
 
-     
       // Past the limit: the keeper has to prove the lists the reduce leaves out.
       Local.setProofsEnabled(false);
       await deposits(LIMIT + 1);
