@@ -77,3 +77,17 @@ before a block, and the tests check the key and `x` are unchanged afterwards. Th
 really differ. This confirms the order within a command only. It does not exercise
 `impossibleDuringCurrentVersion` and its fallback to `signature` after a hard fork, which a lightnet
 can't do. There is no LocalBlockchain counterpart: with proofs off, both circuits get the same dummy key.
+
+## Recording a vault
+
+`npm run request-fixtures` (#67) runs a real vault here, which the tests above do not, and writes the
+connector's fixture set (`docs/verification-keys.md`). The run shows what a proofs-on chain asks of a caller:
+
+- A reduce can't use `batchReducer.prepareBatches` as it is: its dummy proof has the wrong domain, and proving
+  fails with `Checked.inv` in `scalars_env`. Use `provableBatches` (`src/vault-view.ts`).
+- A deposit and a reduce must land in the slot they name or the next, which here is 40 seconds, and proving
+  takes longer. `recorded-vault.ts` names a slot far enough ahead, sends in the slot before it, and rebuilds on a
+  miss. A miss fails with `Valid_while_precondition_unsatisfied`, and the fee is still paid. The last run missed
+  three times in six such commands.
+- A deploy can't aim: `init` reads the tip's slot, so it lands only if the next block is in the following
+  slot. The run retries it, which took 2, 3 and 4 attempts in three runs.
