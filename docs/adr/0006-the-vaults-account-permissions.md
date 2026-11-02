@@ -74,6 +74,11 @@ delays an escape. The upgrade key's only reach is delegation. Across a hard fork
 fork notice: a payer who watches the URI can leave before the stop slot. A payer who doesn't watch it
 trusts the key holders.
 
+All of this depends on the account really having these permissions and a state `init` wrote, which the vault code
+hash doesn't show. A deployer can write anything under the upgrade key's signature before locking the account. So these
+guarantees hold only for a vault that passes the vault check, and that check has a limit on a vault with history
+(ADR 0008, "A client checks a vault before trusting it").
+
 ## Rejected
 
 - **Destroying the key.** The first incompatible fork would freeze every deposit for good.

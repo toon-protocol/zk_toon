@@ -7,6 +7,7 @@
   "scripts": {
     "test": "vitest run",
     "vectors": "tsx src/gen-vectors.ts",
+    "vault-check-vectors": "tsx src/vault-check-vectors.ts",
     "tx-builder": "tsx src/tx-builder-main.ts",
     "typecheck": "tsc --noEmit",
     "keys": "tsx src/keys-main.ts",
