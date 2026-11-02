@@ -51,10 +51,10 @@ Durations come from `SLOT_SECONDS = 90`, defined once per language, and `SLOTS_P
 | Request max age (the close window still equals it) | 7 | 10 minutes, rounded up |
 | Request max lead | 1 | 1 minute, rounded up |
 
-Durations of a minute or so round **up** to whole slots. These constants are part of the verification
-key, so a fork that changes slot length changes them with the key. The challenge window is the exception: it is
-state that `init` writes in the signed deploy, so the key doesn't fix it. Devnet run `short-1` has a window of 2
-under the published code hash (`docs/devnet-smoke.md`, #75).
+Durations of a minute or so round **up** to whole slots. The constants a circuit uses are part of the
+verification key, so a fork that changes slot length changes them with the key. Two aren't. The request max
+lead is only the zk edge's off-chain check. The challenge window is state that `init` writes in the signed
+deploy, so the key doesn't fix it: see `docs/devnet-smoke.md` and #75.
 
 The zk edge's freshness check takes slots. How the zk edge gets its current slot is
 toon-protocol/connector#1511.

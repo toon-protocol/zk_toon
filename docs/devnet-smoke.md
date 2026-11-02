@@ -71,9 +71,9 @@ commands). The refund returned **22.00 MINA** exactly (20.89 from the destinatio
   following reduce.
 - **A vault's code hash doesn't name its challenge window.** The window is state the deployer writes in the
   signed deploy, and this vault shows a window of 2 under the published code hash. So a zk edge or payer pinning
-  the code hash alone would accept this vault, and it must read `challengeWindow` too (toon-protocol/connector#1511).
-  The other state `init` writes is set the same way (not tried on devnet; reproduced on a local chain in #75, which
-  tracks a check for clients to run on a vault).
+  the code hash alone would accept this vault. The other state `init` writes is set the same way (inferred from the
+  code, not tried on devnet). #75 reproduces that for the note root, leaf index and root ring on a local chain with
+  proofs off, and tracks the check a payer needs, which covers `challengeWindow`.
 - **An aimed command can still miss.** Six of the seven aimed commands landed in range. The first deposit was
   sent in time, and no block came between slots 930927 and 930933, past its range. It was charged and proved again.
 - **Inclusion times follow the gaps between blocks.** The finalize was sent 11 s after slot 930953's block, so it
