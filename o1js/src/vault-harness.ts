@@ -9,6 +9,7 @@ import {
   CLOSE_WINDOW_SLOTS, PendingEscape, SWEEP_BATCH_SIZE, SweptNote, VAULT_URI, Vault, VaultAction, batchReducer, setupFields,
 } from './vault.js';
 import { VaultMirror } from './vault-mirror.js';
+import { provableBatches } from './vault-view.js';
 import { WithdrawalKind, WithdrawalProgram, WithdrawalProof, WithdrawalPublic } from './withdrawal.js';
 import { buildWithdrawal } from './withdrawal-sample.js';
 import { RequestProgram, RequestProof } from './request.js';
@@ -116,7 +117,7 @@ export function vaultHarness(Local: Local) {
       /** One reduce transaction per prepared batch, like a keeper would run. */
       async reduce() {
         batchReducer.setContractInstance(vault);
-        for (const { batch, proof } of await batchReducer.prepareBatches()) {
+        for (const { batch, proof } of await provableBatches()) {
           const t = now();
           const { witnesses, nullifiers, escapes } = mirror.nextReduce(t);
           await send(

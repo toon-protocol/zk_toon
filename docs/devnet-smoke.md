@@ -129,7 +129,9 @@ command, but the run didn't test a lower fee.
 - **Slot misses surface as `Valid_while_precondition_unsatisfied`.** `currentSlot` is the command's `validWhile`,
   so that, not `Protocol_state_precondition_unsatisfied`, is what the vault's time checks fail with.
 - **`batchReducer.prepareBatches` can't be proved on a chain that checks proofs.** Its dummy batch proof has the
-  wrong domain, and `Vault.reduce` fails with `Checked.inv … scalars_env`. Use `provableBatches` in
-  `o1js/src/vault-view.ts`.
+  wrong domain, and `Vault.reduce` fails with `Checked.inv … scalars_env`. Past 100 pending action lists
+  (`maxUpdatesFinalProof`) it fails the same way even with recursion, because the lists the reduce leaves out are
+  proved from that dummy, so a vault pushed past 100 stays stuck. Use `provableBatches` in
+  `o1js/src/vault-view.ts`, which proves them from a dummy of the action-stack program's domain.
 - **`deploy` needs its slot aimed too.** `init` pins the creation slot to what o1js reports as the network's slot,
   which is the tip's and so often already old. The run makes o1js report the target slot while it builds the command.
