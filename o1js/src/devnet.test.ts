@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { bip32Derive, bip39Seed, runKey, runSecret, sendPlan, targetSlot } from './devnet.js';
+import { AccountUpdate, Field, Mina, PrivateKey, UInt64 } from 'o1js';
+import {
+  SHORT_CHALLENGE_WINDOW_SLOTS, bip32Derive, bip39Seed, buildNotice, deployWithWindow, refuseWindowMismatch, runKey, runSecret, sendPlan,
+  targetSlot, windowOfRun,
+} from './devnet.js';
+import { CHALLENGE_WINDOW_SLOTS } from './policy.js';
+import { VAULT_URI, Vault, VaultAction } from './vault.js';
+import { VaultMirror } from './vault-mirror.js';
 
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex');
 const SLOT_MS = 90_000;
@@ -55,5 +62,71 @@ describe('aiming a command at a slot', () => {
 
   it('gives a proof up once it can only reach a block past the target\'s last slot', () => {
     expect(sendPlan(clock, 1_000_000 + 4 * SLOT_MS, 103n)).toEqual({ kind: 'late' });
+  });
+});
+
+describe('a short-window run', () => {
+  const [SHORT, PUBLISHED] = [SHORT_CHALLENGE_WINDOW_SLOTS, CHALLENGE_WINDOW_SLOTS];
+
+  it('says so in its name and its flag together', () => {
+    expect(windowOfRun('short-1', true)).toBe(SHORT);
+    expect(windowOfRun('smoke-2', false)).toBe(PUBLISHED);
+    expect(() => windowOfRun('smoke-1', true)).toThrow('--short-window');
+    expect(() => windowOfRun('short-1', false)).toThrow('--short-window');
+  });
+
+  it('is refused when its journal recorded another window', () => {
+    expect(() => refuseWindowMismatch(SHORT, { journalled: PUBLISHED.toString(), deployed: true })).toThrow('journal');
+    expect(() => refuseWindowMismatch(PUBLISHED, { journalled: SHORT.toString(), deployed: true })).toThrow('journal');
+    expect(() => refuseWindowMismatch(SHORT, { journalled: SHORT.toString(), deployed: true })).not.toThrow();
+  });
+
+  it('treats a journal from before windows were recorded as the published window, once deployed', () => {
+    expect(() => refuseWindowMismatch(SHORT, { deployed: true })).toThrow('journal');
+    expect(() => refuseWindowMismatch(PUBLISHED, { deployed: true })).not.toThrow();
+    expect(() => refuseWindowMismatch(SHORT, { deployed: false })).not.toThrow();
+  });
+
+  it('is refused when its vault holds another window on chain', () => {
+    expect(() => refuseWindowMismatch(SHORT, { journalled: SHORT.toString(), deployed: true, onChain: PUBLISHED })).toThrow('vault holds');
+    expect(() => refuseWindowMismatch(PUBLISHED, { deployed: true, onChain: SHORT })).toThrow('vault holds');
+    expect(() => refuseWindowMismatch(SHORT, { deployed: true, journalled: SHORT.toString(), onChain: SHORT })).not.toThrow();
+  });
+
+  it('says plainly in its journal that it is a test build', () => {
+    expect(buildNotice(SHORT, '123')).toContain('SHORT-WINDOW TEST BUILD');
+    expect(buildNotice(SHORT, '123')).toContain('123');
+    expect(buildNotice(PUBLISHED, '123')).not.toContain('TEST');
+  });
+
+  it('deploys its window only to its own vault, and a mirror given that window agrees', async () => {
+    const Local = await Mina.LocalBlockchain({ proofsEnabled: false });
+    Mina.setActiveInstance(Local);
+    const [deployer] = Local.testAccounts;
+    const deployed = async (deploy: (vault: Vault) => Promise<void>) => {
+      const key = PrivateKey.random();
+      const vault = new Vault(key.toPublicKey());
+      const tx = await Mina.transaction(deployer, async () => {
+        AccountUpdate.fundNewAccount(deployer);
+        await deploy(vault);
+      });
+      await tx.prove();
+      await tx.sign([deployer.key, key]).send();
+      return vault;
+    };
+    const short = await deployed((v) => deployWithWindow(v, VAULT_URI, SHORT));
+    const published = await deployed((v) => v.deploy({ zkappUri: VAULT_URI }));
+    expect(short.challengeWindow.get().toBigInt()).toBe(SHORT);
+    expect(published.challengeWindow.get().toBigInt()).toBe(PUBLISHED);
+
+    const nullifier = Field(7);
+    const escape = new VaultAction({ ...VaultAction.none(), kind: Field(3), nullifier, nextNullifier: Field(8), amount: UInt64.from(1), size: UInt64.from(1) });
+    const deadline = (mirror: VaultMirror) => {
+      mirror.dispatched(escape);
+      mirror.nextReduce(100n);
+      return mirror.pendingEscape(nullifier)!.deadline.toBigInt();
+    };
+    expect(deadline(new VaultMirror(SHORT))).toBe(101n + SHORT);
+    expect(deadline(new VaultMirror())).toBe(101n + PUBLISHED);
   });
 });

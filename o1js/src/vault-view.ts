@@ -24,7 +24,7 @@ export async function actions(vault: PublicKey, endActionState?: Field): Promise
  */
 export async function vaultView(vault: Vault): Promise<VaultMirror> {
   const reduced = await actions(vault.address, vault.actionState.get());
-  const mirror = new VaultMirror();
+  const mirror = new VaultMirror(vault.challengeWindow.get().toBigInt());
   reduced.forEach((a) => mirror.dispatched(a));
   mirror.nextReduce(0n, reduced.length);
   if (!mirror.tree.root.equals(vault.noteRoot.get()).toBoolean()) throw Error('rebuilt note root is not the vault root');

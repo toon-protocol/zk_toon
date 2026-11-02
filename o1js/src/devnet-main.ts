@@ -1,6 +1,7 @@
 // `npm run devnet -- <run>`: deploys a vault to Mina devnet and walks it through the smoke test of #17,
 // paying from the dev funder. Safe to run again: it reads what the run's journal says is done and carries on,
-// and it stops, saying when to come back, while the escape's challenge window is open. See `docs/devnet-smoke.md`.
+// and it stops, saying when to come back, while the escape's challenge window is open. With `--short-window`, a
+// test run deploys a vault with a window of minutes and waits it out. See `docs/devnet-smoke.md`.
 //
 // TOON_FUNDER_MNEMONIC stays in memory, and so do the run's keys and notes, derived from it. The journal
 // holds only what is public.
@@ -8,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, Scalar, Signature, UInt32, UInt64, Unconstrained, fetchAccount, fetchLastBlock } from 'o1js';
 import { commit } from './balance.js';
 import { signClearance } from './clearance.js';
-import { type Clock, minaKeyFromMnemonic, runKey, runSecret, sendPlan, targetSlot } from './devnet.js';
+import { type Clock, buildNotice, deployWithWindow, minaKeyFromMnemonic, refuseWindowMismatch, runKey, runSecret, sendPlan, targetSlot, windowOfRun } from './devnet.js';
 import { buildKeys } from './keys.js';
 import { DEPOSIT_SIZES, SLOT_SECONDS, TIERS } from './policy.js';
 import { commitSecret, genesisAnchor, nullifier } from './primitives.js';
@@ -25,11 +26,14 @@ const FEE = 100_000_000n;
 const MAX_ATTEMPTS = 6;
 const INCLUSION_TIMEOUT_MS = 40 * 60_000;
 
-const run = process.argv[2];
-if (!run || !/^[a-z0-9-]+$/.test(run)) {
-  console.error('usage: npm run devnet -- <run name>');
+const args = process.argv.slice(2);
+const shortWindow = args.includes('--short-window');
+const [run, ...rest] = args.filter((a) => a !== '--short-window');
+if (!run || rest.length > 0 || !/^[a-z0-9-]+$/.test(run)) {
+  console.error('usage: npm run devnet -- <run name>\n       npm run devnet -- short-<name> --short-window');
   process.exit(2);
 }
+const challengeWindow = windowOfRun(run, shortWindow);
 const mnemonic = process.env.TOON_FUNDER_MNEMONIC;
 if (!mnemonic) throw Error('TOON_FUNDER_MNEMONIC is not set');
 const funderKey = minaKeyFromMnemonic(mnemonic);
@@ -55,17 +59,19 @@ type Attempt = {
   step: string; hash: string; target?: string; sentSlot?: string; landedSlot?: string; height?: string;
   proveSeconds?: number; inclusionSeconds?: number; failure?: unknown; fee: string;
 };
-type Journal = { run: string; vault: string; funder: string; treasury: string; destination: string; facts: Record<string, unknown>; done: string[]; attempts: Attempt[]; sent?: { step: string; hash: string } };
+type Build = { notice: string; challengeWindowSlots: string };
+type Journal = { run: string; build?: Build; vault: string; funder: string; treasury: string; destination: string; facts: Record<string, unknown>; done: string[]; attempts: Attempt[]; sent?: { step: string; hash: string } };
 const journalDir = new URL('../../docs/devnet-smoke/', import.meta.url);
 const journalPath = new URL(`${run}.json`, journalDir);
 const journal: Journal = existsSync(journalPath)
   ? JSON.parse(readFileSync(journalPath, 'utf8'))
-  : { run, vault: vaultAddress.toBase58(), funder: FUNDER_ADDRESS, treasury: treasury.toBase58(), destination: destination.toBase58(), facts: {}, done: [], attempts: [] };
+  : { run, build: undefined, vault: vaultAddress.toBase58(), funder: FUNDER_ADDRESS, treasury: treasury.toBase58(), destination: destination.toBase58(), facts: {}, done: [], attempts: [] };
 const saveJournal = () => {
   mkdirSync(journalDir, { recursive: true });
   writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`);
 };
 const log = (message: string) => console.log(`${new Date().toISOString()} ${message}`);
+refuseWindowMismatch(challengeWindow, { journalled: journal.build?.challengeWindowSlots, deployed: journal.done.includes('deploy') });
 
 // --- The chain. ---
 async function graphql<T>(query: string, variables: object = {}): Promise<T> {
@@ -278,6 +284,8 @@ journal.facts.vaultCodeHash = keys.vault.codeHash;
 journal.facts.requestKeyHash = keys.circuits.request.verificationKey.hash;
 journal.facts.withdrawalKeyHash = keys.circuits.withdrawal.verificationKey.hash;
 journal.facts.reducerKeyHash = keys.circuits.vaultReducer.verificationKey.hash;
+journal.build = { notice: buildNotice(challengeWindow, keys.vault.codeHash), challengeWindowSlots: challengeWindow.toString() };
+log(journal.build.notice);
 saveJournal();
 
 await step('accounts', () => land('accounts', async () => {
@@ -301,13 +309,18 @@ await step('deploy', () => land('deploy', async (target) => {
   try {
     const tx = await Mina.transaction(payer, async () => {
       AccountUpdate.fundNewAccount(funder);
-      await vault.deploy({ zkappUri: VAULT_URI });
+      await deployWithWindow(vault, VAULT_URI, challengeWindow);
     });
     return await sealed(tx, [upgradeKey]);
   } finally {
     Mina.setActiveInstance(network);
   }
 }));
+
+await refresh();
+refuseWindowMismatch(challengeWindow, { journalled: journal.build.challengeWindowSlots, deployed: true, onChain: vault.challengeWindow.get().toBigInt() });
+journal.facts.challengeWindowOnChain = challengeWindow.toString();
+saveJournal();
 
 await step('setup', () => land('setup', async () => {
   await refresh(treasury);
@@ -402,7 +415,10 @@ if (!journal.done.includes('finalize')) {
   journal.facts.escapeDeadline = deadline.toString();
   const slot = await wallSlot();
   saveJournal();
-  if (slot < deadline) {
+  if (shortWindow) {
+    // About 3 minutes: wait it out rather than exit.
+    while ((await wallSlot()) < deadline) await sleep(15_000);
+  } else if (slot < deadline) {
     const hours = (Number(deadline - slot) * Number(SLOT_SECONDS)) / 3600;
     log(`the escape's window is open until slot ${deadline}, now ${slot}: about ${hours.toFixed(1)} hours. Run this again after that.`);
     process.exit(0);

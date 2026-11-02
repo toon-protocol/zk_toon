@@ -1,8 +1,9 @@
 // What the devnet smoke run (`devnet-main.ts`) computes without touching a chain: the funder's key from its
 // mnemonic, the run's own keys, and when to send a command. See `docs/devnet-smoke.md`.
 import { createECDH, createHmac, pbkdf2Sync } from 'node:crypto';
-import { PrivateKey } from 'o1js';
-import { SLOT_SECONDS } from './policy.js';
+import { PrivateKey, UInt64 } from 'o1js';
+import { CHALLENGE_WINDOW_SLOTS, SLOT_SECONDS } from './policy.js';
+import type { Vault } from './vault.js';
 
 const SLOT_MS = Number(SLOT_SECONDS) * 1000;
 /** The order of secp256k1's group, which BIP32 keys are scalars of. */
@@ -75,4 +76,54 @@ export function sendPlan(c: Clock, nowMs: number, target: bigint): { kind: 'wait
   const from = slotStart(c, target - 1n) + SLOT_MS / 3;
   if (nowMs < from) return { kind: 'wait', ms: from - nowMs };
   return nowMs < slotStart(c, target + 1n) ? { kind: 'send' } : { kind: 'late' };
+}
+
+/**
+ * The challenge window of a short-window test run: about 3 minutes instead of 2 days, so a devnet run can show
+ * an escape paying out in one sitting. Only `npm run devnet -- short-<name> --short-window` uses it.
+ */
+export const SHORT_CHALLENGE_WINDOW_SLOTS = 2n;
+const SHORT_RUN = /^short-/;
+
+/**
+ * The window run `run` is for. A short-window run says so twice, in its name and its flag, so neither its
+ * journal nor a command line can pass for the other kind.
+ */
+export function windowOfRun(run: string, shortWindow: boolean): bigint {
+  if (shortWindow !== SHORT_RUN.test(run)) {
+    throw Error(`run ${run}: a run is named short-<name> exactly when it has --short-window`);
+  }
+  return shortWindow ? SHORT_CHALLENGE_WINDOW_SLOTS : CHALLENGE_WINDOW_SLOTS;
+}
+
+/**
+ * Refuses a run whose window is not the one its journal recorded, or not the one its vault holds on chain.
+ * `journalled` is the journal's window. A journal from before windows were recorded has none, and if it has
+ * deployed (`deployed`) it deployed the published window. `onChain` is the vault's state, once it exists.
+ */
+export function refuseWindowMismatch(window: bigint, was: { journalled?: string; deployed: boolean; onChain?: bigint }) {
+  const journalled = was.journalled !== undefined ? BigInt(was.journalled) : was.deployed ? CHALLENGE_WINDOW_SLOTS : undefined;
+  if (journalled !== undefined && journalled !== window) {
+    throw Error(`this run's challenge window is ${window} slots, but its journal's is ${journalled}`);
+  }
+  if (was.onChain !== undefined && was.onChain !== window) {
+    throw Error(`this run's challenge window is ${window} slots, but its vault holds ${was.onChain}`);
+  }
+}
+
+/**
+ * Deploys `vault` with `window` as its challenge window, within a transaction. `init` isn't a proved method: it
+ * runs inside the signed deploy, so the window is state the deployer writes, and the verification keys don't
+ * depend on it. The published vault's `deploy` and keys never reach this code.
+ */
+export async function deployWithWindow(vault: Vault, zkappUri: string, window: bigint) {
+  await vault.deploy({ zkappUri });
+  vault.challengeWindow.set(UInt64.from(window));
+}
+
+/** What a run's journal says about its build, in words a reader can't miss. */
+export function buildNotice(window: bigint, codeHash: string) {
+  if (window === CHALLENGE_WINDOW_SLOTS) return `Published vault build: a challenge window of ${window} slots.`;
+  return `SHORT-WINDOW TEST BUILD: its challenge window is ${window} slots, not the published ${CHALLENGE_WINDOW_SLOTS}. `
+    + `Its window is state written at deploy, so its code hash ${codeHash} and key hashes (see facts) can't tell it from a vault with the published window.`;
 }

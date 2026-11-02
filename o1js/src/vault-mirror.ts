@@ -19,6 +19,9 @@ export class VaultMirror {
   /** Pending escapes by current nullifier. */
   private records = new Map<bigint, PendingEscape>();
 
+  /** `challengeWindow`: the vault's, in slots. Its on-chain state is what its reduce reads (`vaultView` passes that). */
+  constructor(private readonly challengeWindow = CHALLENGE_WINDOW_SLOTS) {}
+
   /** Records an action the vault dispatched. */
   dispatched(action: VaultAction) {
     this.pending.push(action);
@@ -44,7 +47,7 @@ export class VaultMirror {
   nextReduce(now: bigint, batchSize = REDUCE_BATCH_SIZE) {
     const nullifiers = this.nullifiers.clone();
     const escapes = this.escapes.clone();
-    const deadline = UInt64.from(now + 1n + CHALLENGE_WINDOW_SLOTS);
+    const deadline = UInt64.from(now + 1n + this.challengeWindow);
     const spent = (n: Field) => this.nullifiers.isIncluded(n).toBoolean();
     const witnesses: NoteWitness[] = this.pending.splice(0, batchSize).map((a) => {
       const w = this.tree.witness(this.tree.nextIndex);
