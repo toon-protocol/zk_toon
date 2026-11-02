@@ -76,8 +76,8 @@ commands). The refund returned **22.00 MINA** exactly (20.89 from the destinatio
   The other state `init` writes is set the same way (inferred from the code, not tried on devnet).
 - **An aimed command can still miss.** Six of the seven aimed commands landed in range. The first deposit was
   sent in time, and no block came between slots 930927 and 930933, past its range. It was charged and proved again.
-- **Empty blocks happen with commands waiting.** Slots 930951 to 930953 had blocks with no command.
-  The finalize, sent at 930953, landed in 930956. Inclusion here is small-sample evidence: one run, 13 commands.
+- **Inclusion times follow the gaps between blocks.** The finalize was sent 11 s after slot 930953's block, so it
+  waited for the next one, in slot 930956. This is one run of 13 commands, too small to say more.
 
 ## Run `smoke-1`, 2026-11-01
 
