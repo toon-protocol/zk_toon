@@ -58,6 +58,16 @@ impl<V: ProofVerifier> FileEvidence<V> {
         Self { path: path.into(), verifier, index: RefCell::default(), verified: RefCell::default() }
     }
 
+    /// The request proofs recorded at `nullifier`, each an o1js `JsonProof` as UTF-8 bytes: the
+    /// evidence a defeat or raise carries to the vault.
+    pub fn proofs_at(&self, nullifier: &Nullifier) -> Result<Vec<Vec<u8>>, PortError> {
+        self.refresh()?;
+        let index = self.index.borrow();
+        Ok(index.by_nullifier.get(nullifier).map_or_else(Vec::new, |slot| {
+            slot.grants.iter().map(|g| g.grant.proof.clone()).collect()
+        }))
+    }
+
     /// Read what was appended since the last refresh.
     fn refresh(&self) -> Result<(), PortError> {
         let unavailable = |what: &str| PortError::Unavailable(format!("evidence file: {what}"));

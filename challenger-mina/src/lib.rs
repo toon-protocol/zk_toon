@@ -21,6 +21,7 @@ pub mod graphql;
 mod http;
 mod nullifier;
 mod relay;
+pub mod service;
 
 pub use chain::{MinaChain, RequestProofs, Settings, TxSource};
 pub use graphql::{Endpoint, Graphql};

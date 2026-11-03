@@ -112,3 +112,15 @@ fn an_escape_is_open_while_the_tips_slot_is_below_its_deadline_whatever_the_bloc
     assert_eq!(open_at(deadline, deadline), 0, "not open at the deadline");
     assert_eq!(open_at(deadline + 1, deadline), 0, "not open after it");
 }
+
+#[test]
+fn the_chain_time_is_the_recorded_tip_slot() {
+    let settings = Settings { vault: vault_key(), fee_payer: fee_payer(), poll: Duration::ZERO };
+    let port = MinaChain::new(settings, Recorded, Scripted::default(), AnyProof).unwrap();
+    let tip = fixture()["vaultState"]["data"]["bestChain"][0]["protocolState"]["consensusState"]["slotSinceGenesis"]
+        .as_str()
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
+    assert_eq!(port.now().unwrap(), tip);
+}

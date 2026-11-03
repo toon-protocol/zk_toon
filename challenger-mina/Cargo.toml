@@ -17,3 +17,7 @@ zk-toon-tx-builder = { path = "../tx-builder" }
 [dev-dependencies]
 mina-curves = { git = "https://github.com/o1-labs/proof-systems", rev = "ab84160fa2c22290a8506a7742ac1378879fc386", default-features = false }
 sha2 = "0.10"
+
+[[bin]]
+name = "zk-toon-challenger"
+path = "src/main.rs"

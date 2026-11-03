@@ -25,3 +25,9 @@ pub trait EvidencePort {
     /// Every recorded request proof at `nullifier`.
     fn at_nullifier(&self, nullifier: &Nullifier) -> Result<Vec<Evidence>, PortError>;
 }
+
+impl<T: EvidencePort + ?Sized> EvidencePort for std::rc::Rc<T> {
+    fn at_nullifier(&self, nullifier: &Nullifier) -> Result<Vec<Evidence>, PortError> {
+        (**self).at_nullifier(nullifier)
+    }
+}

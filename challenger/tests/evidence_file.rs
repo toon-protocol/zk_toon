@@ -192,3 +192,21 @@ fn an_unreadable_file_is_unavailable_not_empty() {
     let port = FileEvidence::new(&f.0, Verifier(true, Rc::default()));
     assert!(matches!(port.at_nullifier(&nullifier(ID)), Err(PortError::Unavailable(_))));
 }
+
+#[test]
+fn the_recorded_proofs_at_a_nullifier_are_handed_over_as_recorded() {
+    let (at_id, at_next) = (grant(ID, 10, false, b"a"), grant(NEXT, 1, true, b"c"));
+    let f = TempFile::new("proofs", &[at_id.clone(), close(ID, 6, b"a"), at_next.clone()]);
+    let port = FileEvidence::new(&f.0, Verifier(true, Rc::default()));
+    let proof = |r: &Record| match r {
+        Record::Grant(g) => g.proof.clone(),
+        _ => unreachable!(),
+    };
+    assert_eq!(port.proofs_at(&nullifier(ID)).unwrap(), vec![proof(&at_id)]);
+    assert_eq!(port.proofs_at(&nullifier(NEXT)).unwrap(), vec![proof(&at_next)]);
+    assert!(port.proofs_at(&nullifier(99)).unwrap().is_empty());
+    // Appended after the port opened, it is handed over too.
+    let later = grant(99, 10, false, b"d");
+    f.append(&later);
+    assert_eq!(port.proofs_at(&nullifier(99)).unwrap(), vec![proof(&later)]);
+}

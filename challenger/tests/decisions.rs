@@ -230,3 +230,14 @@ fn the_lead_is_a_count_of_slots() {
         Decision::Alarm(AlarmReason::DeadlineTooClose { remaining: 0 })
     );
 }
+
+#[test]
+fn the_escape_with_the_nearest_deadline_is_acted_on_first() {
+    let later = Escape { id: [5; 32], next_nullifier: [6; 32], deadline: DEADLINE, ..escape(0, 100) };
+    let sooner = Escape { id: [7; 32], next_nullifier: [8; 32], deadline: DEADLINE / 2, ..escape(0, 100) };
+    let chain = FakeChain::new(0, vec![later, sooner]);
+    let evidence = FakeEvidence::default().with(ev([6; 32], 10, 0, false, true)).with(ev([8; 32], 10, 0, false, true));
+    let mut c = Challenger::new(chain.clone(), evidence, MemoryJournal::default(), CFG);
+    c.tick(0).unwrap();
+    assert_eq!(chain.submissions(), vec![([7; 32], Action::Defeat), ([5; 32], Action::Defeat)]);
+}
