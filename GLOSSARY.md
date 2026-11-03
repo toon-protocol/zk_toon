@@ -216,8 +216,15 @@ _Avoid_: VK dump, key bundle
 
 **Vault code hash**:
 The hash of the vault's verification key: the key a deployed vault account carries, and so the only
-thing that names its code on chain.
+thing that names its code on chain. It names nothing else: not the state or permissions a deployer wrote, which
+only the vault check covers (ADR 0008).
 _Avoid_: Contract hash, bytecode hash
+
+**Vault check**:
+What a client runs on a vault address before trusting it: a pass, or a refusal naming what failed. It compares the
+account with the published code hash, ADR 0006's permissions and policy, and replays its actions from the empty
+tree. A pass on a vault with history shows its books are consistent, not that its history is real (ADR 0008).
+_Avoid_: Vault audit, vault verification
 
 **Proofs-on set**:
 The named tests that compile the circuits and prove for real: the request proof, the subsidised proof,
