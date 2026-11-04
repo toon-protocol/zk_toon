@@ -269,6 +269,70 @@ export const batchReducer = new BatchReducer({ actionType: VaultAction, batchSiz
 export class VaultBatch extends batchReducer.Batch {}
 export class VaultBatchProof extends batchReducer.BatchProof {}
 
+/** The vault's state fields, in the order `declareState` lays them out on the account. */
+export class VaultState extends Struct({
+  actionState: Field,
+  actionStack: Field,
+  noteRoot: Field,
+  nextLeafIndex: Field,
+  rootRing: RootRing,
+  creationTime: UInt64,
+  depositSizes: DepositSizes,
+  noteLifetime: UInt64,
+  challengeWindow: UInt64,
+  nullifierRoot: Field,
+  stateKey: PublicKey,
+  treasury: PublicKey,
+  pendingEscapesRoot: Field,
+  sweepCursor: Field,
+  expiredTotal: UInt64,
+  claimedTotal: UInt64,
+  sweptTotal: UInt64,
+}) {
+  /** What `init` writes for a vault created at slot `created`: the one source `deploy` and the registry's `register` share. */
+  static initial(created: UInt64): VaultState {
+    return new VaultState({
+      actionState: BatchReducer.initialActionState,
+      actionStack: BatchReducer.initialActionStack,
+      noteRoot: emptyNoteRoot(),
+      nextLeafIndex: Field(0),
+      rootRing: RootRing.empty(),
+      creationTime: created,
+      depositSizes: DepositSizes.fromPolicy(),
+      noteLifetime: UInt64.from(policy.NOTE_LIFETIME_SLOTS),
+      challengeWindow: UInt64.from(policy.CHALLENGE_WINDOW_SLOTS),
+      nullifierRoot: new NullifierSet().root,
+      stateKey: PublicKey.empty(),
+      treasury: PublicKey.empty(),
+      pendingEscapesRoot: new PendingEscapes().root,
+      sweepCursor: Field(0),
+      expiredTotal: UInt64.zero,
+      claimedTotal: UInt64.zero,
+      sweptTotal: UInt64.zero,
+    });
+  }
+}
+
+/** ADR 0006's table: the permissions of a vault's account. The one source `deploy`, the registry and the check share. */
+export const lockedPermissions = () => ({
+  editState: Permissions.proof(),
+  send: Permissions.proof(),
+  editActionState: Permissions.proof(),
+  // Not `proof`: that would refuse the upgrade key's delegation too (ADR 0006). An update with no change is harmless.
+  access: Permissions.none(),
+  receive: Permissions.none(),
+  // The upgrade key can replace the contract only after a hard fork, and only after a fork notice.
+  setVerificationKey: Permissions.VerificationKey.impossibleDuringCurrentVersion(),
+  setPermissions: Permissions.impossible(),
+  setTiming: Permissions.impossible(),
+  incrementNonce: Permissions.impossible(),
+  setZkappUri: Permissions.impossible(),
+  setVotingFor: Permissions.impossible(),
+  setTokenSymbol: Permissions.impossible(),
+  // Deliberate: the operator may stake the vault's balance. Delegating can't move funds.
+  setDelegate: Permissions.signature(),
+});
+
 export class Vault extends SmartContract {
   // State fields in use: 2 (batch reducer) + 1 + 1 + (8 + 1) + 1 + 3 + 1 + 1 + 1 + 2 + 2 + 1 + 4 = 29 of Mesa's 32.
   actionState = State<Field>();
@@ -322,24 +386,7 @@ export class Vault extends SmartContract {
       this.aimedSlot = undefined;
     }
     this.account.zkappUri.set(zkappUri);
-    this.account.permissions.set({
-      editState: Permissions.proof(),
-      send: Permissions.proof(),
-      editActionState: Permissions.proof(),
-      // Not `proof`: that would refuse the upgrade key's delegation too (ADR 0006). An update with no change is harmless.
-      access: Permissions.none(),
-      receive: Permissions.none(),
-      // The upgrade key can replace the contract only after a hard fork, and only after a fork notice.
-      setVerificationKey: Permissions.VerificationKey.impossibleDuringCurrentVersion(),
-      setPermissions: Permissions.impossible(),
-      setTiming: Permissions.impossible(),
-      incrementNonce: Permissions.impossible(),
-      setZkappUri: Permissions.impossible(),
-      setVotingFor: Permissions.impossible(),
-      setTokenSymbol: Permissions.impossible(),
-      // Deliberate: the operator may stake the vault's balance. Delegating can't move funds.
-      setDelegate: Permissions.signature(),
-    });
+    this.account.permissions.set(lockedPermissions());
   }
 
   /** The slot the running `deploy` aims at, for `init` to read; not state, so not part of the key. */
@@ -355,21 +402,22 @@ export class Vault extends SmartContract {
       this.aimedSlot ?? UInt64.from(Mina.getNetworkState().globalSlotSinceGenesis.toBigint()),
     );
     requireSlotBetween(this, created, created.add(1));
-    this.creationTime.set(created);
-    this.depositSizes.set(DepositSizes.fromPolicy());
-    this.noteLifetime.set(UInt64.from(policy.NOTE_LIFETIME_SLOTS));
-    this.challengeWindow.set(UInt64.from(policy.CHALLENGE_WINDOW_SLOTS));
-    this.actionState.set(BatchReducer.initialActionState);
-    this.actionStack.set(BatchReducer.initialActionStack);
-    this.noteRoot.set(emptyNoteRoot());
-    this.nextLeafIndex.set(Field(0));
-    this.rootRing.set(RootRing.empty());
-    this.nullifierRoot.set(new NullifierSet().root);
-    this.pendingEscapesRoot.set(new PendingEscapes().root);
-    this.sweepCursor.set(Field(0));
-    this.expiredTotal.set(UInt64.zero);
-    this.claimedTotal.set(UInt64.zero);
-    this.sweptTotal.set(UInt64.zero);
+    const s = VaultState.initial(created);
+    this.creationTime.set(s.creationTime);
+    this.depositSizes.set(s.depositSizes);
+    this.noteLifetime.set(s.noteLifetime);
+    this.challengeWindow.set(s.challengeWindow);
+    this.actionState.set(s.actionState);
+    this.actionStack.set(s.actionStack);
+    this.noteRoot.set(s.noteRoot);
+    this.nextLeafIndex.set(s.nextLeafIndex);
+    this.rootRing.set(s.rootRing);
+    this.nullifierRoot.set(s.nullifierRoot);
+    this.pendingEscapesRoot.set(s.pendingEscapesRoot);
+    this.sweepCursor.set(s.sweepCursor);
+    this.expiredTotal.set(s.expiredTotal);
+    this.claimedTotal.set(s.claimedTotal);
+    this.sweptTotal.set(s.sweptTotal);
   }
 
   /**

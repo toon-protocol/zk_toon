@@ -22,6 +22,8 @@ changed in the vault, so its key is unchanged. `judgeVault` is the same check as
 
 A pass means:
 
+0. The pinned vault registry lists the vault, and the registry's own key, permissions and entries check out. This rule
+   was added by ADR 0011, which supersedes the limit below: the rest of this ADR stands.
 1. The account's verification key hash is the published code hash.
 2. Every permission equals ADR 0006's table, and the account has no vesting schedule, which could lock deposits.
 3. `depositSizes`, `noteLifetime` and `challengeWindow` equal policy.
@@ -66,6 +68,10 @@ of these does harm if prefilled and is now checked too:
 
 ## What a pass doesn't show
 
+**This section is the problem ADR 0011 closes** for any vault the check now passes: the check refuses a vault the pinned
+registry doesn't list, and a registered vault never had an unlocked phase. What follows is the limit that ADR answers,
+and it still describes a vault deployed under its own key.
+
 **A forged close can hide a note, and the check passes that vault.** The deployer, under loose permissions,
 dispatches a fake deposit and a fake close of it with an invented nullifier, writes the state a reduce would leave,
 and locks the account. Replay matches, and the books balance: one deposit, one payout, nothing held. No money ever
@@ -78,12 +84,10 @@ to its deposit), and nothing on the account records whether a payout really happ
 
 So:
 
-- **A pass on a vault with no history is sound.** The verdict's `dispatched` says how many actions the stream holds.
-  At 0 and locked, the state is `init`'s and no forged action exists, and everything dispatched later went through
-  the vault's own methods, while the protocol version stays the same. A wallet that saw a vault that way can extend
-  that trust by remembering the action state it saw.
-- **A pass on a vault with history says its books are consistent, not that they're real.** A wallet first seeing
-  such a vault is trusting that the deployer didn't do this, or trusting whoever vouches for an earlier sighting.
+- **A pass on a vault with no history was sound**, and a wallet could extend that trust by remembering the action state
+  it saw. ADR 0011 removes that path: the registry is the rule, so a wallet has nothing to remember.
+- **A pass on an unregistered vault with history says its books are consistent, not that they're real.** The check now
+  refuses it (ADR 0011).
 
 One lead, not tried: the account's `receiptChainHash` is said to commit to every authorised update of the account,
 so replaying it could show there was no signed phase. That would need the full history of transactions from an

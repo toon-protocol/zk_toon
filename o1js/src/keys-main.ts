@@ -16,6 +16,7 @@ if (!out || rest.length > 0) {
 const keys = await buildKeys(noCache ? { cache: Cache.None } : {});
 writeFileSync(out, `${JSON.stringify(keys, null, 2)}\n`);
 console.log(`vault code hash: ${keys.vault.codeHash}`);
+console.log(`registry code hash: ${keys.registry.codeHash}`);
 for (const [name, c] of Object.entries(keys.circuits)) console.log(`${name} verification key hash: ${c.verificationKey.hash}`);
 console.log(`wrote ${out}`);
 // o1js keeps worker threads alive after compiling.

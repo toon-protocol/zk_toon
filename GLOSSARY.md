@@ -210,7 +210,7 @@ _Avoid_: Prover sidecar, o1js bridge
 
 **Published keys**:
 The verification keys of the request proof, the withdrawal proof and the vault's batch reducer, with
-their hashes and the vault's code hash, that each build writes and the gate uploads. A zk edge's
+their hashes, the vault's code hash and the vault registry's key, that each build writes and the gate uploads. A zk edge's
 greeting pins are checked against them.
 _Avoid_: VK dump, key bundle
 
@@ -221,12 +221,24 @@ only the vault check covers (ADR 0008).
 _Avoid_: Contract hash, bytecode hash
 
 **Vault check**:
-What a client runs on a vault address before trusting it: a pass, or a refusal naming what failed. It compares the
-account with the published code hash, ADR 0006's permissions and policy, and replays its actions from the empty
-tree. A pass on a vault with history shows its books are consistent, not that its history is real (ADR 0008).
+What a client runs on a vault address before trusting it: a pass, or a refusal naming what failed. It refuses a
+vault that the pinned vault registry doesn't list, judges the registry too, compares the account with the published
+code hash, ADR 0006's permissions and policy, and replays its actions from the empty tree (ADR 0008, ADR 0011).
 _Avoid_: Vault audit, vault verification
+
+**Vault registry**:
+The zkApp that deploys each vault in one transaction and records its address as an action. Its proof requires that
+the account is new, that its key is the vault code hash, that its permissions are ADR 0006's table, that its state is
+what `init` writes and that its zkApp URI is the one given. It fixes the vault code hash in its circuit, so a fork
+brings a new registry, and it has no fork notice (ADR 0011).
+_Avoid_: Vault factory, vault directory
+
+**Registered vault**:
+A vault the pinned vault registry deployed and lists. It never had an unlocked phase, so no fake history could be
+written to it. The vault check refuses any other vault (ADR 0011).
+_Avoid_: Verified vault, trusted vault
 
 **Proofs-on set**:
 The named tests that compile the circuits and prove for real: the request proof, the subsidised proof,
-mutual close, escape, defeat, the vault's compile and the compile of `zk-prover`'s `land` program. The gate fails unless each ran and passed.
+mutual close, escape, defeat, the vault's compile, the vault registry's registration and each attack on it, and the compile of `zk-prover`'s `land` program. The gate fails unless each ran and passed.
 _Avoid_: Slow tests, integration tests

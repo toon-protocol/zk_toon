@@ -14,6 +14,7 @@ import { WithdrawalKind, WithdrawalProgram, WithdrawalProof, WithdrawalPublic } 
 import { buildWithdrawal } from './withdrawal-sample.js';
 import { RequestProgram, RequestProof } from './request.js';
 import { buildRequest, defaultSample } from './request-sample.js';
+import { type Registry, deployRegistry, registerVault } from './vault-registry.js';
 
 type Local = Awaited<ReturnType<typeof Mina.LocalBlockchain>>;
 type Account = Local['testAccounts'][number];
@@ -26,14 +27,23 @@ export const balanceOf = (pk: PublicKey) => Mina.getBalance(pk).toBigInt();
 
 let nextSecret = 1000n;
 
+/** The registry each local chain's vaults are deployed through, deployed on first use. */
+const registries = new WeakMap<Local, Promise<Registry>>();
+
 export function vaultHarness(Local: Local) {
   const [payer, deployer, alice, bob, treasuryAccount] = Local.testAccounts;
+
+  /** The registry that deploys this chain's vaults (ADR 0011). */
+  const registry = () => {
+    if (!registries.has(Local)) registries.set(Local, deployRegistry(deployer));
+    return registries.get(Local)!;
+  };
 
   /** Moves the chain forward by `slots`. */
   const advance = (slots: bigint) => Local.setGlobalSlot(Number(now() + slots));
 
-  /** A fresh vault on the shared chain, with its own state key and an off-chain mirror. */
-  async function freshVault({ setup = true } = {}) {
+  /** A fresh vault on the shared chain, with its own state key and an off-chain mirror. It is deployed through the registry, or `direct`ly under its own key. */
+  async function freshVault({ setup = true, direct = false } = {}) {
     const zkappKey = PrivateKey.random();
     const vault = new Vault(zkappKey.toPublicKey());
     const stateKey = PrivateKey.random();
@@ -82,12 +92,17 @@ export function vaultHarness(Local: Local) {
       });
 
     batchReducer.setContractInstance(vault);
-    const tx = await Mina.transaction(deployer, async () => {
-      AccountUpdate.fundNewAccount(deployer);
-      await vault.deploy({ zkappUri: VAULT_URI });
-    });
-    await tx.prove();
-    await tx.sign([deployer.key, zkappKey]).send();
+    if (direct) {
+      // Under its own key, as a deployer can: the vault check refuses it for want of a registry entry.
+      const tx = await Mina.transaction(deployer, async () => {
+        AccountUpdate.fundNewAccount(deployer);
+        await vault.deploy({ zkappUri: VAULT_URI });
+      });
+      await tx.prove();
+      await tx.sign([deployer.key, zkappKey]).send();
+    } else {
+      await registerVault(await registry(), deployer, { vaultKey: zkappKey });
+    }
 
     const h = {
       vault, zkappKey, stateKey, treasury, mirror, send, clearance, closeTx, escapeTx, finalizeTx, defeatTx, raiseTx, sweepTx,
@@ -222,5 +237,5 @@ export function vaultHarness(Local: Local) {
     return h;
   }
 
-  return { payer, deployer, alice, bob, treasuryAccount, advance, freshVault };
+  return { payer, deployer, alice, bob, treasuryAccount, advance, freshVault, registry };
 }

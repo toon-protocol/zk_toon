@@ -4,14 +4,17 @@
 // pass, or a refusal naming what failed. Nothing it reads is trusted: an archive's actions are hashed up to the
 // account's action state, and its events only supply deadlines that the pending escapes root then has to confirm.
 //
+// The vault must be one the pinned vault registry lists (ADR 0011): a vault deployed under its own key can be given a
+// fake history before the account is locked, which replaying can't show. The registry is judged too: its key, its
+// permissions, and its entries, hashed up to its action state.
+//
 // `judgeVault` is the check itself, a pure function of a snapshot; `test-vectors/vault-check.json` holds snapshots
-// and their answers. A pass on a vault with history doesn't rule out a forged close hiding a note: see ADR 0008, "What a pass
-// doesn't show".
+// and their answers.
 import { AccountUpdate, Experimental, Field, Mina, Permissions, PublicKey, Struct, TokenId, Types, UInt64, fetchAccount, fetchLastBlock } from 'o1js';
 import { NoteTree } from './note-tree.js';
 import * as policy from './policy.js';
 import {
-  ActionKind, CLOSE_WINDOW_SLOTS, DepositSizes, EscapeUpdate, NullifierSet, PendingEscapes, RootRing, VaultAction,
+  ActionKind, CLOSE_WINDOW_SLOTS, DepositSizes, EscapeUpdate, NullifierSet, PendingEscapes, RootRing, VaultAction, VaultState,
 } from './vault.js';
 
 /** Every permission's value in ADR 0006's table, in o1js's JSON. `setVerificationKey` adds the transaction version. */
@@ -31,29 +34,25 @@ const PERMISSIONS: Record<string, string> = {
   setDelegate: 'Signature',
 };
 
-/** The vault's state fields, in the order `declareState` lays them out on the account. */
-class VaultState extends Struct({
-  actionState: Field,
-  actionStack: Field,
-  noteRoot: Field,
-  nextLeafIndex: Field,
-  rootRing: RootRing,
-  creationTime: UInt64,
-  depositSizes: DepositSizes,
-  noteLifetime: UInt64,
-  challengeWindow: UInt64,
-  nullifierRoot: Field,
-  stateKey: PublicKey,
-  treasury: PublicKey,
-  pendingEscapesRoot: Field,
-  sweepCursor: Field,
-  expiredTotal: UInt64,
-  claimedTotal: UInt64,
-  sweptTotal: UInt64,
-}) {}
+
+/** What a verdict depends on of the registry, as JSON. `actions` is as in `VaultSnapshot`; each holds the fields of an address. */
+export type RegistrySnapshot = {
+  verificationKeyHash: string | null;
+  permissions: Record<string, unknown>;
+  timed: boolean;
+  /** The account's latest action state. */
+  actionState: string;
+  actions: string[][][];
+};
+
+/** What the check is pinned to: the vault's and the registry's code hashes, as published. The registry's address is the reader's to read. */
+export type VaultPins = { codeHash: string; registryCodeHash: string };
 
 /** All a verdict depends on, as JSON. `actions` holds one list per account update, oldest update first, as o1js reads them. */
 export type VaultSnapshot = {
+  /** The vault's address, in base58. */
+  address: string;
+  registry: RegistrySnapshot;
   slot: string;
   verificationKeyHash: string | null;
   permissions: Record<string, unknown>;
@@ -85,10 +84,7 @@ export type VaultReader = {
 type Refuse = (check: string, detail: string) => void;
 /** The one thing that failed: `check` names it, `detail` says how. */
 export type VaultRefusal = { check: string; detail: string };
-/**
- * `dispatched` is how many actions the vault's history holds. A vault first seen locked at 0 can't hold a forged
- * action (ADR 0008, "What a pass doesn't show").
- */
+/** `dispatched` is how many actions the vault's history holds. */
 export type VaultVerdict = { pass: true; dispatched: number; reduced: number } | { pass: false; refusals: VaultRefusal[] };
 
 /** Reads the active Mina instance. On a network it fetches first; `localChain` is for o1js's LocalBlockchain. */
@@ -119,8 +115,9 @@ export function chainReader({ localChain }: { localChain: boolean }): VaultReade
 }
 
 /** Reads what a verdict depends on. Throws if the reader does, or if there's no account at `address`. */
-export async function readVault(address: PublicKey, reader: VaultReader): Promise<VaultSnapshot> {
-  const account = await reader.account(address);
+export async function readVault(address: PublicKey, registry: PublicKey, reader: VaultReader): Promise<VaultSnapshot> {
+  const [account, registryAccount, registryActions] = await Promise.all([reader.account(address), reader.account(registry), reader.actions(registry)]);
+  if (!registryAccount?.zkapp) throw Error(`no registry zkApp at ${registry.toBase58()}`);
   if (!account) throw Error(`no account at ${address.toBase58()}`);
   const json = Types.Account.toJSON(account);
   if (!account.zkapp) throw Error(`${address.toBase58()} is not a zkApp account`);
@@ -133,6 +130,14 @@ export async function readVault(address: PublicKey, reader: VaultReader): Promis
   const payees = namedPayees(actions);
   const found = await Promise.all(payees.map((p) => reader.account(p)));
   return {
+    address: address.toBase58(),
+    registry: {
+      verificationKeyHash: registryAccount.zkapp.verificationKey?.hash.toString() ?? null,
+      permissions: Types.Account.toJSON(registryAccount).permissions,
+      timed: registryAccount.timing.isTimed.toBoolean(),
+      actionState: registryAccount.zkapp.actionState[0]!.toString(),
+      actions: registryActions,
+    },
     slot: slot.toString(),
     verificationKeyHash: account.zkapp.verificationKey?.hash.toString() ?? null,
     permissions: json.permissions,
@@ -159,37 +164,37 @@ function namedPayees(actions: string[][][]): PublicKey[] {
   }
 }
 
-/** Asks one question of `address`: can it be trusted as a vault of `codeHash`? A failed read refuses. */
-export async function checkVault(address: PublicKey, { codeHash, reader }: { codeHash: string; reader: VaultReader }): Promise<VaultVerdict> {
+/** Asks one question of `address`: can it be trusted as a vault of `codeHash`, listed by `registry`? A failed read refuses. */
+export async function checkVault(
+  address: PublicKey, { codeHash, registry, registryCodeHash, reader }: VaultPins & { registry: PublicKey; reader: VaultReader }
+): Promise<VaultVerdict> {
   let snapshot: VaultSnapshot;
   try {
-    snapshot = await readVault(address, reader);
+    snapshot = await readVault(address, registry, reader);
   } catch (e) {
     return { pass: false, refusals: [{ check: 'read', detail: e instanceof Error ? e.message : String(e) }] };
   }
-  return judgeVault(snapshot, codeHash);
+  return judgeVault(snapshot, { codeHash, registryCodeHash });
 }
 
 /** The verdict on a snapshot, against the published `codeHash` and this build's policy. */
-export function judgeVault(s: VaultSnapshot, codeHash: string): VaultVerdict {
+export function judgeVault(s: VaultSnapshot, pins: VaultPins): VaultVerdict {
   try {
-    return judge(s, codeHash);
+    return judge(s, pins);
   } catch (e) {
     // A snapshot that doesn't even parse came from a node or an archive answering wrongly.
     return { pass: false, refusals: [{ check: 'snapshot', detail: e instanceof Error ? e.message : String(e) }] };
   }
 }
 
-function judge(s: VaultSnapshot, codeHash: string): VaultVerdict {
+function judge(s: VaultSnapshot, { codeHash, registryCodeHash }: VaultPins): VaultVerdict {
   const refusals: VaultRefusal[] = [];
   const refuse = (check: string, detail: string) => refusals.push({ check, detail });
   const same = sameAs(refuse, 'expected');
 
+  judgeRegistry(s, registryCodeHash, refuse);
   same('codeHash', s.verificationKeyHash ?? 'none', codeHash);
-  for (const [name, want] of Object.entries(permissionsWanted())) {
-    const got = JSON.stringify(s.permissions[name]);
-    if (got !== JSON.stringify(want)) refuse(`permissions.${name}`, `is ${got}, expected ${JSON.stringify(want)}`);
-  }
+  judgePermissions('permissions', s.permissions, refuse);
   if (s.timed) refuse('timing', 'the account has a vesting schedule, which can lock deposits');
 
   const state = VaultState.fromFields(s.appState.slice(0, VaultState.sizeInFields()).map((f) => Field(f)));
@@ -210,6 +215,35 @@ function judge(s: VaultSnapshot, codeHash: string): VaultVerdict {
   if (refusals.length > 0 || !history) return { pass: false, refusals };
   return { pass: true, ...history };
 }
+
+function judgePermissions(prefix: string, permissions: Record<string, unknown>, refuse: Refuse) {
+  for (const [name, want] of Object.entries(permissionsWanted())) {
+    const got = JSON.stringify(permissions[name]);
+    if (got !== JSON.stringify(want)) refuse(`${prefix}.${name}`, `is ${got}, expected ${JSON.stringify(want)}`);
+  }
+}
+
+/**
+ * The registry is judged like a vault's account, and its entries are hashed up to its action state, since an archive's
+ * answer counts only if they are. The vault must be among them. A fork replaces the registry, so one pin is judged.
+ */
+function judgeRegistry(s: VaultSnapshot, registryCodeHash: string, refuse: Refuse) {
+  const r = s.registry;
+  sameAs(refuse, 'expected')('registry.codeHash', r.verificationKeyHash ?? 'none', registryCodeHash);
+  judgePermissions('registry.permissions', r.permissions, refuse);
+  if (r.timed) refuse('registry.timing', 'the registry has a vesting schedule');
+  const state = extendActionState(Experimental.BatchReducer.initialActionState, r.actions);
+  if (state.toString() !== r.actionState) {
+    refuse('registry.actionState', "the archive's registry entries do not hash to the registry's action state");
+    return;
+  }
+  const listed = r.actions.flat().filter((e) => e.length === 2).map((e) => PublicKey.fromFields(e.map((f) => Field(f))).toBase58());
+  if (!listed.includes(s.address)) refuse('registry', `${s.address} is not listed by the registry`);
+}
+
+/** `state` extended by each list of actions in `lists`, in order, as the chain extends an account's action state. */
+export const extendActionState = (state: Field, lists: string[][][]) =>
+  lists.reduce((acc, l) => AccountUpdate.Actions.updateSequenceState(acc, AccountUpdate.Actions.fromJSON(l).hash), state);
 
 const sameAs = (refuse: Refuse, wanted: string) => (check: string, got: { toString(): string }, want: { toString(): string }) => {
   if (got.toString() !== want.toString()) refuse(check, `is ${got}, ${wanted} ${want}`);

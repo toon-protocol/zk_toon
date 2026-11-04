@@ -6,6 +6,7 @@ import * as policy from './policy.js';
 import { commitSecret } from './primitives.js';
 import { RootRing, VAULT_URI, Vault, VaultAction } from './vault.js';
 import { now } from './vault-harness.js';
+import { type VaultReader, extendActionState } from './vault-check.js';
 import { WithdrawalKind, WithdrawalPublic } from './withdrawal.js';
 
 const [SMALL] = policy.DEPOSIT_SIZES;
@@ -97,4 +98,25 @@ export function writeReducedDeposit(vault: Vault, deposit: VaultAction) {
   vault.noteRoot.set(tree.root);
   vault.nextLeafIndex.set(Field(1));
   vault.rootRing.set(RootRing.empty().push(tree.root));
+}
+
+/**
+ * `inner`, but with `vaults` also listed by `registry`, as a registry that listed them would show: for judging a forged
+ * vault by every rule other than the registry's. The registry is read from `chain`; its action state is extended to match.
+ */
+export function listing(inner: VaultReader, chain: VaultReader, registry: PublicKey, ...vaults: PublicKey[]): VaultReader {
+  const extra = vaults.map((v) => [PublicKey.toFields(v).map((f) => f.toString())]);
+  return {
+    ...inner,
+    async actions(address) {
+      return address.equals(registry).toBoolean() ? [...(await chain.actions(address)), ...extra] : inner.actions(address);
+    },
+    async account(address) {
+      const account = await inner.account(address);
+      if (!account?.zkapp || !address.equals(registry).toBoolean()) return account;
+      const [state, ...rest] = account.zkapp.actionState;
+      const extended = extendActionState(state!, extra);
+      return { ...account, zkapp: { ...account.zkapp, actionState: [extended, ...rest] } };
+    },
+  };
 }

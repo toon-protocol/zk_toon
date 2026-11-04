@@ -29,13 +29,17 @@ and `hash`, a field in decimal.
     "withdrawal":   { "name": "…", "methods": ["…"], "verificationKey": { "data": "…", "hash": "…" } },
     "vaultReducer": { "name": "…", "verificationKey": { "data": "…", "hash": "…" } }
   },
-  "vault": { "codeHash": "…", "methods": ["…"], "verificationKey": { "data": "…", "hash": "…" } }
+  "vault": { "codeHash": "…", "methods": ["…"], "verificationKey": { "data": "…", "hash": "…" } },
+  "registry": { "codeHash": "…", "methods": ["register"], "verificationKey": { "data": "…", "hash": "…" } }
 }
 ```
 
 - **The vault's code hash is the hash of its verification key.** A zkApp account holds no code, only
   a verification key, so that key's hash is what names a deployed vault's code. `keys.test.ts` deploys
   a vault and checks that its account carries the published hash.
+- **The registry's key is published too.** The vault registry (ADR 0011) fixes the vault's code hash in its circuit, so it
+  is built after the vault compiles and its key changes whenever the vault's does. Its address is no build output: it is
+  in `o1js/registry-deployments.json`, one record per network.
 - **The keys depend on the exact o1js version**, recorded in the file. ADR 0003's pin of the o1js
   version and the key hashes against the Rust prover belongs to the prover (`zk-prover`), not here.
 - **The build fails if the vault doesn't compile.** A method that outgrows one circuit (2^16 rows,

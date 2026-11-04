@@ -8,10 +8,11 @@ import { commitSecret } from './primitives.js';
 import * as policy from './policy.js';
 import { RequestProgram } from './request.js';
 import { signClearance } from './clearance.js';
-import { LOCKED, LOOSENED, dispatch, dispatchTogether, forged as forgedBy, forgedClose as forgedCloseTo, phantomDeposit, writeReducedDeposit } from './vault-forge.js';
+import { LOCKED, LOOSENED, dispatch, listing, dispatchTogether, forged as forgedBy, forgedClose as forgedCloseTo, phantomDeposit, writeReducedDeposit } from './vault-forge.js';
 import { ActionKind, CLOSE_WINDOW_SLOTS, DepositSizes, NullifierSet, PendingEscape, RootRing, Vault, VaultAction, batchReducer } from './vault.js';
-import { checkVault, chainReader, judgeVault, type VaultReader, type VaultSnapshot, type VaultVerdict } from './vault-check.js';
+import { checkVault, chainReader, judgeVault, readVault, type VaultReader, type VaultSnapshot, type VaultVerdict } from './vault-check.js';
 import { balanceOf, now, vaultHarness } from './vault-harness.js';
+import { deployRegistry } from './vault-registry.js';
 import { reduceMirror, vaultView } from './vault-view.js';
 import { WithdrawalKind, WithdrawalProgram } from './withdrawal.js';
 import { buildWithdrawal } from './withdrawal-sample.js';
@@ -25,19 +26,30 @@ Mina.setActiveInstance(Local);
 WithdrawalProgram.setProofsEnabled(false);
 RequestProgram.setProofsEnabled(false);
 
-const { payer, deployer, alice, bob, advance, freshVault, treasuryAccount } = vaultHarness(Local);
+const { payer, deployer, alice, bob, advance, freshVault, treasuryAccount, registry } = vaultHarness(Local);
 const reader = chainReader({ localChain: true });
 
 /** With proofs off every vault carries o1js's dummy key: this is its hash, in place of the published one. */
 let codeHash: string;
+let registryCodeHash: string;
+let registryAddress: PublicKey;
 beforeAll(async () => {
   await batchReducer.compile();
   const h = await freshVault();
   codeHash = Mina.getAccount(h.vault.address).zkapp!.verificationKey!.hash.toString();
+  registryAddress = (await registry()).address;
+  registryCodeHash = Mina.getAccount(registryAddress).zkapp!.verificationKey!.hash.toString();
 });
 
-const check = (address: PublicKey, o: { reader?: VaultReader; codeHash?: string } = {}) =>
-  checkVault(address, { codeHash: o.codeHash ?? codeHash, reader: o.reader ?? reader });
+/**
+ * The check on `address`. A forged vault is deployed under its own key, so the registry doesn't list it: unless `asIs`,
+ * it is shown listed, and the test sees only the rule it is about. `asIs` reads the registry as it is.
+ */
+const check = (address: PublicKey, o: { reader?: VaultReader; codeHash?: string; asIs?: boolean; registryCodeHash?: string; registry?: PublicKey } = {}) =>
+  checkVault(address, {
+    codeHash: o.codeHash ?? codeHash, registryCodeHash: o.registryCodeHash ?? registryCodeHash, registry: o.registry ?? registryAddress,
+    reader: o.asIs ? o.reader ?? reader : listing(o.reader ?? reader, reader, o.registry ?? registryAddress, address),
+  });
 const failed = (v: VaultVerdict) => (v.pass ? [] : v.refusals.map((r) => r.check));
 const expectPass = (v: VaultVerdict) => expect(v.pass ? 'pass' : v.refusals).toBe('pass');
 
@@ -354,10 +366,10 @@ describe('a read that does not hold up', () => {
   });
 });
 
-// A limit, not a guarantee (ADR 0008, "What a pass doesn't show"). If this test fails, the limit may have gone, and
-// the ADR should say so.
-describe('what a pass does not show', () => {
-  it("passes a vault whose forged close hides a phantom note, which then takes a victim's deposit", async () => {
+// The forged close of ADR 0008, "What a pass doesn't show": the books replay and balance, so every rule but the
+// registry's passes it, and it takes a victim's deposit. The registry rule (ADR 0011) is what refuses it.
+describe('a vault whose forged close hides a phantom note', () => {
+  it("is refused for want of a registry entry, though it would otherwise pass and take a victim's deposit", async () => {
     const stateKey = PrivateKey.random();
     const secret = 4242n;
     const deposit = phantomDeposit(secret);
@@ -377,9 +389,11 @@ describe('what a pass does not show', () => {
         ));
       },
     });
+    expect(failed(await check(vault.address, { asIs: true }))).toEqual(['registry']);
+    // Shown listed, nothing else in it is wrong:
     expect(await check(vault.address)).toEqual({ pass: true, dispatched: 2, reduced: 2 });
 
-    // A victim deposits. The check still passes: the books say the vault holds what it owes.
+    // A victim deposits. Were it listed, the check would still pass: the books say the vault holds what it owes.
     const signedDeposit = await Mina.transaction(payer, async () => {
       await vault.deposit(commitSecret(Field(1n)), UInt64.from(SMALL), UInt64.from(now()));
     });
@@ -409,15 +423,90 @@ describe('what a pass does not show', () => {
   });
 });
 
+describe('the registry rule', () => {
+  const real = (address: PublicKey, o: { reader?: VaultReader; registry?: PublicKey; registryCodeHash?: string } = {}) => check(address, { ...o, asIs: true });
+
+  it('passes a registered vault as the registry shows it, through deposit, close, escape and sweep', async () => {
+    const h = await freshVault();
+    const pass = async () => expectPass(await real(h.vault.address));
+    await pass();
+    const notes = [await h.deposit(SMALL), await h.deposit(SMALL), await h.deposit(SMALL)];
+    await pass();
+    await h.reduce();
+    await pass();
+    await h.close(await h.withdrawalProof(notes[0]!, { signed: true, balance: 3n * MINA }));
+    await h.escape(await h.withdrawalProof(notes[1]!, { kind: WithdrawalKind.escape, signed: true, balance: 3n * MINA }));
+    await pass();
+    await h.reduce();
+    await pass();
+    advance(BigInt(policy.NOTE_LIFETIME_SLOTS) + CLOSE_WINDOW_SLOTS + 1n);
+    await h.sweep();
+    await h.reduce();
+    await pass();
+  });
+
+  it('refuses a vault deployed under its own key, naming registry, and nothing else for an honest one', async () => {
+    const direct = await freshVault({ direct: true });
+    expect(failed(await real(direct.vault.address))).toEqual(['registry']);
+    // Not even a deposit and a reduce make it right.
+    await direct.deposit(SMALL);
+    await direct.reduce();
+    expect(failed(await real(direct.vault.address))).toEqual(['registry']);
+  });
+
+  it('refuses a vault another registry deployed, as the check is pinned to one', async () => {
+    const other = await deployRegistry(payer);
+    const h = await freshVault();
+    expect(failed(await real(h.vault.address, { registry: other.address }))).toEqual(['registry']);
+  });
+
+  it('refuses a registry whose key hash is not the published one', async () => {
+    const h = await freshVault();
+    expect(failed(await real(h.vault.address, { registryCodeHash: '12345' }))).toEqual(['registry.codeHash']);
+  });
+
+  it("refuses a registry whose permissions are not ADR 0006's, and one with a vesting schedule", async () => {
+    const h = await freshVault();
+    const snapshot = await readVault(h.vault.address, registryAddress, reader);
+    const pins = { codeHash, registryCodeHash };
+    expect(judgeVault(snapshot, pins).pass).toBe(true);
+    const loose = { ...snapshot, registry: { ...snapshot.registry, permissions: { ...snapshot.registry.permissions, editActionState: 'Signature', setPermissions: 'Signature' } } };
+    expect(failed(judgeVault(loose, pins))).toEqual(['registry.permissions.editActionState', 'registry.permissions.setPermissions']);
+    expect(failed(judgeVault({ ...snapshot, registry: { ...snapshot.registry, timed: true } }, pins))).toEqual(['registry.timing']);
+  });
+
+  it("refuses entries that do not hash up to the registry's action state, so an archive can't add or drop one", async () => {
+    const h = await freshVault();
+    const honest = await reader.actions(registryAddress);
+    expect(honest.length).toBeGreaterThan(0);
+    const dropped: VaultReader = { ...reader, actions: async (a) => (a.equals(registryAddress).toBoolean() ? [] : reader.actions(a)) };
+    expect(failed(await real(h.vault.address, { reader: dropped }))).toEqual(['registry.actionState']);
+    // An entry the registry never recorded, for a vault it did not deploy.
+    const direct = await freshVault({ direct: true });
+    const added: VaultReader = {
+      ...reader,
+      actions: async (a) => (a.equals(registryAddress).toBoolean() ? [...honest, [PublicKey.toFields(direct.vault.address).map(String)]] : reader.actions(a)),
+    };
+    expect(failed(await real(direct.vault.address, { reader: added }))).toEqual(['registry.actionState']);
+  });
+
+  it('refuses when the registry has no account, or the archive cannot answer', async () => {
+    const h = await freshVault();
+    expect(failed(await real(h.vault.address, { registry: PrivateKey.random().toPublicKey() }))).toEqual(['read']);
+    const down: VaultReader = { ...reader, actions: async (a) => { if (a.equals(registryAddress).toBoolean()) throw Error('archive down'); return reader.actions(a); } };
+    expect(failed(await real(h.vault.address, { reader: down }))).toEqual(['read']);
+  });
+});
+
 describe('the published vectors', () => {
   const { cases } = JSON.parse(readFileSync(new URL('../../test-vectors/vault-check.json', import.meta.url), 'utf8')) as {
-    cases: { name: string; codeHash: string; snapshot: VaultSnapshot; refuses: string[] }[];
+    cases: { name: string; codeHash: string; registryCodeHash: string; snapshot: VaultSnapshot; refuses: string[] }[];
   };
   it('cover a pass and a refusal', () => {
     expect(cases.some((c) => c.refuses.length === 0)).toBe(true);
     expect(cases.some((c) => c.refuses.length > 0)).toBe(true);
   });
   it.each(cases.map((c) => [c.name, c] as const))('answer as recorded: %s', (_name, c) => {
-    expect(failed(judgeVault(c.snapshot, c.codeHash))).toEqual(c.refuses);
+    expect(failed(judgeVault(c.snapshot, { codeHash: c.codeHash, registryCodeHash: c.registryCodeHash }))).toEqual(c.refuses);
   });
 });

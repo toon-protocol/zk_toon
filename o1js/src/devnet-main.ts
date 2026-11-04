@@ -11,12 +11,14 @@ import { commit } from './balance.js';
 import { signClearance } from './clearance.js';
 import { type Clock, buildNotice, deployWithWindow, minaKeyFromMnemonic, refuseWindowMismatch, runKey, runSecret, sendPlan, targetSlot, windowOfRun } from './devnet.js';
 import { buildKeys } from './keys.js';
-import { DEPOSIT_SIZES, SLOT_SECONDS, TIERS } from './policy.js';
+import { readDeployments } from './registry-deployments.js';
+import { CHALLENGE_WINDOW_SLOTS, DEPOSIT_SIZES, SLOT_SECONDS, TIERS } from './policy.js';
 import { commitSecret, genesisAnchor, nullifier } from './primitives.js';
 import { stateChain } from './request-sample.js';
 import { stateFields } from './state.js';
 import { createBuilder } from './tx-builder.js';
 import { VAULT_URI, Vault, batchReducer, setupFields } from './vault.js';
+import { Uri, registryClass, vaultKey } from './vault-registry.js';
 import { pendingEscapesView, provableBatches, reduceMirror } from './vault-view.js';
 
 const MINA_URL = process.env.MINA_GRAPHQL ?? 'https://devnet-plain-1.gcp.o1test.net/graphql';
@@ -281,6 +283,7 @@ if (journal.facts.vaultCodeHash !== undefined && journal.facts.vaultCodeHash !==
 }
 journal.facts.o1js = keys.o1js;
 journal.facts.vaultCodeHash = keys.vault.codeHash;
+journal.facts.registryCodeHash = keys.registry.codeHash;
 journal.facts.requestKeyHash = keys.circuits.request.verificationKey.hash;
 journal.facts.withdrawalKeyHash = keys.circuits.withdrawal.verificationKey.hash;
 journal.facts.reducerKeyHash = keys.circuits.vaultReducer.verificationKey.hash;
@@ -299,6 +302,19 @@ await step('accounts', () => land('accounts', async () => {
   return sealed(tx);
 }, { aimed: false }));
 
+/** The registry this network's deployment record names, with its account fetched. There is no record until #81 deploys one. */
+async function pinnedRegistry() {
+  const record = readDeployments().find((d) => d.network === 'devnet');
+  if (!record) throw Error('no registry deployment record for devnet in registry-deployments.json: deploy one first (#81), or use --short-window');
+  const Registry = await registryClass(Field(keys.vault.codeHash));
+  const registry = new Registry(PublicKey.fromBase58(record.registry));
+  await fetchAccount({ publicKey: registry.address });
+  if (Mina.getAccount(registry.address).zkapp?.verificationKey?.hash.toString() !== keys.registry.codeHash) {
+    throw Error(`the registry at ${record.registry} does not carry this build's registry key ${keys.registry.codeHash}`);
+  }
+  return registry;
+}
+
 await step('deploy', () => land('deploy', async (target) => {
   await refresh();
   await fetchLastBlock();
@@ -307,9 +323,15 @@ await step('deploy', () => land('deploy', async (target) => {
     ...network, getNetworkState: () => ({ ...network.getNetworkState(), globalSlotSinceGenesis: UInt32.from(target) }),
   });
   try {
+    // The published window goes through the registry (ADR 0011). A short-window vault is deployed directly, and the
+    // vault check refuses it for want of a registry entry: it exists to wait out a window of minutes.
+    const registered = challengeWindow === CHALLENGE_WINDOW_SLOTS;
+    const registry = registered ? await pinnedRegistry() : undefined;
+    const [vk, uri] = [await vaultKey(), Uri.from(VAULT_URI)];
     const tx = await Mina.transaction(payer, async () => {
       AccountUpdate.fundNewAccount(funder);
-      await deployWithWindow(vault, VAULT_URI, challengeWindow);
+      if (registry) await registry.register(vaultAddress, vk, UInt64.from(target), uri);
+      else await deployWithWindow(vault, VAULT_URI, challengeWindow);
     });
     return await sealed(tx, [upgradeKey]);
   } finally {
