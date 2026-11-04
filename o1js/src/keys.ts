@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { Cache } from 'o1js';
 import { RequestProgram } from './request.js';
 import { Vault, batchReducer } from './vault.js';
+import { registryClass } from './vault-registry.js';
 import { WithdrawalProgram } from './withdrawal.js';
 
 /** A verification key as o1js serialises it: base64 `data`, and its `hash`, a field in decimal. */
@@ -24,6 +25,8 @@ export type Keys = {
     vaultReducer: PublishedCircuit;
   };
   vault: { codeHash: string; methods: string[]; verificationKey: PublishedKey };
+  /** The vault registry (ADR 0011), built for that vault code hash. Its address is no build output: see `registry-deployments.json`. */
+  registry: { codeHash: string; methods: string[]; verificationKey: PublishedKey };
 };
 
 /** A compiled key in its published form. */
@@ -42,6 +45,9 @@ export async function buildKeys({ cache = Cache.FileSystemDefault }: { cache?: C
   // `batchReducer.compile()` takes no options; its program's `compile` does, though its type says not.
   const reducer = await (batchReducer.program.compile as (o: { cache: Cache }) => ReturnType<typeof batchReducer.compile>)({ cache });
   const vault = await Vault.compile({ cache });
+  // The registry fixes the vault's code hash in its circuit, so it compiles after the vault.
+  const Registry = await registryClass(vault.verificationKey.hash, { cache, compile: true });
+  const registry = { verificationKey: Registry._verificationKey! };
   return {
     o1js,
     circuits: {
@@ -53,6 +59,11 @@ export async function buildKeys({ cache = Cache.FileSystemDefault }: { cache?: C
       codeHash: vault.verificationKey.hash.toString(),
       methods: (Vault._methods ?? []).map((m) => m.methodName),
       verificationKey: published(vault.verificationKey),
+    },
+    registry: {
+      codeHash: registry.verificationKey.hash.toString(),
+      methods: (Registry._methods ?? []).map((m) => m.methodName),
+      verificationKey: published(registry.verificationKey),
     },
   };
 }

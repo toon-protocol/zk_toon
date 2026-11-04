@@ -15,6 +15,12 @@ run waits it out. The script refuses a `short-` name without the flag and the fl
 other than the one in the run's journal, and a vault that holds another window on chain. A journal that deployed
 before windows were recorded counts as the published window.
 
+A run with the published window deploys its vault through the vault registry (ADR 0011), the one that
+`o1js/registry-deployments.json` records for devnet. There is no record until a registry is deployed there (#81), and
+the run stops saying so. A short-window vault is deployed directly under its own key, and the vault check refuses it
+for want of a registry entry (`registry`); so did `smoke-1` and `short-1`, which predate the registry. The test is
+what the run shows, not a vault a payer should trust.
+
 ## Run `short-1`, 2026-11-02: the escape pays out, on a short-window test vault
 
 **This is a short-window test vault, not the published policy.** Its challenge window is 2 slots, not 1,920, so

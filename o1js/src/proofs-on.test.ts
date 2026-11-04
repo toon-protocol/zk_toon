@@ -16,8 +16,11 @@ function report(tests: { title: string; status: string }[]) {
 const allPassed = () => NAMES.map((title) => ({ title, status: 'passed' }));
 
 describe('the proofs-on set', () => {
-  it('names the request proof, close, reduce limit, escape, defeat and subsidised proof, the vault compile, its network independence and the land key', () => {
-    expect(Object.keys(PROOFS_ON).sort()).toEqual(['close', 'constants', 'defeat', 'escape', 'landVk', 'reduceLimit', 'request', 'subsidised', 'vault']);
+  it('names the request proof, close, reduce limit, escape, defeat and subsidised proof, the vault compile, its network independence, the registry and each attack on it, and the land key', () => {
+    expect(Object.keys(PROOFS_ON).sort()).toEqual([
+      'close', 'constants', 'defeat', 'escape', 'landVk', 'reduceLimit', 'registry', 'registryEarlier', 'registryExisting', 'registryLater',
+      'registryNoProof', 'registryOtherKey', 'registryRogueKey', 'registryTampered', 'registryUris', 'request', 'subsidised', 'vault',
+    ]);
     expect(new Set(NAMES).size).toBe(NAMES.length);
   });
 

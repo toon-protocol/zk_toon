@@ -11,6 +11,15 @@ export const PROOFS_ON = {
   reduceLimit: 'proofs on: a keeper reduces a vault with more action lists pending than a reduce takes',
   vault: 'proofs on: the vault compiles, and a deployed vault carries the published code hash',
   constants: 'proofs on: the vault and the circuits compile to the same keys under other network constants',
+  registry: 'proofs on: a vault registers in one transaction, with the published key, the state init writes and a listing',
+  registryExisting: 'proofs on: the registry refuses an address that already has an account',
+  registryEarlier: 'proofs on: the registry refuses a vault written to earlier in the same transaction',
+  registryLater: 'proofs on: the registry leaves a vault no later write in the same transaction the permissions forbid',
+  registryTampered: 'proofs on: the registry refuses a vault changed after its transaction is proved',
+  registryOtherKey: 'proofs on: the registry refuses any verification key but the published vault',
+  registryNoProof: 'proofs on: nobody adds a registry entry without the registry proof',
+  registryRogueKey: 'proofs on: a rogue key under the published hash leaves the vault account stuck',
+  registryUris: 'proofs on: two URIs register under one compiled key, and a URI changed after proving is refused',
   landVk: "proofs on: this o1js compiles zk-prover's land program to the pinned verification key",
 } as const;
 

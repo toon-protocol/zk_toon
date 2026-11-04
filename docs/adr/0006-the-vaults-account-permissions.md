@@ -76,8 +76,8 @@ trusts the key holders.
 
 All of this depends on the account really having these permissions and a state `init` wrote, which the vault code
 hash doesn't show. A deployer can write anything under the upgrade key's signature before locking the account. So these
-guarantees hold only for a vault that passes the vault check, and that check has a limit on a vault with history
-(ADR 0008, "A client checks a vault before trusting it").
+guarantees hold only for a vault that passes the vault check, and that check refuses a vault the vault registry
+didn't deploy (ADR 0008, "A client checks a vault before trusting it", and ADR 0011).
 
 ## Rejected
 
