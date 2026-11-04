@@ -99,7 +99,7 @@ pub fn run(options: Options) -> Result<(), String> {
     let (mina, archive) = (relay.mina_url(), relay.archive_url());
     let builder = TxBuilder::spawn(node_command(&options.o1js, &["--mina", &mina, "--archive", &archive]))
         .map_err(|e| format!("transaction builder: {e}"))?;
-    let builder = SharedBuilder(Rc::new(RefCell::new(builder)), Rc::default());
+    let builder = SharedBuilder { builder: Rc::new(RefCell::new(builder)), unreachable: Rc::default() };
     let evidence = Rc::new(FileEvidence::new(&options.evidence, BuilderVerifier(builder.clone())));
     let chain = MinaChain::new(options.settings.clone(), graphql, builder.clone(), evidence.clone())
         .map_err(|e| format!("{e:?}"))?;
@@ -110,7 +110,7 @@ pub fn run(options: Options) -> Result<(), String> {
         for line in pass(&mut challenger, now) {
             println!("{line}");
         }
-        if let Some(why) = builder.1.take() {
+        if let Some(why) = builder.unreachable.take() {
             return Err(format!("transaction builder unreachable, exiting: {why}"));
         }
         sleep(options.interval);
@@ -118,16 +118,19 @@ pub fn run(options: Options) -> Result<(), String> {
 }
 
 /// The transaction builder, shared by the verifier and the chain port. A pass verifies evidence
-/// and submits one after the other, never at once. The second field holds why the builder became
-/// unreachable, if it did.
+/// and submits one after the other, never at once.
 #[derive(Clone)]
-struct SharedBuilder(Rc<RefCell<TxBuilder>>, Rc<Cell<Option<String>>>);
+struct SharedBuilder {
+    builder: Rc<RefCell<TxBuilder>>,
+    /// Why the builder became unreachable, if it did.
+    unreachable: Rc<Cell<Option<String>>>,
+}
 
 impl SharedBuilder {
     fn call<A>(&self, f: impl FnOnce(&mut TxBuilder) -> Result<A, BuilderError>) -> Result<A, BuilderError> {
-        let answer = f(&mut self.0.borrow_mut());
+        let answer = f(&mut self.builder.borrow_mut());
         if let Err(e @ (BuilderError::Io(_) | BuilderError::Protocol(_))) = &answer {
-            self.1.set(Some(e.to_string()));
+            self.unreachable.set(Some(e.to_string()));
         }
         answer
     }
@@ -157,12 +160,10 @@ impl ProofVerifier for BuilderVerifier {
     }
 }
 
-/// The evidence file's proofs as the evidence a defeat or raise carries.
+/// The evidence file's proofs that verify, as the evidence a defeat or raise carries. A proof that
+/// isn't JSON names no evidence and is left out, as the verifier leaves it out.
 impl<V: ProofVerifier> RequestProofs for Rc<FileEvidence<V>> {
     fn at(&self, nullifier: &EscapeId) -> Result<Vec<Value>, PortError> {
-        self.proofs_at(nullifier)?
-            .iter()
-            .map(|p| serde_json::from_slice(p).map_err(|_| PortError::Refused("a recorded proof is not JSON".into())))
-            .collect()
+        Ok(self.proofs_at(nullifier)?.iter().filter_map(|p| serde_json::from_slice(p).ok()).collect())
     }
 }

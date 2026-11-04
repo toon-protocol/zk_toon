@@ -103,7 +103,8 @@ The fee payer's key is read only from `ZK_TOON_FEE_PAYER_KEY`, never from a flag
 in a process listing. A bad flag or key stops it at once with exit status 2.
 
 The builder runs with proofs on, started through a `Relay`. It also verifies each recorded request
-proof against the request proof's verification key before the core acts on it. A pass reads the
+proof against the request proof's verification key before the core acts on it, and a defeat or
+raise only ever carries a proof that verified. A pass reads the
 chain time (the tip's slot, `MinaChain::now`) and ticks the core (`zk_toon_challenger::service::pass`).
 Then it prints one line per report to stdout:
 
@@ -111,11 +112,11 @@ Then it prints one line per report to stdout:
 |---|---|
 | `seen <nullifier>` | an escape it hadn't seen before |
 | `submitted <nullifier> defeat` / `… raise <nanomina>` | a defeat or raise that landed |
-| `submit-failed <nullifier> <action>: refused: …` | the vault, the chain or the builder refused it; the next pass decides again |
+| `submit-failed <nullifier> <action>: refused: …` / `…: unavailable: …` | the vault, the chain or the builder refused it, or it couldn't be sent; the next pass decides again |
 | `alarm <nullifier> evidence-invalid` | recorded evidence that doesn't verify or doesn't make sense; nothing submitted |
 | `alarm <nullifier> deadline-too-close <slots>` | too close to the deadline to act safely; nothing submitted |
 | `evidence-unavailable <nullifier>` | the evidence file couldn't be read; retried next pass |
-| `unavailable: …` | the chain or the journal couldn't be read; the whole pass is retried next interval |
+| `unavailable: …` / `refused: …` | the chain or the journal couldn't be read; the whole pass is retried next interval |
 
 A nullifier prints as 64 hex digits, in the port's encoding. A pass takes the escapes nearest
 deadline first, since each submission waits for its outcome. A pass never stops the service. A chain

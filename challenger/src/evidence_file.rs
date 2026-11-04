@@ -58,14 +58,20 @@ impl<V: ProofVerifier> FileEvidence<V> {
         Self { path: path.into(), verifier, index: RefCell::default(), verified: RefCell::default() }
     }
 
-    /// The request proofs recorded at `nullifier`, each an o1js `JsonProof` as UTF-8 bytes: the
-    /// evidence a defeat or raise carries to the vault.
+    /// The request proofs recorded at `nullifier` that verify, each an o1js `JsonProof` as UTF-8
+    /// bytes: the evidence a defeat or raise carries to the vault. One that doesn't verify is never
+    /// handed over, so it can't be submitted.
     pub fn proofs_at(&self, nullifier: &Nullifier) -> Result<Vec<Vec<u8>>, PortError> {
         self.refresh()?;
         let index = self.index.borrow();
-        Ok(index.by_nullifier.get(nullifier).map_or_else(Vec::new, |slot| {
-            slot.grants.iter().map(|g| g.grant.proof.clone()).collect()
-        }))
+        let Some(slot) = index.by_nullifier.get(nullifier) else { return Ok(Vec::new()) };
+        let mut proofs = Vec::new();
+        for entry in &slot.grants {
+            if self.verifies(entry)? {
+                proofs.push(entry.grant.proof.clone());
+            }
+        }
+        Ok(proofs)
     }
 
     /// Read what was appended since the last refresh.

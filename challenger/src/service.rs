@@ -5,7 +5,7 @@
 //! is logged, and the next pass reads everything afresh.
 
 use crate::core::Challenger;
-use crate::journal::Journal;
+use crate::journal::{hex, Journal};
 use crate::ports::{EvidencePort, PortError, VaultChainPort};
 use crate::types::*;
 
@@ -49,8 +49,4 @@ fn error(e: &PortError) -> String {
         PortError::Refused(m) => format!("refused: {m}"),
         PortError::Unavailable(m) => format!("unavailable: {m}"),
     }
-}
-
-fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
 }
