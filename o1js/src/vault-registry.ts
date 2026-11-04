@@ -17,8 +17,9 @@ import { VAULT_URI, Vault, VaultState, lockedPermissions } from './vault.js';
 export class Uri extends Struct({ data: String, hash: Field }) {
   /** The URI and the hash o1js writes for it. */
   static from(data: string): Uri {
-    // The hash is the transaction's own, read off an update that sets it: no deep import of o1js's bindings.
-    const update = AccountUpdate.create(PrivateKey.random().toPublicKey());
+    // The hash is the transaction's own, read off an update that sets it: no deep import of o1js's bindings. The update
+    // is `default`, not `create`, so it isn't attached to a transaction the caller has open.
+    const update = AccountUpdate.default(PrivateKey.random().toPublicKey());
     update.account.zkappUri.set(data);
     return new Uri({ data, hash: update.body.update.zkappUri.value.hash });
   }

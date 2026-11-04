@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, Types, UInt64 } from 'o1js';
 import { VAULT_URI, Vault, lockedPermissions } from './vault.js';
-import { deployRegistry, registerVault, registryPermissions } from './vault-registry.js';
+import { Uri, deployRegistry, registerVault } from './vault-registry.js';
 import { now } from './vault-harness.js';
 
 const Local = await Mina.LocalBlockchain({ proofsEnabled: false });
@@ -43,7 +43,7 @@ describe('a vault the registry deploys', { timeout: 120_000 }, () => {
     expect(a.zkapp!.zkappUri).toBe(b.zkapp!.zkappUri);
     expect(a.zkapp!.provedState).toBe(b.zkapp!.provedState);
     expect(a.zkapp!.actionState).toEqual(b.zkapp!.actionState);
-    expect([a.delegate, a.votingFor, a.tokenSymbol, a.timing, a.balance, a.nonce]).toEqual([a.publicKey, '0', '', a.timing, '0', b.nonce]);
+    expect([a.delegate, a.votingFor, a.tokenSymbol, a.timing, a.balance, a.nonce]).toEqual([a.publicKey, '0', '', b.timing, '0', b.nonce]);
     expect(b.delegate).toBe(b.publicKey);
     expect(a.timing.isTimed).toBe(false);
   });
@@ -93,6 +93,19 @@ describe('a vault the registry deploys', { timeout: 120_000 }, () => {
   });
 });
 
+describe('the URI helper', () => {
+  it("gives the hash o1js writes for the URI, and adds nothing to a transaction it's called in", async () => {
+    const update = AccountUpdate.default(PrivateKey.random().toPublicKey());
+    update.account.zkappUri.set(VAULT_URI);
+    expect(Uri.from(VAULT_URI).hash).toEqual(update.body.update.zkappUri.value.hash);
+    expect(Uri.from('https://other.example').hash).not.toEqual(Uri.from(VAULT_URI).hash);
+    const tx = await Mina.transaction(deployer, async () => {
+      Uri.from(VAULT_URI);
+    });
+    expect(tx.transaction.accountUpdates).toHaveLength(0);
+  });
+});
+
 describe('the registry itself', { timeout: 120_000 }, () => {
   it("is deployed under ADR 0006's permissions, which the vault shares, and holds no state", async () => {
     const registry = await deployRegistry(payer);
@@ -100,7 +113,8 @@ describe('the registry itself', { timeout: 120_000 }, () => {
     expect(permissions.editActionState).toBe('Proof');
     expect(permissions.setVerificationKey).toEqual({ auth: 'Impossible', txnVersion: expect.any(String) });
     expect(permissions.setPermissions).toBe('Impossible');
-    expect(registryPermissions).toBe(lockedPermissions);
+    const vault = await registerVault(registry, deployer, { vaultKey: PrivateKey.random() });
+    expect(permissions).toEqual(json(vault.address).permissions);
     expect(zkapp!.appState.every((f) => f === '0')).toBe(true);
   });
 });

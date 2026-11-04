@@ -232,8 +232,7 @@ function judgeRegistry(s: VaultSnapshot, registryCodeHash: string, refuse: Refus
   sameAs(refuse, 'expected')('registry.codeHash', r.verificationKeyHash ?? 'none', registryCodeHash);
   judgePermissions('registry.permissions', r.permissions, refuse);
   if (r.timed) refuse('registry.timing', 'the registry has a vesting schedule');
-  const empty = Experimental.BatchReducer.initialActionState;
-  const state = r.actions.reduce((acc, l) => AccountUpdate.Actions.updateSequenceState(acc, AccountUpdate.Actions.fromJSON(l).hash), empty);
+  const state = extendActionState(Experimental.BatchReducer.initialActionState, r.actions);
   if (state.toString() !== r.actionState) {
     refuse('registry.actionState', "the archive's registry entries do not hash to the registry's action state");
     return;
@@ -241,6 +240,10 @@ function judgeRegistry(s: VaultSnapshot, registryCodeHash: string, refuse: Refus
   const listed = r.actions.flat().filter((e) => e.length === 2).map((e) => PublicKey.fromFields(e.map((f) => Field(f))).toBase58());
   if (!listed.includes(s.address)) refuse('registry', `${s.address} is not listed by the registry`);
 }
+
+/** `state` extended by each list of actions in `lists`, in order, as the chain extends an account's action state. */
+export const extendActionState = (state: Field, lists: string[][][]) =>
+  lists.reduce((acc, l) => AccountUpdate.Actions.updateSequenceState(acc, AccountUpdate.Actions.fromJSON(l).hash), state);
 
 const sameAs = (refuse: Refuse, wanted: string) => (check: string, got: { toString(): string }, want: { toString(): string }) => {
   if (got.toString() !== want.toString()) refuse(check, `is ${got}, ${wanted} ${want}`);

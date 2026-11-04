@@ -6,7 +6,7 @@ import * as policy from './policy.js';
 import { commitSecret } from './primitives.js';
 import { RootRing, VAULT_URI, Vault, VaultAction } from './vault.js';
 import { now } from './vault-harness.js';
-import type { VaultReader } from './vault-check.js';
+import { type VaultReader, extendActionState } from './vault-check.js';
 import { WithdrawalKind, WithdrawalPublic } from './withdrawal.js';
 
 const [SMALL] = policy.DEPOSIT_SIZES;
@@ -115,7 +115,7 @@ export function listing(inner: VaultReader, chain: VaultReader, registry: Public
       const account = await inner.account(address);
       if (!account?.zkapp || !address.equals(registry).toBoolean()) return account;
       const [state, ...rest] = account.zkapp.actionState;
-      const extended = extra.reduce((acc, l) => AccountUpdate.Actions.updateSequenceState(acc, AccountUpdate.Actions.fromJSON(l).hash), state!);
+      const extended = extendActionState(state!, extra);
       return { ...account, zkapp: { ...account.zkapp, actionState: [extended, ...rest] } };
     },
   };

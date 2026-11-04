@@ -327,9 +327,10 @@ await step('deploy', () => land('deploy', async (target) => {
     // vault check refuses it for want of a registry entry: it exists to wait out a window of minutes.
     const registered = challengeWindow === CHALLENGE_WINDOW_SLOTS;
     const registry = registered ? await pinnedRegistry() : undefined;
+    const [vk, uri] = [await vaultKey(), Uri.from(VAULT_URI)];
     const tx = await Mina.transaction(payer, async () => {
       AccountUpdate.fundNewAccount(funder);
-      if (registry) await registry.register(vaultAddress, await vaultKey(), UInt64.from(target), Uri.from(VAULT_URI));
+      if (registry) await registry.register(vaultAddress, vk, UInt64.from(target), uri);
       else await deployWithWindow(vault, VAULT_URI, challengeWindow);
     });
     return await sealed(tx, [upgradeKey]);
