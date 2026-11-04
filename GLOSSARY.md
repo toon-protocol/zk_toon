@@ -235,7 +235,8 @@ _Avoid_: Vault factory, vault directory
 
 **Registered vault**:
 A vault the pinned vault registry deployed and lists. It never had an unlocked phase, so no fake history could be
-written to it. The vault check refuses any other vault (ADR 0011).
+written to it. The vault check refuses any other vault (ADR 0011). Being registered says how the vault was deployed,
+and nothing about its treasury, its state key or its operator's conduct.
 _Avoid_: Verified vault, trusted vault
 
 **Proofs-on set**:
