@@ -23,7 +23,9 @@ node --import tsx src/tx-builder-main.ts --local [--proofs=on|off]
 | `--proofs` | `on` (the default) makes real request and withdrawal proofs, and real transaction proofs when the chain checks them. `off` makes dummy proofs, but the circuits and the vault's methods still check every constraint. |
 
 In Rust, `zk_toon_tx_builder::node_command(o1js_dir, &[flags])` returns this command and
-`TxBuilder::spawn(cmd)` starts it.
+`TxBuilder::spawn(cmd)` starts it. `TxBuilder::set_timeout(Some(d))` bounds how long a request may
+wait for its answer: one that runs out kills the process and fails as `io::ErrorKind::TimedOut`, and
+every later request fails too, so start a new builder.
 
 ## The protocol
 

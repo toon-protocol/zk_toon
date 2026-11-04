@@ -1,7 +1,7 @@
 //! Policy arithmetic shared with `o1js/src/policy.ts`. Times are slots (ADR 0007, GLOSSARY: Slot);
 //! amounts are nanomina.
 //!
-//! The deposit sizes and tiers are open values in the spec (#2); these are provisional.
+//! The deposit sizes and tiers are the devnet values (ADR 0010); mainnet's are decided at the mainnet gates.
 
 /// How long a slot lasts since the Mesa fork. Durations below are whole slots of it.
 pub const SLOT_SECONDS: u64 = 90;

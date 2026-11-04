@@ -64,7 +64,7 @@ fn io(e: std::io::Error) -> PortError {
     PortError::Unavailable(format!("journal: {e}"))
 }
 
-fn hex(b: &[u8]) -> String {
+pub(crate) fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 

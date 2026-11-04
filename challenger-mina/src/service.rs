@@ -9,10 +9,11 @@ use std::time::Duration;
 
 use mina_signer::{CompressedPubKey, SecKey};
 use serde_json::{json, Value};
-use zk_toon_challenger::service::pass;
+use zk_toon_challenger::service::serve;
 use zk_toon_challenger::{Challenger, Config, EscapeId, FileEvidence, FileJournal, PortError, ProofVerifier};
 use zk_toon_tx_builder::{node_command, Challenge, Defeat, Error as BuilderError, FeePayer, Raise, TxBuilder};
 
+use crate::chain::{read_state_key, request_public};
 use crate::{Endpoints, HttpGraphql, MinaChain, Relay, RequestProofs, Settings, TxSource};
 
 /// The environment variable that holds the fee payer's private key (base58, `EK…`). No flag carries
@@ -33,11 +34,46 @@ pub struct Options {
     pub config: Config,
     /// The pause between two passes.
     pub interval: Duration,
+    /// How long one request to the transaction builder may take before the builder is stopped.
+    pub builder_timeout: Duration,
 }
 
-const USAGE: &str = "zk-toon-challenger --vault <B62…> --mina <url> --archive <url> --evidence <file> \
---journal <file> --o1js <dir> [--socks5 <host:port>] [--fee <nanomina>] [--min-lead <slots>] \
-[--interval <s>] [--poll <s>] [--timeout <s>], with the fee payer's key in ZK_TOON_FEE_PAYER_KEY";
+/// A flag the service takes, and what its value is.
+pub struct Flag {
+    pub name: &'static str,
+    pub value: &'static str,
+    pub required: bool,
+}
+
+const fn flag(name: &'static str, value: &'static str, required: bool) -> Flag {
+    Flag { name, value, required }
+}
+
+/// Every flag the service takes. Each takes a value.
+pub const FLAGS: &[Flag] = &[
+    flag("--vault", "<B62…>", true),
+    flag("--mina", "<url>", true),
+    flag("--archive", "<url>", true),
+    flag("--evidence", "<file>", true),
+    flag("--journal", "<file>", true),
+    flag("--o1js", "<dir>", true),
+    flag("--socks5", "<host:port>", false),
+    flag("--fee", "<nanomina>", false),
+    flag("--min-lead", "<slots>", false),
+    flag("--interval", "<s>", false),
+    flag("--poll", "<s>", false),
+    flag("--timeout", "<s>", false),
+    flag("--builder-timeout", "<s>", false),
+];
+
+/// The service's usage line, from [`FLAGS`].
+pub fn usage() -> String {
+    let flags: Vec<String> = FLAGS
+        .iter()
+        .map(|f| if f.required { format!("{} {}", f.name, f.value) } else { format!("[{} {}]", f.name, f.value) })
+        .collect();
+    format!("zk-toon-challenger {}, with the fee payer's key in {FEE_PAYER_KEY}", flags.join(" "))
+}
 
 impl Options {
     /// Reads the flags in `args` (without the program name) and the fee payer's key, the value of
@@ -46,18 +82,14 @@ impl Options {
         let mut flags: Vec<(&str, &str)> = Vec::new();
         let mut rest = args.iter();
         while let Some(flag) = rest.next() {
-            let known = [
-                "--vault", "--mina", "--archive", "--evidence", "--journal", "--o1js", "--socks5", "--fee",
-                "--min-lead", "--interval", "--poll", "--timeout",
-            ];
-            if !known.contains(&flag.as_str()) {
-                return Err(format!("unknown flag {flag}; usage: {USAGE}"));
+            if !FLAGS.iter().any(|f| f.name == flag) {
+                return Err(format!("unknown flag {flag}; usage: {}", usage()));
             }
             let value = rest.next().ok_or_else(|| format!("{flag} needs a value"))?;
             flags.push((flag, value));
         }
         let get = |flag: &str| flags.iter().rev().find(|(f, _)| *f == flag).map(|(_, v)| v.to_string());
-        let need = |flag: &str| get(flag).ok_or_else(|| format!("{flag} is required; usage: {USAGE}"));
+        let need = |flag: &str| get(flag).ok_or_else(|| format!("{flag} is required; usage: {}", usage()));
         let number = |flag: &str, default: u64| -> Result<u64, String> {
             get(flag).map_or(Ok(default), |v| v.parse().map_err(|_| format!("{flag} is a whole number, not {v:?}")))
         };
@@ -86,6 +118,7 @@ impl Options {
             o1js: need("--o1js")?.into(),
             config: Config { min_lead: number("--min-lead", 40)? },
             interval: seconds("--interval", 60)?,
+            builder_timeout: seconds("--builder-timeout", 900)?,
         })
     }
 }
@@ -97,37 +130,36 @@ pub fn run(options: Options) -> Result<(), String> {
     let graphql = Arc::new(HttpGraphql::new(options.endpoints.clone())?);
     let relay = Relay::start(graphql.clone()).map_err(|e| format!("relay: {e}"))?;
     let (mina, archive) = (relay.mina_url(), relay.archive_url());
-    let builder = TxBuilder::spawn(node_command(&options.o1js, &["--mina", &mina, "--archive", &archive]))
+    let mut builder = TxBuilder::spawn(node_command(&options.o1js, &["--mina", &mina, "--archive", &archive]))
         .map_err(|e| format!("transaction builder: {e}"))?;
-    let builder = SharedBuilder(Rc::new(RefCell::new(builder)), Rc::default());
-    let evidence = Rc::new(FileEvidence::new(&options.evidence, BuilderVerifier(builder.clone())));
+    builder.set_timeout(Some(options.builder_timeout));
+    let builder = SharedBuilder { builder: Rc::new(RefCell::new(builder)), unreachable: Rc::default() };
+    let state_key = read_state_key(&*graphql, &options.settings.vault)
+        .map_err(|e| format!("reading the vault's state key: {e:?}"))?;
+    let verifier = ForStateKey { state_key, inner: BuilderVerifier(builder.clone()) };
+    let evidence = Rc::new(FileEvidence::new(&options.evidence, verifier));
     let chain = MinaChain::new(options.settings.clone(), graphql, builder.clone(), evidence.clone())
         .map_err(|e| format!("{e:?}"))?;
     let journal = FileJournal::open(&options.journal).map_err(|e| format!("{e:?}"))?;
     let mut challenger = Challenger::new(chain, evidence, journal, options.config.clone());
-    loop {
-        let now = challenger.chain.now();
-        for line in pass(&mut challenger, now) {
-            println!("{line}");
-        }
-        if let Some(why) = builder.1.take() {
-            return Err(format!("transaction builder unreachable, exiting: {why}"));
-        }
-        sleep(options.interval);
-    }
+    let why = serve(&mut challenger, || builder.unreachable.take(), || sleep(options.interval), |line| println!("{line}"));
+    Err(format!("transaction builder unreachable, exiting: {why}"))
 }
 
 /// The transaction builder, shared by the verifier and the chain port. A pass verifies evidence
-/// and submits one after the other, never at once. The second field holds why the builder became
-/// unreachable, if it did.
+/// and submits one after the other, never at once.
 #[derive(Clone)]
-struct SharedBuilder(Rc<RefCell<TxBuilder>>, Rc<Cell<Option<String>>>);
+struct SharedBuilder {
+    builder: Rc<RefCell<TxBuilder>>,
+    /// Why the builder became unreachable, if it did.
+    unreachable: Rc<Cell<Option<String>>>,
+}
 
 impl SharedBuilder {
     fn call<A>(&self, f: impl FnOnce(&mut TxBuilder) -> Result<A, BuilderError>) -> Result<A, BuilderError> {
-        let answer = f(&mut self.0.borrow_mut());
+        let answer = f(&mut self.builder.borrow_mut());
         if let Err(e @ (BuilderError::Io(_) | BuilderError::Protocol(_))) = &answer {
-            self.1.set(Some(e.to_string()));
+            self.unreachable.set(Some(e.to_string()));
         }
         answer
     }
@@ -157,12 +189,31 @@ impl ProofVerifier for BuilderVerifier {
     }
 }
 
-/// The evidence file's proofs as the evidence a defeat or raise carries.
+/// A verifier that first checks a proof's `vault` input is this vault's state key. The vault takes
+/// evidence only under its state key, so a proof under another reads as not verifying (and the
+/// challenger alarms) rather than being submitted and refused on every pass. So does a proof whose
+/// public inputs aren't a request proof's.
+pub struct ForStateKey<V> {
+    pub state_key: CompressedPubKey,
+    pub inner: V,
+}
+
+impl<V: ProofVerifier> ProofVerifier for ForStateKey<V> {
+    fn verifies(&self, proof: &[u8]) -> Result<bool, PortError> {
+        let Some(public) = serde_json::from_slice(proof).ok().and_then(|p: Value| request_public(&p)) else {
+            return Ok(false);
+        };
+        if public.vault_x != self.state_key.x || public.vault_is_odd != self.state_key.is_odd {
+            return Ok(false);
+        }
+        self.inner.verifies(proof)
+    }
+}
+
+/// The evidence file's proofs that verify, as the evidence a defeat or raise carries. A proof that
+/// isn't JSON names no evidence and is left out, as the verifier leaves it out.
 impl<V: ProofVerifier> RequestProofs for Rc<FileEvidence<V>> {
     fn at(&self, nullifier: &EscapeId) -> Result<Vec<Value>, PortError> {
-        self.proofs_at(nullifier)?
-            .iter()
-            .map(|p| serde_json::from_slice(p).map_err(|_| PortError::Refused("a recorded proof is not JSON".into())))
-            .collect()
+        Ok(self.proofs_at(nullifier)?.iter().filter_map(|p| serde_json::from_slice(p).ok()).collect())
     }
 }

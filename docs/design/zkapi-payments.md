@@ -207,8 +207,8 @@ notes.
 ## Open questions
 
 1. **Who runs the first zk edge:** the devnet relay hub, or a dedicated node?
-2. **Fixed deposit sizes and tiers:** which values? They set the crowd per size and the payer's
-   worst-case loss.
+2. **Fixed deposit sizes and tiers:** which values for mainnet? They set the crowd per size and the
+   payer's worst-case loss. Devnet's are recorded in ADR 0010.
 3. **Rust verifier:** fork the paused Mina Rust node's verifier, or ask o1Labs to publish one?
 4. **Stablecoin:** when, if ever, does the vault hold something other than MINA?
 5. **Relationship to upstream zkAPI:** we reuse its design, not its code. Do we tell its authors?

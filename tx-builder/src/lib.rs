@@ -13,6 +13,10 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use ark_ff::PrimeField;
 use mina_signer::{CompressedPubKey, Signature};
@@ -93,10 +97,11 @@ impl From<io::Error> for Error {
 
 /// A running builder process. Requests are answered in order, one at a time.
 pub struct TxBuilder {
-    child: Child,
+    child: Arc<Mutex<Child>>,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
+    timeout: Option<Duration>,
 }
 
 impl TxBuilder {
@@ -105,7 +110,14 @@ impl TxBuilder {
         let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
-        Ok(TxBuilder { child, stdin, stdout, next_id: 0 })
+        Ok(TxBuilder { child: Arc::new(Mutex::new(child)), stdin, stdout, next_id: 0, timeout: None })
+    }
+
+    /// How long a request may wait for its answer; `None` (the default) waits for ever. A request
+    /// that runs out of time kills the builder's process and fails as [`io::ErrorKind::TimedOut`];
+    /// every later request fails too, so start a new builder.
+    pub fn set_timeout(&mut self, timeout: Option<Duration>) {
+        self.timeout = timeout;
     }
 
     /// Sends one request and waits for its answer. Returns the answer's `result`.
@@ -113,8 +125,10 @@ impl TxBuilder {
         self.next_id += 1;
         let id = self.next_id;
         let line = json!({ "id": id, "op": op, "params": params }).to_string();
-        self.send_line(&line)?;
-        let answer = self.read_answer()?;
+        let answer = self.timed(|b| {
+            b.send_line(&line)?;
+            b.read_answer()
+        })?;
         if answer["id"] != json!(id) {
             return Err(Error::Protocol(format!("answer to request {} while waiting for {id}", answer["id"])));
         }
@@ -123,9 +137,38 @@ impl TxBuilder {
 
     /// Sends a raw line, as a caller in another language would. For testing the builder.
     pub fn call_raw(&mut self, line: &str) -> Result<Value, Error> {
-        self.send_line(line)?;
-        let answer = self.read_answer()?;
+        let answer = self.timed(|b| {
+            b.send_line(line)?;
+            b.read_answer()
+        })?;
         answer_result(answer)
+    }
+
+    /// Runs `exchange` under the timeout: a watchdog kills the process if it runs out, which ends
+    /// any read or write the exchange is blocked on.
+    fn timed<A>(&mut self, exchange: impl FnOnce(&mut Self) -> Result<A, Error>) -> Result<A, Error> {
+        let Some(timeout) = self.timeout else { return exchange(self) };
+        let (done, finished) = mpsc::channel::<()>();
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let watchdog = {
+            let (child, timed_out) = (self.child.clone(), timed_out.clone());
+            thread::spawn(move || {
+                if finished.recv_timeout(timeout) == Err(mpsc::RecvTimeoutError::Timeout) {
+                    timed_out.store(true, Ordering::SeqCst);
+                    let _ = child.lock().map(|mut c| c.kill());
+                }
+            })
+        };
+        let result = exchange(self);
+        drop(done);
+        let _ = watchdog.join();
+        match result {
+            Err(_) if timed_out.load(Ordering::SeqCst) => Err(Error::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("no answer within {timeout:?}; the builder was stopped"),
+            ))),
+            other => other,
+        }
     }
 
     fn send_line(&mut self, line: &str) -> Result<(), Error> {
@@ -193,8 +236,10 @@ impl TxBuilder {
 
 impl Drop for TxBuilder {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 

@@ -98,12 +98,16 @@ ZK_TOON_FEE_PAYER_KEY=EK… zk-toon-challenger \
 | `--fee` | 100000000 | nanomina per defeat or raise |
 | `--min-lead` | 40 | the fewest slots before a deadline at which it still submits (an hour at 90 s slots) |
 | `--interval`, `--poll`, `--timeout` | 60, 10, 30 | seconds between passes, between reads of a sent transaction, per request |
+| `--builder-timeout` | 900 | seconds one request to the transaction builder may take; past it the builder is stopped and the service exits |
 
 The fee payer's key is read only from `ZK_TOON_FEE_PAYER_KEY`, never from a flag, so it doesn't show
 in a process listing. A bad flag or key stops it at once with exit status 2.
 
 The builder runs with proofs on, started through a `Relay`. It also verifies each recorded request
-proof against the request proof's verification key before the core acts on it. A pass reads the
+proof before the core acts on it: its `vault` input must be the vault's state key (read from the
+vault's state at start), and the proof must verify against the request proof's verification key. A
+proof made for another vault therefore raises `alarm … evidence-invalid` rather than a refused
+submission on every pass, and a defeat or raise only ever carries a proof that verified. A pass reads the
 chain time (the tip's slot, `MinaChain::now`) and ticks the core (`zk_toon_challenger::service::pass`).
 Then it prints one line per report to stdout:
 
@@ -111,11 +115,11 @@ Then it prints one line per report to stdout:
 |---|---|
 | `seen <nullifier>` | an escape it hadn't seen before |
 | `submitted <nullifier> defeat` / `… raise <nanomina>` | a defeat or raise that landed |
-| `submit-failed <nullifier> <action>: refused: …` | the vault, the chain or the builder refused it; the next pass decides again |
+| `submit-failed <nullifier> <action>: refused: …` / `…: unavailable: …` | the vault, the chain or the builder refused it, or it couldn't be sent; the next pass decides again |
 | `alarm <nullifier> evidence-invalid` | recorded evidence that doesn't verify or doesn't make sense; nothing submitted |
 | `alarm <nullifier> deadline-too-close <slots>` | too close to the deadline to act safely; nothing submitted |
 | `evidence-unavailable <nullifier>` | the evidence file couldn't be read; retried next pass |
-| `unavailable: …` | the chain or the journal couldn't be read; the whole pass is retried next interval |
+| `unavailable: …` / `refused: …` | the chain or the journal couldn't be read; the whole pass is retried next interval |
 
 A nullifier prints as 64 hex digits, in the port's encoding. A pass takes the escapes nearest
 deadline first, since each submission waits for its outcome. A pass never stops the service. A chain
@@ -125,10 +129,9 @@ escape. If the builder's process becomes unreachable (it died, or answered out o
 exits with status 2 after the pass, so run it under a supervisor that restarts it (systemd's
 `Restart=always`). The builder's own output (o1js) goes to stderr.
 
-Two limits remain. A pass reads the chain time once, so a pass that waits on several submissions
-checks `--min-lead` for its later escapes against an older slot. Keep `--min-lead` above a few
-inclusions' worth of slots. And a builder that hangs without dying stops the service until the
-supervisor (or an operator) kills it.
+A pass reads the chain time again after each submission, since each waits for its outcome, so a
+later escape's `--min-lead` is measured from when the pass reaches it. A builder request that takes
+longer than `--builder-timeout` stops the builder, and the service exits as for a builder that died.
 
 ## Secrets and logs
 
@@ -147,8 +150,9 @@ vault's public transaction shows.
 | `tests/socks.rs` | direct GraphQL, SOCKS with remote resolution, no fallback when the proxy is down, the builder's relay |
 | `tests/local_chain.rs` | a defeat and a raise through the adapter, accepted by the vault on the builder's local chain |
 | `tests/encoding.rs` | the nullifier encoding |
-| `tests/options.rs` | the service's flags and defaults, and the fee payer's key taken only from the environment |
-| `tests/reading.rs` (chain time) | `now` is the recorded tip's slot |
+| `tests/options.rs` | the service's flags and defaults, the fee payer's key taken only from the environment, and every flag in the usage and in this page |
+| `tests/reading.rs` (chain time, state key) | `now` is the recorded tip's slot; `state_key` is the key the recorded vault was set up with |
+| `tests/verifier.rs` | a proof whose `vault` input isn't the state key doesn't verify, and the proof verifier isn't asked |
 
 The fixture is recorded from the builder's local chain, whose `local.graphql` answers the adapter's
 operations in the daemon's and archive's shapes. To re-record it, run

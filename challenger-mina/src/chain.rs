@@ -86,10 +86,10 @@ impl<G: Graphql, T: TxSource, P: RequestProofs> MinaChain<G, T, P> {
         data(&response).cloned().map_err(|e| PortError::Unavailable(format!("graphql: {e}")))
     }
 
-    /// The chain time: the tip's global slot, which the challenger's decisions are measured in.
-    pub fn now(&self) -> Result<Slot, PortError> {
-        let state = self.query(Endpoint::Mina, &graphql::vault_state(&self.vault))?;
-        tip_slot(&state["bestChain"]).ok_or_else(|| PortError::Unavailable("vault state: no slot".into()))
+    /// The vault's state key, read from its app state: the key a request proof's `vault` input must
+    /// name for the vault to take it as evidence.
+    pub fn state_key(&self) -> Result<CompressedPubKey, PortError> {
+        read_state_key(&self.graphql, &self.settings.vault)
     }
 
     fn view(&self) -> Result<VaultView, PortError> {
@@ -247,9 +247,24 @@ fn escape_updates(events: &Value) -> Result<[Vec<Update>; 2], String> {
     Ok([decode(reversed)?, decode(listed.iter().map(|(_, _, f)| f).collect())?])
 }
 
+/// Where the vault's state key starts in its app state: its x, then whether its y is odd.
+const STATE_KEY_INDEX: usize = 20;
+
+/// The state key of `vault`, read from its app state through `graphql`.
+pub(crate) fn read_state_key<G: Graphql + ?Sized>(graphql: &G, vault: &CompressedPubKey) -> Result<CompressedPubKey, PortError> {
+    let unavailable = |m: String| PortError::Unavailable(format!("vault state: {m}"));
+    let response = graphql.post(Endpoint::Mina, &graphql::vault_state(&vault.into_address())).map_err(|e| unavailable(e))?;
+    let state = data(&response).map_err(|e| unavailable(e.to_string()))?;
+    let field = |i: usize| state["account"]["zkappState"].get(i).and_then(Value::as_str).and_then(|s| Field::from_str(s).ok());
+    match (field(STATE_KEY_INDEX), field(STATE_KEY_INDEX + 1).and_then(zk_note::field_to_bool)) {
+        (Some(x), Some(is_odd)) => Ok(CompressedPubKey { x, is_odd }),
+        _ => Err(unavailable("no state key".into())),
+    }
+}
+
 /// A recorded request proof's public inputs, decoded from its `publicInput`; `None` if they aren't a
 /// request proof's.
-fn request_public(proof: &Value) -> Option<RequestPublic> {
+pub(crate) fn request_public(proof: &Value) -> Option<RequestPublic> {
     let fields = proof["publicInput"]
         .as_array()?
         .iter()
@@ -269,6 +284,11 @@ fn builder_error(e: zk_toon_tx_builder::Error) -> PortError {
 }
 
 impl<G: Graphql, T: TxSource, P: RequestProofs> VaultChainPort for MinaChain<G, T, P> {
+    fn now(&self) -> Result<Slot, PortError> {
+        let state = self.query(Endpoint::Mina, &graphql::vault_state(&self.vault))?;
+        tip_slot(&state["bestChain"]).ok_or_else(|| PortError::Unavailable("vault state: no slot".into()))
+    }
+
     fn escapes(&self) -> Result<Vec<Escape>, PortError> {
         let view = self.view()?;
         Ok(view

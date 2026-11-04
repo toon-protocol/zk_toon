@@ -210,3 +210,10 @@ fn the_recorded_proofs_at_a_nullifier_are_handed_over_as_recorded() {
     f.append(&later);
     assert_eq!(port.proofs_at(&nullifier(99)).unwrap(), vec![proof(&later)]);
 }
+
+#[test]
+fn a_proof_that_does_not_verify_is_never_handed_over() {
+    let f = TempFile::new("proofs-unverified", &[grant(NEXT, 10, false, b"a")]);
+    let port = FileEvidence::new(&f.0, Verifier(false, Rc::default()));
+    assert!(port.proofs_at(&nullifier(NEXT)).unwrap().is_empty());
+}

@@ -23,12 +23,18 @@ fn esc(n: u8, conceded: u64, balance: u64, deadline: Slot) -> Escape {
 }
 
 pub fn run<H: Harness>() {
+    reports_the_chain_time::<H>();
     lists_open_escapes_with_deadlines::<H>();
     hides_escapes_past_their_deadline::<H>();
     defeat_closes_the_escape::<H>();
     raise_lifts_the_concession::<H>();
     raise_must_exceed_concession_and_fit_balance::<H>();
     refuses_unknown_escapes::<H>();
+}
+
+fn reports_the_chain_time<H: Harness>() {
+    assert_eq!(H::port(10, vec![]).now().unwrap(), 10);
+    assert_eq!(H::port(1_234, vec![esc(1, 5, 50, 2_000)]).now().unwrap(), 1_234);
 }
 
 fn lists_open_escapes_with_deadlines<H: Harness>() {

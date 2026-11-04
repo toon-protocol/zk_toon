@@ -18,6 +18,8 @@ struct ChainState {
     now: Slot,
     escapes: Vec<Escape>,
     unavailable: bool,
+    /// How far the clock moves while a submission waits for its outcome.
+    slots_per_submission: Slot,
     /// Every accepted submission, in order.
     log: Vec<(EscapeId, Action)>,
 }
@@ -38,6 +40,9 @@ impl FakeChain {
     pub fn add_escape(&self, e: Escape) {
         self.inner.borrow_mut().escapes.push(e);
     }
+    pub fn set_slots_per_submission(&self, slots: Slot) {
+        self.inner.borrow_mut().slots_per_submission = slots;
+    }
     pub fn set_unavailable(&self, v: bool) {
         self.inner.borrow_mut().unavailable = v;
     }
@@ -47,6 +52,14 @@ impl FakeChain {
 }
 
 impl VaultChainPort for FakeChain {
+    fn now(&self) -> Result<Slot, PortError> {
+        let s = self.inner.borrow();
+        if s.unavailable {
+            return Err(PortError::Unavailable("fake chain down".into()));
+        }
+        Ok(s.now)
+    }
+
     fn escapes(&self) -> Result<Vec<Escape>, PortError> {
         let s = self.inner.borrow();
         if s.unavailable {
@@ -65,6 +78,7 @@ impl VaultChainPort for FakeChain {
         let Some(pos) = pos else { return Err(PortError::Refused("no open escape".into())) };
         s.escapes.remove(pos);
         s.log.push((*id, Action::Defeat));
+        s.now += s.slots_per_submission;
         Ok(())
     }
 
@@ -82,6 +96,7 @@ impl VaultChainPort for FakeChain {
         }
         e.conceded = to;
         s.log.push((*id, Action::Raise { to }));
+        s.now += s.slots_per_submission;
         Ok(())
     }
 }
