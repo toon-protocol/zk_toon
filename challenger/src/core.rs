@@ -64,9 +64,11 @@ impl<C: VaultChainPort, E: EvidencePort, J: Journal> Challenger<C, E, J> {
 
     /// One pass over the vault's open escapes. Safe to call repeatedly and after a restart: an
     /// action already journalled as submitted is not repeated, and every open escape is read
-    /// afresh from the chain, so none is missed.
+    /// afresh from the chain, so none is missed. Escapes are taken nearest deadline first, since a
+    /// submission waits for its outcome.
     pub fn tick(&mut self, now: Slot) -> Result<Vec<Report>, PortError> {
-        let escapes = self.chain.escapes()?;
+        let mut escapes = self.chain.escapes()?;
+        escapes.sort_by_key(|e| e.deadline);
         let mut seen: HashSet<EscapeId> = self.journal.seen()?.into_iter().collect();
         let mut done = self.journal.submitted()?;
         let mut reports = Vec::new();

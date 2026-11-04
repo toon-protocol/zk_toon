@@ -86,6 +86,12 @@ impl<G: Graphql, T: TxSource, P: RequestProofs> MinaChain<G, T, P> {
         data(&response).cloned().map_err(|e| PortError::Unavailable(format!("graphql: {e}")))
     }
 
+    /// The chain time: the tip's global slot, which the challenger's decisions are measured in.
+    pub fn now(&self) -> Result<Slot, PortError> {
+        let state = self.query(Endpoint::Mina, &graphql::vault_state(&self.vault))?;
+        tip_slot(&state["bestChain"]).ok_or_else(|| PortError::Unavailable("vault state: no slot".into()))
+    }
+
     fn view(&self) -> Result<VaultView, PortError> {
         let state = self.query(Endpoint::Mina, &graphql::vault_state(&self.vault))?;
         let bad = |m: &str| PortError::Unavailable(format!("vault state: {m}"));

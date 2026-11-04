@@ -12,6 +12,7 @@ pub mod evidence_file;
 pub mod fake;
 pub mod journal;
 pub mod ports;
+pub mod service;
 pub mod types;
 
 pub use crate::core::{decide, Challenger, Config};
