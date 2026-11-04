@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use common::*;
-use zk_toon_challenger_mina::service::Options;
+use zk_toon_challenger_mina::service::{usage, Options, FLAGS};
 
 fn args(extra: &[&str]) -> Vec<String> {
     let vault = fixture()["vault"].as_str().unwrap().to_string();
@@ -53,6 +53,22 @@ fn the_optional_flags() {
     assert_eq!(o.interval, Duration::from_secs(3));
     assert_eq!(o.settings.poll, Duration::from_secs(2));
     assert_eq!(o.endpoints.timeout, Duration::from_secs(9));
+}
+
+#[test]
+fn the_builder_gets_fifteen_minutes_an_answer_unless_told_otherwise() {
+    assert_eq!(Options::parse(&args(&[]), key()).unwrap().builder_timeout, Duration::from_secs(900));
+    assert_eq!(Options::parse(&args(&["--builder-timeout", "5"]), key()).unwrap().builder_timeout, Duration::from_secs(5));
+}
+
+#[test]
+fn every_flag_is_in_the_usage_and_the_docs() {
+    let docs = include_str!("../../docs/challenger-mina.md");
+    for flag in FLAGS {
+        assert!(usage().contains(flag.name), "{} is missing from the usage", flag.name);
+        assert!(docs.contains(&format!("`{}`", flag.name)), "{} is missing from docs/challenger-mina.md", flag.name);
+    }
+    assert!(Options::parse(&args(&["--nonsense", "1"]), key()).unwrap_err().contains(&usage()));
 }
 
 #[test]

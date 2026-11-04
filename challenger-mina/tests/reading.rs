@@ -124,3 +124,11 @@ fn the_chain_time_is_the_recorded_tip_slot() {
         .unwrap();
     assert_eq!(port.now().unwrap(), tip);
 }
+
+#[test]
+fn the_state_key_is_the_one_the_recorded_vault_was_set_up_with() {
+    let settings = Settings { vault: vault_key(), fee_payer: fee_payer(), poll: Duration::ZERO };
+    let port = MinaChain::new(settings, Recorded, Scripted::default(), AnyProof).unwrap();
+    // `local_chain.rs` recorded a vault set up with `keypair(4242)` as its state key.
+    assert_eq!(port.state_key().unwrap(), keypair(4242).public.into_compressed());
+}

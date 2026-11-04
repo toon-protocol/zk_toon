@@ -181,6 +181,9 @@ fn a_submitted_action_is_not_alarmed_on_as_its_deadline_nears() {
 /// Lists its escapes but refuses every submission.
 struct Refusing(Vec<Escape>);
 impl VaultChainPort for Refusing {
+    fn now(&self) -> Result<Slot, PortError> {
+        Ok(0)
+    }
     fn escapes(&self) -> Result<Vec<Escape>, PortError> {
         Ok(self.0.clone())
     }
@@ -240,4 +243,19 @@ fn the_escape_with_the_nearest_deadline_is_acted_on_first() {
     let mut c = Challenger::new(chain.clone(), evidence, MemoryJournal::default(), CFG);
     c.tick(0).unwrap();
     assert_eq!(chain.submissions(), vec![([7; 32], Action::Defeat), ([5; 32], Action::Defeat)]);
+}
+
+#[test]
+fn the_chain_time_is_read_again_after_a_submission_waited() {
+    // Two escapes with evidence to defeat. Submitting the first takes 8 slots to land, which leaves
+    // the second 4 slots: inside `min_lead`, so it is alarmed on, not submitted.
+    let first = Escape { id: [5; 32], next_nullifier: [6; 32], deadline: 1_000, ..escape(0, 100) };
+    let second = Escape { id: [7; 32], next_nullifier: [8; 32], deadline: 1_002, ..escape(0, 100) };
+    let chain = FakeChain::new(990, vec![second, first]);
+    chain.set_slots_per_submission(8);
+    let evidence = FakeEvidence::default().with(ev([6; 32], 10, 0, false, true)).with(ev([8; 32], 10, 0, false, true));
+    let mut c = Challenger::new(chain.clone(), evidence, MemoryJournal::default(), CFG);
+    let reports = c.tick(990).unwrap();
+    assert_eq!(chain.submissions(), vec![([5; 32], Action::Defeat)]);
+    assert!(reports.contains(&Report::Alarm { escape: [7; 32], reason: AlarmReason::DeadlineTooClose { remaining: 4 } }));
 }

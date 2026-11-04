@@ -10,6 +10,8 @@ pub enum PortError {
 
 /// The challenger's view of the vault chain.
 pub trait VaultChainPort {
+    /// The chain time: the tip's global slot.
+    fn now(&self) -> Result<Slot, PortError>;
     /// Open escapes (challenge window not ended, not defeated), with their current concession and
     /// deadline.
     fn escapes(&self) -> Result<Vec<Escape>, PortError>;
