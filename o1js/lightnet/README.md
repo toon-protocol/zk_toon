@@ -78,6 +78,33 @@ really differ. This confirms the order within a command only. It does not exerci
 `impossibleDuringCurrentVersion` and its fallback to `signature` after a hard fork, which a lightnet
 can't do. There is no LocalBlockchain counterpart: with proofs off, both circuits get the same dummy key.
 
+## The rogue key pair (#81)
+
+`vault-registry.lightnet.ts` registers vaults through the vault registry (ADR 0011). A 132-character zkApp URI, as
+long as an operator's fork-notice location might be, registers and reads back as given.
+
+It then registers a vault whose key is `{ data: <rogue>, hash: <published vault code hash> }`, where the rogue data is
+another contract's. The registry's proof checks only the hash, so the command is valid as far as the registry goes.
+LocalBlockchain accepts it, and so does this daemon. **The outcome is neither a refusal nor a stuck account:**
+
+| Run, 2026-11-04 | Registration | Key stored | Published vault's `setup` | Rogue contract's `poke` |
+| --- | --- | --- | --- | --- |
+| Fresh chain, rogue vault first | applied | rogue data, published hash | refused: `Invalid_proof (Pickles.verify dlog_check)` | **applied** |
+| After an honest vault registered on the same chain | applied | published hash (data not read) | applied | refused: `Invalid_proof (Pickles.verify dlog_check)` |
+
+On a fresh chain, the rogue contract controls an account that carries the published code hash. The vault's
+`editState`, `send` and `editActionState` permissions are `proof`, and a proof of the rogue contract verifies, so it
+could move whatever a payer deposits. The vault check compares only the key's hash, so it would pass such a vault.
+Which contract the node verifies against depends on what the node has seen, not on the chain's rules. The test asserts
+only what both runs share: the registration applies, the stored key is the rogue data under the published hash, and
+exactly one of the two contracts' proofs is accepted.
+
+Why, from Mina's source (`compatible`): a command sent as JSON over GraphQL keeps the key's `data` and `hash` as given
+(`verification_key_with_hash` in `fields_derivers_zkapps.ml`). Its binary form carries the data only and recomputes
+the hash on receipt (`Verification_key_wire`). So a peer that receives the command by gossip would see the rogue
+data's own hash, and the registry's proof wouldn't verify there. That suggests a multi-node network refuses the
+command unless a block producer is sent it directly. It has not been run on devnet: this is a single-node lightnet.
+
 ## Recording a vault
 
 `npm run request-fixtures` (#67) runs a real vault here, which the tests above do not, and writes the

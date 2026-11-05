@@ -59,19 +59,28 @@ registry and a new pin. A vault from before the fork isn't registered by the new
 deposits, while deposits already in it can still leave through the methods and the fork notice (ADR 0006). Nothing
 re-registers an old vault. The registry has no fork notice and needs none: it is replaced, not upgraded.
 
+**The registry's key is discarded** (#81). A registry is deployed under a random key that lives only in the deploying
+process (`npm run registry -- deploy`). Its `setVerificationKey` permission falls back to `signature` after a fork,
+so a kept key is the only way its code could ever change; with none, an old registry can't be given new code after a
+fork, which closes the first limit below for a registry deployed this way. Nothing is lost: `send` is `proof`, the
+account holds nothing, and only `setDelegate` needs a signature.
+
 **Limits:**
 
-- **A wallet that still pins an old registry after a fork can pass a vault forged after it.** The old registry's
-  permissions let its key be replaced after the fork, and a vault forged under a new-version key is not one the old
-  registry deployed, but the check looks only at the old registry's entries and the old key hash.
+- **A wallet that still pins an old registry after a fork can pass a vault forged after it,** unless the registry's
+  key was discarded, as the devnet one will be. The old registry's permissions let its key be replaced after the
+  fork, and a vault forged under a new-version key is not one the old registry deployed, but the check looks only at
+  the old registry's entries and the old key hash.
 - **A wallet must update its pin before a fork** (to the new registry and code hash, which each fork publishes).
 - A registry's deployer could list entries before locking it. The deployment record covers that.
 - A URI isn't judged: a pass doesn't show it is real or watched.
-- The key's data isn't compared, only its hash. `{ data: <rogue>, hash: <published> }` on a new account is accepted by
-  `LocalBlockchain`, which skips its consistency check for accounts that don't exist yet; the account is then stuck, and
-  every proof on it is refused, the published contract's included (a test shows it). From Mina's source, peers refuse
-  such an update and the SNARK binds the data to the hash, so the worst case looks like a stuck account, not theft.
-  That hasn't run on a real node: it is #81's first criterion.
+- **The key's data isn't compared, only its hash, and on a node that is not safe** (#81). `{ data: <rogue>, hash:
+  <published> }` on a new account is accepted by `LocalBlockchain` and by a single-node lightnet. On a fresh lightnet
+  the account then runs the rogue contract: its proofs are accepted, the published contract's are refused, and the
+  vault check passes the account. After an honest vault had registered on the same chain, the reverse held. Mina's
+  binary form recomputes a key's hash from its data, so peers that get the command by gossip should refuse it, but
+  that hasn't run on devnet (`o1js/lightnet/README.md`). This reopens the decision that the check stays hash-only;
+  until it is settled, no registry is deployed on devnet and no sighting is published.
 - Registration is permissionless and costs only the transaction, so an operator can add entries cheaply and a long
   list reads slowly.
 

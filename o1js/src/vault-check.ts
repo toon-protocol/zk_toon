@@ -250,7 +250,7 @@ const sameAs = (refuse: Refuse, wanted: string) => (check: string, got: { toStri
 };
 
 /** ADR 0006's table as this build's o1js writes it: the verification key's permission names the transaction version. */
-function permissionsWanted(): Record<string, unknown> {
+export function permissionsWanted(): Record<string, unknown> {
   const { txnVersion } = Permissions.VerificationKey.impossibleDuringCurrentVersion();
   return { ...PERMISSIONS, setVerificationKey: { auth: PERMISSIONS.setVerificationKey, txnVersion: txnVersion.toString() } };
 }

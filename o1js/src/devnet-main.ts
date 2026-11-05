@@ -19,6 +19,7 @@ import { stateFields } from './state.js';
 import { createBuilder } from './tx-builder.js';
 import { VAULT_URI, Vault, batchReducer, setupFields } from './vault.js';
 import { Uri, registryClass, vaultKey } from './vault-registry.js';
+import { chainReader, checkVault } from './vault-check.js';
 import { pendingEscapesView, provableBatches, reduceMirror } from './vault-view.js';
 
 const MINA_URL = process.env.MINA_GRAPHQL ?? 'https://devnet-plain-1.gcp.o1test.net/graphql';
@@ -302,10 +303,16 @@ await step('accounts', () => land('accounts', async () => {
   return sealed(tx);
 }, { aimed: false }));
 
-/** The registry this network's deployment record names, with its account fetched. There is no record until #81 deploys one. */
-async function pinnedRegistry() {
+const registered = challengeWindow === CHALLENGE_WINDOW_SLOTS;
+const registryRecord = () => {
   const record = readDeployments().find((d) => d.network === 'devnet');
-  if (!record) throw Error('no registry deployment record for devnet in registry-deployments.json: deploy one first (#81), or use --short-window');
+  if (!record) throw Error('no registry deployment record for devnet in registry-deployments.json: deploy one first (`npm run registry -- deploy`), or use --short-window');
+  return record;
+};
+
+/** The registry this network's deployment record names, with its account fetched. */
+async function pinnedRegistry() {
+  const record = registryRecord();
   const Registry = await registryClass(Field(keys.vault.codeHash));
   const registry = new Registry(PublicKey.fromBase58(record.registry));
   await fetchAccount({ publicKey: registry.address });
@@ -325,7 +332,6 @@ await step('deploy', () => land('deploy', async (target) => {
   try {
     // The published window goes through the registry (ADR 0011). A short-window vault is deployed directly, and the
     // vault check refuses it for want of a registry entry: it exists to wait out a window of minutes.
-    const registered = challengeWindow === CHALLENGE_WINDOW_SLOTS;
     const registry = registered ? await pinnedRegistry() : undefined;
     const [vk, uri] = [await vaultKey(), Uri.from(VAULT_URI)];
     const tx = await Mina.transaction(payer, async () => {
@@ -354,6 +360,28 @@ await step('setup', () => land('setup', async () => {
   return sealed(tx);
 }, { aimed: false }));
 
+/**
+ * Runs the vault check on the run's vault, as a payer would, and journals the verdict. A registered vault must pass; a
+ * short-window one isn't checked, since it is deployed directly and refused for want of a registry entry.
+ */
+const vaultCheck = (name: string) => step(name, async () => {
+  if (!registered) return;
+  // The archive must hold every action, the registry's entry included, before the check can hash them up.
+  for (let tries = 0; ; tries++) {
+    const verdict = await checkVault(vaultAddress, {
+      codeHash: keys.vault.codeHash, registryCodeHash: keys.registry.codeHash,
+      registry: PublicKey.fromBase58(registryRecord().registry), reader: chainReader({ localChain: false }),
+    });
+    journal.facts[name] = { slot: (await wallSlot()).toString(), verdict };
+    saveJournal();
+    if (verdict.pass) return log(`${name}: passed, ${verdict.dispatched} dispatched and ${verdict.reduced} reduced`);
+    if (tries >= 20) throw Error(`${name}: refused: ${JSON.stringify(verdict.refusals)}`);
+    log(`${name}: refused, the archive may be behind: ${JSON.stringify(verdict.refusals)}`);
+    await sleep(30_000);
+  }
+});
+await vaultCheck('check-before-deposits');
+
 for (const [label, note] of [['close', closing], ['escape', escaping]] as const) {
   await step(`deposit-${label}`, () => land(`deposit-${label}`, async (target) => {
     const { zkappCommand } = await op<{ zkappCommand: object }>('deposit', {
@@ -366,6 +394,7 @@ for (const [label, note] of [['close', closing], ['escape', escaping]] as const)
 
 journal.facts['reduce-deposits.actions'] = 2;
 await step('reduce-deposits', () => reduceAll('reduce-deposits'));
+await vaultCheck('check-after-deposits');
 
 const depositTime = (label: string) => journal.facts[`depositTime.${label}`] as string;
 

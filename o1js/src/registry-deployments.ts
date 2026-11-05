@@ -12,6 +12,8 @@ export type RegistryDeployment = {
   slot: string;
   /** Its action state then: the empty one, as a decimal field. */
   actionState: string;
+  /** The hash of the command that deployed it, which is published beside the devnet write-up (`registry-sighting.ts`). */
+  transaction: string;
 };
 
 export const REGISTRY_DEPLOYMENTS_PATH = new URL('../registry-deployments.json', import.meta.url);
@@ -33,6 +35,7 @@ export function deploymentProblems(file: unknown): string[] {
       problems.push(`${at}: the registry is not an address`);
     }
     if (!/^[0-9]+$/.test(d?.slot ?? '')) problems.push(`${at}: the slot is not a number`);
+    if (typeof d?.transaction !== 'string' || d.transaction === '') problems.push(`${at}: no deploy transaction`);
     if (d?.actionState !== Experimental.BatchReducer.initialActionState.toString()) {
       problems.push(`${at}: the action state is not the empty one, so the registry was not seen empty`);
     }

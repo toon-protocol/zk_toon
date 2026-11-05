@@ -4,7 +4,7 @@ import { deploymentProblems, readDeployments } from './registry-deployments.js';
 
 const empty = Experimental.BatchReducer.initialActionState.toString();
 const record = (over: object = {}) => ({
-  network: 'devnet', registry: PrivateKey.random().toPublicKey().toBase58(), slot: '100', actionState: empty, ...over,
+  network: 'devnet', registry: PrivateKey.random().toPublicKey().toBase58(), slot: '100', actionState: empty, transaction: '5Jdeploy', ...over,
 });
 
 describe('the registry deployment records', () => {
@@ -22,6 +22,7 @@ describe('the registry deployment records', () => {
     expect(deploymentProblems({ deployments: [record(), record()] })).toEqual(['deployment 1: a second record for devnet']);
     expect(deploymentProblems({ deployments: [record({ registry: 'nope' })] })).toEqual(['deployment 0: the registry is not an address']);
     expect(deploymentProblems({ deployments: [record({ slot: 'x' })] })).toEqual(['deployment 0: the slot is not a number']);
+    expect(deploymentProblems({ deployments: [record({ transaction: '' })] })).toEqual(['deployment 0: no deploy transaction']);
     expect(deploymentProblems({ deployments: [record({ actionState: '5' })] })).toHaveLength(1);
   });
 });

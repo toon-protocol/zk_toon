@@ -16,10 +16,36 @@ other than the one in the run's journal, and a vault that holds another window o
 before windows were recorded counts as the published window.
 
 A run with the published window deploys its vault through the vault registry (ADR 0011), the one that
-`o1js/registry-deployments.json` records for devnet. There is no record until a registry is deployed there (#81), and
-the run stops saying so. A short-window vault is deployed directly under its own key, and the vault check refuses it
-for want of a registry entry (`registry`); so did `smoke-1` and `short-1`, which predate the registry. The test is
-what the run shows, not a vault a payer should trust.
+`o1js/registry-deployments.json` records for devnet. It runs the vault check on its vault after setup and again after
+the deposits are reduced, as a payer would, and journals each verdict (`check-before-deposits`,
+`check-after-deposits`); a refusal stops the run. There is no record until a registry is deployed there, and the run
+stops saying so. A short-window vault is deployed directly under its own key, and the vault check refuses it for want of
+a registry entry (`registry`); so did `smoke-1` and `short-1`, which predate the registry. The test is what the run
+shows, not a vault a payer should trust.
+
+## The vault registry on devnet
+
+`npm run registry -- deploy` (from `o1js/`) deploys the registry from the dev funder, locked in the command that creates
+it, under a random key that is never written down (ADR 0011). It writes the deploy command to
+`docs/devnet-smoke/registry-devnet.json`, waits for it, reproduces the sighting and only then adds the record to
+`o1js/registry-deployments.json`. `npm run registry -- sighting` reproduces the record, and `npm run registry -- check
+<address>` runs the vault check against the recorded registry.
+
+**Status, 2026-11-04: not deployed, by the rule #81 set.** On a lightnet the rogue key pair registered, and the
+account ran the rogue contract instead of being refused or stuck (`o1js/lightnet/README.md`). That reopens the
+decision that the vault check compares only the key's hash. The registry, the sighting and a registered smoke run wait
+for that decision.
+
+**Reproducing a sighting.** The public archive API serves a registry's actions and the hashes of the commands in each
+block, but not the commands. So the deploy command is published, and the sighting rests on four reads
+(`registry-sighting.ts`):
+
+1. The published command hashes (`Mina.Transaction.hash`) to the record's `transaction`.
+2. The archive's block at the published height lists that hash, with no failure, in a slot no later than the record's.
+3. In the command, the registry's update requires a new account (`isNew`), sets the published registry key hash and
+   ADR 0006's permissions, and dispatches nothing. From then on only the registry's proof can add an entry.
+4. The archive lists no registry action by the record's slot, its actions hash to the registry's action state on the
+   node, and the node shows the registry still carrying the published key hash and permissions.
 
 ## Run `short-1`, 2026-11-02: the escape pays out, on a short-window test vault
 
