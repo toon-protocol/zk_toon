@@ -217,13 +217,15 @@ _Avoid_: VK dump, key bundle
 **Vault code hash**:
 The hash of the vault's verification key: the key a deployed vault account carries, and so the only
 thing that names its code on chain. It names nothing else: not the state or permissions a deployer wrote, which
-only the vault check covers (ADR 0008).
+only the vault check covers (ADR 0008). On its own it doesn't show the code either: a node can store another key's
+data under it, so the check compares the key's data too (ADR 0011).
 _Avoid_: Contract hash, bytecode hash
 
 **Vault check**:
 What a client runs on a vault address before trusting it: a pass, or a refusal naming what failed. It refuses a
 vault that the pinned vault registry doesn't list, judges the registry too, compares the account with the published
-code hash, ADR 0006's permissions and policy, and replays its actions from the empty tree (ADR 0008, ADR 0011).
+key, its data as well as its hash, ADR 0006's permissions and policy, and replays its actions from the empty tree
+(ADR 0008, ADR 0011).
 _Avoid_: Vault audit, vault verification
 
 **Vault registry**:

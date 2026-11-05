@@ -6,6 +6,7 @@
 // its actions hash to the registry's action state on chain. See docs/devnet-smoke.md for the steps.
 import { readFileSync } from 'node:fs';
 import { Experimental, Mina, PublicKey, Types, fetchAccount } from 'o1js';
+import type { PublishedKey } from './keys.js';
 import type { RegistryDeployment } from './registry-deployments.js';
 import { extendActionState, permissionsWanted } from './vault-check.js';
 
@@ -25,7 +26,7 @@ export type SightingEvidence = {
   /** The height of the block of each action the archive lists. */
   actionHeights: string[];
   /** The registry as the node has it now. */
-  account?: { verificationKeyHash: string | null; permissions: Record<string, unknown>; actionState: string };
+  account?: { verificationKey: PublishedKey | null; permissions: Record<string, unknown>; actionState: string };
 };
 
 type CommandUpdate = {
@@ -41,7 +42,8 @@ type CommandUpdate = {
  * What is wrong with the sighting; empty when the record holds. The command's key is compared by its data too, not only
  * its hash: a key's data under another key's hash is accepted on a node (#81, `o1js/lightnet/README.md`).
  */
-export function sightingProblems(e: SightingEvidence, { registryCodeHash, registryKeyData }: { registryCodeHash: string; registryKeyData: string }): string[] {
+export function sightingProblems(e: SightingEvidence, registryKey: PublishedKey): string[] {
+  const { hash: registryCodeHash, data: registryKeyData } = registryKey;
   const problems: string[] = [];
   const { record } = e;
   if (e.commandHash !== record.transaction) {
@@ -71,8 +73,9 @@ export function sightingProblems(e: SightingEvidence, { registryCodeHash, regist
   if (!e.account) return [...problems, `the node has no account at ${record.registry}`];
   const state = extendActionState(Experimental.BatchReducer.initialActionState, e.actions).toString();
   if (state !== e.account.actionState) problems.push("the archive's registry actions don't hash to its action state on chain");
-  const onChain = e.account.verificationKeyHash ?? 'none';
+  const onChain = e.account.verificationKey?.hash ?? 'none';
   if (onChain !== registryCodeHash) problems.push(`the registry's key hash on chain is ${onChain}, not the published ${registryCodeHash}`);
+  else if (e.account.verificationKey?.data !== registryKeyData) problems.push("the registry has the published key hash on chain over another key's data");
   for (const [name, want] of Object.entries(permissionsWanted())) {
     const got = JSON.stringify(e.account.permissions[name]);
     if (got !== JSON.stringify(want)) problems.push(`the registry's permission ${name} on chain is ${got}, expected ${JSON.stringify(want)}`);
@@ -127,7 +130,7 @@ export async function readSighting(record: RegistryDeployment, archive: string):
     actions: lists.map((l) => l.actions),
     actionHeights: actions.map((a) => String(a.blockInfo.height)),
     account: account && json ? {
-      verificationKeyHash: account.zkapp?.verificationKey?.hash.toString() ?? null,
+      verificationKey: account.zkapp?.verificationKey ? { data: account.zkapp.verificationKey.data, hash: account.zkapp.verificationKey.hash.toString() } : null,
       permissions: json.permissions as Record<string, unknown>,
       actionState: account.zkapp?.actionState[0]?.toString() ?? '',
     } : undefined,

@@ -65,7 +65,7 @@ async function inclusion(hash: string) {
 /** Reproduces `record`'s sighting, waiting a while for the archive to catch up. Answers what is wrong, if anything. */
 async function sighting(record: RegistryDeployment, { wait = false } = {}) {
   for (let tries = 0; ; tries++) {
-    const problems = sightingProblems(await readSighting(record, ARCHIVE_URL), { registryCodeHash: keys.registry.codeHash, registryKeyData: keys.registry.verificationKey.data });
+    const problems = sightingProblems(await readSighting(record, ARCHIVE_URL), keys.registry.verificationKey);
     if (problems.length === 0 || !wait || tries >= 40) return problems;
     log(`sighting: ${problems.join('; ')}; the archive may be behind, trying again`);
     await sleep(30_000);
@@ -121,7 +121,7 @@ if (command === 'deploy') {
     process.exit(problems.length === 0 ? 0 : 1);
   }
   const verdict = await checkVault(PublicKey.fromBase58(rest[0]!), {
-    codeHash: keys.vault.codeHash, registryCodeHash: keys.registry.codeHash,
+    key: keys.vault.verificationKey, registryKey: keys.registry.verificationKey,
     registry: PublicKey.fromBase58(record.registry), reader: chainReader({ localChain: false }),
   });
   console.log(JSON.stringify(verdict, null, 2));

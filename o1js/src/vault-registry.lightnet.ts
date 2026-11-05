@@ -1,13 +1,15 @@
 // The vault registry on a node (#81): a real-length zkApp URI, and the rogue key pair, a key whose data is the
 // attacker's own under the published vault code hash. LocalBlockchain accepts that pair on a new account (ADR 0011).
-// So does the lightnet's daemon, and the account is not stuck: see lightnet/README.md.
+// So does the lightnet's daemon, and the account is not stuck: see lightnet/README.md. The vault check refuses it by
+// the key's data, which is why the check compares the data and not only the hash.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   AccountUpdate, Mina, PrivateKey, PublicKey, Signature, SmartContract, Types, UInt64, VerificationKey, declareMethods, fetchAccount,
 } from 'o1js';
-import { buildKeys } from './keys.js';
+import { type Keys, buildKeys } from './keys.js';
 import { MINA, connectLightnet, lightnetLanding } from './lightnet.js';
 import { Vault, setupFields } from './vault.js';
+import { chainReader, checkVault } from './vault-check.js';
 import { Uri, type Registry, registryDeployTx, vaultKey } from './vault-registry.js';
 
 const FEE = 100_000_000;
@@ -18,6 +20,7 @@ const { clockSlot, submit, land, landAt } = lightnetLanding(MINA, sender);
 const realUri = (vault: PublicKey) => `https://fork-notices.operator.example/toon/zk-vaults/mina-devnet/${vault.toBase58()}/notice.json`;
 
 let registry: Registry;
+let keys: Keys;
 let published: VerificationKey;
 /** The register transaction for a fresh vault, proved for `slot`. */
 async function registration(vault: PrivateKey, slot: bigint, o: { uri?: string; vk?: VerificationKey } = {}) {
@@ -47,7 +50,7 @@ const account = async (address: PublicKey) => {
 describe('the vault registry on a proofs-on lightnet', () => {
   beforeAll(async () => {
     expect(Mina.getProofsEnabled()).toBe(true);
-    await buildKeys();
+    keys = await buildKeys();
     published = await vaultKey();
     const key = PrivateKey.random();
     let deployed: Awaited<ReturnType<typeof registryDeployTx>> | undefined;
@@ -94,6 +97,13 @@ describe('the vault registry on a proofs-on lightnet', () => {
     }) : 'no account');
     expect(stored?.hash).toBe(published.hash.toString());
     expect(stored?.verificationKey).toBe(rogue.data);
+    // Refused by its key's data, whatever else the archive has caught up with.
+    const verdict = await checkVault(vault, {
+      key: keys.vault.verificationKey, registryKey: keys.registry.verificationKey, registry: registry.address,
+      reader: chainReader({ localChain: false }),
+    });
+    console.log('rogue vault check:', JSON.stringify(verdict));
+    expect(verdict.pass ? [] : verdict.refusals.map((r) => r.check)).toContain('keyData');
     const stateKey = PrivateKey.random().toPublicKey();
     const signature = Signature.create(key, setupFields(vault, stateKey, sender));
     const setup = await Mina.transaction({ sender, fee: FEE }, async () => { await new Vault(vault).setup(stateKey, sender, signature); });

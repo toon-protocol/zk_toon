@@ -371,7 +371,7 @@ const vaultCheck = (name: string) => step(name, async () => {
   // The archive must hold every action, the registry's entry included, before the check can hash them up.
   for (let tries = 0; ; tries++) {
     const verdict = await checkVault(vaultAddress, {
-      codeHash: keys.vault.codeHash, registryCodeHash: keys.registry.codeHash,
+      key: keys.vault.verificationKey, registryKey: keys.registry.verificationKey,
       registry: PublicKey.fromBase58(registryRecord().registry), reader: chainReader({ localChain: false }),
     });
     journal.facts[name] = { slot: (await wallSlot()).toString(), verdict };

@@ -15,6 +15,7 @@ type Command = { accountUpdates: { body: { publicKey: string; update: { verifica
 let honest: SightingEvidence;
 let codeHash: string;
 let keyData: string;
+const publishedKey = () => ({ data: keyData, hash: codeHash });
 
 /** The evidence for a registry deployed by `tx`, seen at the deploy's slot, as the archive and node would answer. */
 async function evidence(tx: Awaited<ReturnType<typeof Mina.transaction>>, registry: PublicKey): Promise<SightingEvidence> {
@@ -28,7 +29,7 @@ async function evidence(tx: Awaited<ReturnType<typeof Mina.transaction>>, regist
     block: { failure: null },
     actionHeights: [],
     actions: [],
-    account: { verificationKeyHash: codeHash, permissions: permissionsWanted(), actionState: empty },
+    account: { verificationKey: publishedKey(), permissions: permissionsWanted(), actionState: empty },
   };
 }
 
@@ -40,7 +41,7 @@ beforeAll(async () => {
   honest = await evidence(tx, key.toPublicKey());
 });
 
-const problems = (e: SightingEvidence) => sightingProblems(e, { registryCodeHash: codeHash, registryKeyData: keyData });
+const problems = (e: SightingEvidence) => sightingProblems(e, publishedKey());
 
 describe("the registry's sighting", () => {
   it('holds for a registry its command created locked, with nothing dispatched by the recorded slot', () => {
@@ -69,15 +70,16 @@ describe("the registry's sighting", () => {
       "the command's update of the registry doesn't require a new account",
       "the command doesn't set the registry's permissions to ADR 0006's table",
     ]);
-    expect(sightingProblems(honest, { registryCodeHash: '1', registryKeyData: keyData })).toEqual([
+    expect(sightingProblems(honest, { data: keyData, hash: '1' })).toEqual([
       `the command gives the registry key hash ${codeHash}, not the published 1`,
       `the registry's key hash on chain is ${codeHash}, not the published 1`,
     ]);
   });
 
   it("refuses the published key hash with another key's data, as a node accepts", () => {
-    expect(sightingProblems(honest, { registryCodeHash: codeHash, registryKeyData: 'other' })).toEqual([
+    expect(sightingProblems(honest, { data: 'other', hash: codeHash })).toEqual([
       "the command gives the registry the published key hash with another key's data",
+      "the registry has the published key hash on chain over another key's data",
     ]);
   });
 

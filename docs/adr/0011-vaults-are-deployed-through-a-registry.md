@@ -38,7 +38,8 @@ The vault check requires the rule and has no option to turn it off:
 
 - **`registry`**: the vault's address is among the entries of the pinned registry. Entries come from an archive and
   count only if they hash up to the registry's on-chain action state (`registry.actionState`).
-- **The registry is judged too**: its verification key hash against the published one (`registry.codeHash`), its
+- **The registry is judged too**: its verification key against the published one, hash (`registry.codeHash`) and data
+  (`registry.keyData`, #81), its
   permissions against ADR 0006's table (`registry.permissions.*`), and no vesting schedule.
 - Every other rule of ADR 0008 stays, and so does the replay. A registered vault is still replayed.
 
@@ -74,13 +75,15 @@ account holds nothing, and only `setDelegate` needs a signature.
 - **A wallet must update its pin before a fork** (to the new registry and code hash, which each fork publishes).
 - A registry's deployer could list entries before locking it. The deployment record covers that.
 - A URI isn't judged: a pass doesn't show it is real or watched.
-- **The key's data isn't compared, only its hash, and on a node that is not safe** (#81). `{ data: <rogue>, hash:
-  <published> }` on a new account is accepted by `LocalBlockchain` and by a single-node lightnet. On a fresh lightnet
-  the account then runs the rogue contract: its proofs are accepted, the published contract's are refused, and the
-  vault check, which reads only the hash, would pass the account (not run). After an honest vault had registered on the same chain, the reverse held. Mina's
-  binary form recomputes a key's hash from its data, so peers that get the command by gossip should refuse it, but
-  that hasn't run on devnet (`o1js/lightnet/README.md`). This reopens the decision that the check stays hash-only;
-  until it is settled, no registry is deployed on devnet and no sighting is published.
+- **The registry's proof checks the key's hash, not its data** (#81). `{ data: <rogue>, hash: <published> }` on a new
+  account is accepted by `LocalBlockchain` and by a single-node lightnet. On a fresh lightnet the account then runs
+  the rogue contract: its proofs are accepted and the published contract's are refused. After an honest vault had
+  registered on the same chain, the reverse held. Mina's binary form recomputes a key's hash from its data, so peers
+  that get the command by gossip should refuse it, but that hasn't run on devnet (`o1js/lightnet/README.md`). So the
+  registry lists such a vault, and **the vault check compares the key's data with the published key's, as well as its
+  hash, for the vault and for the registry** (`keyData`, `registry.keyData`), and the sighting does the same for the
+  registry. This settles #81's reopening of the decision that the check stays hash-only: it doesn't. A wallet pins
+  each published key whole, not its hash. The registry's circuit is unchanged, since a circuit sees only the hash.
 - Registration is permissionless and costs only the transaction, so an operator can add entries cheaply and a long
   list reads slowly.
 

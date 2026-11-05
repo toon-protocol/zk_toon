@@ -4,6 +4,10 @@
 // pass, or a refusal naming what failed. Nothing it reads is trusted: an archive's actions are hashed up to the
 // account's action state, and its events only supply deadlines that the pending escapes root then has to confirm.
 //
+// The key is compared by its data as well as its hash. A node stores a new account's key as the command gives it, so
+// another contract's data under the published hash can land, and on a lightnet the account then ran that contract
+// (#81, ADR 0011). The data is what a node verifies proofs against; the hash alone names nothing.
+//
 // The vault must be one the pinned vault registry lists (ADR 0011): a vault deployed under its own key can be given a
 // fake history before the account is locked, which replaying can't show. The registry is judged too: its key, its
 // permissions, and its entries, hashed up to its action state.
@@ -12,6 +16,7 @@
 // and their answers.
 import { AccountUpdate, Experimental, Field, Mina, Permissions, PublicKey, Struct, TokenId, Types, UInt64, fetchAccount, fetchLastBlock } from 'o1js';
 import { NoteTree } from './note-tree.js';
+import type { PublishedKey } from './keys.js';
 import * as policy from './policy.js';
 import {
   ActionKind, CLOSE_WINDOW_SLOTS, DepositSizes, EscapeUpdate, NullifierSet, PendingEscapes, RootRing, VaultAction, VaultState,
@@ -37,7 +42,7 @@ const PERMISSIONS: Record<string, string> = {
 
 /** What a verdict depends on of the registry, as JSON. `actions` is as in `VaultSnapshot`; each holds the fields of an address. */
 export type RegistrySnapshot = {
-  verificationKeyHash: string | null;
+  verificationKey: PublishedKey | null;
   permissions: Record<string, unknown>;
   timed: boolean;
   /** The account's latest action state. */
@@ -45,8 +50,8 @@ export type RegistrySnapshot = {
   actions: string[][][];
 };
 
-/** What the check is pinned to: the vault's and the registry's code hashes, as published. The registry's address is the reader's to read. */
-export type VaultPins = { codeHash: string; registryCodeHash: string };
+/** What the check is pinned to: the vault's and the registry's keys, as published. The registry's address is the reader's to read. */
+export type VaultPins = { key: PublishedKey; registryKey: PublishedKey };
 
 /** All a verdict depends on, as JSON. `actions` holds one list per account update, oldest update first, as o1js reads them. */
 export type VaultSnapshot = {
@@ -54,7 +59,7 @@ export type VaultSnapshot = {
   address: string;
   registry: RegistrySnapshot;
   slot: string;
-  verificationKeyHash: string | null;
+  verificationKey: PublishedKey | null;
   permissions: Record<string, unknown>;
   timed: boolean;
   balance: string;
@@ -132,14 +137,14 @@ export async function readVault(address: PublicKey, registry: PublicKey, reader:
   return {
     address: address.toBase58(),
     registry: {
-      verificationKeyHash: registryAccount.zkapp.verificationKey?.hash.toString() ?? null,
+      verificationKey: keyOf(registryAccount),
       permissions: Types.Account.toJSON(registryAccount).permissions,
       timed: registryAccount.timing.isTimed.toBoolean(),
       actionState: registryAccount.zkapp.actionState[0]!.toString(),
       actions: registryActions,
     },
     slot: slot.toString(),
-    verificationKeyHash: account.zkapp.verificationKey?.hash.toString() ?? null,
+    verificationKey: keyOf(account),
     permissions: json.permissions,
     timed: account.timing.isTimed.toBoolean(),
     balance: account.balance.toBigInt().toString(),
@@ -151,6 +156,11 @@ export async function readVault(address: PublicKey, registry: PublicKey, reader:
     escapeEvents: events,
   };
 }
+
+const keyOf = (account: Types.Account): PublishedKey | null => {
+  const vk = account.zkapp?.verificationKey;
+  return vk ? { data: vk.data, hash: vk.hash.toString() } : null;
+};
 
 /** Everyone a close, an escape or what follows one names, once each. Actions that don't parse are `judgeVault`'s to refuse. */
 function namedPayees(actions: string[][][]): PublicKey[] {
@@ -164,9 +174,9 @@ function namedPayees(actions: string[][][]): PublicKey[] {
   }
 }
 
-/** Asks one question of `address`: can it be trusted as a vault of `codeHash`, listed by `registry`? A failed read refuses. */
+/** Asks one question of `address`: can it be trusted as a vault of `key`, listed by `registry`? A failed read refuses. */
 export async function checkVault(
-  address: PublicKey, { codeHash, registry, registryCodeHash, reader }: VaultPins & { registry: PublicKey; reader: VaultReader }
+  address: PublicKey, { key, registry, registryKey, reader }: VaultPins & { registry: PublicKey; reader: VaultReader }
 ): Promise<VaultVerdict> {
   let snapshot: VaultSnapshot;
   try {
@@ -174,10 +184,10 @@ export async function checkVault(
   } catch (e) {
     return { pass: false, refusals: [{ check: 'read', detail: e instanceof Error ? e.message : String(e) }] };
   }
-  return judgeVault(snapshot, { codeHash, registryCodeHash });
+  return judgeVault(snapshot, { key, registryKey });
 }
 
-/** The verdict on a snapshot, against the published `codeHash` and this build's policy. */
+/** The verdict on a snapshot, against the published keys and this build's policy. */
 export function judgeVault(s: VaultSnapshot, pins: VaultPins): VaultVerdict {
   try {
     return judge(s, pins);
@@ -187,13 +197,13 @@ export function judgeVault(s: VaultSnapshot, pins: VaultPins): VaultVerdict {
   }
 }
 
-function judge(s: VaultSnapshot, { codeHash, registryCodeHash }: VaultPins): VaultVerdict {
+function judge(s: VaultSnapshot, { key, registryKey }: VaultPins): VaultVerdict {
   const refusals: VaultRefusal[] = [];
   const refuse = (check: string, detail: string) => refusals.push({ check, detail });
   const same = sameAs(refuse, 'expected');
 
-  judgeRegistry(s, registryCodeHash, refuse);
-  same('codeHash', s.verificationKeyHash ?? 'none', codeHash);
+  judgeRegistry(s, registryKey, refuse);
+  judgeKey('', s.verificationKey, key, refuse);
   judgePermissions('permissions', s.permissions, refuse);
   if (s.timed) refuse('timing', 'the account has a vesting schedule, which can lock deposits');
 
@@ -216,6 +226,12 @@ function judge(s: VaultSnapshot, { codeHash, registryCodeHash }: VaultPins): Vau
   return { pass: true, ...history };
 }
 
+/** `codeHash` if the hash isn't the published one; else `keyData` if the data isn't, which the hash can't show (#81). */
+function judgeKey(prefix: string, got: PublishedKey | null, want: PublishedKey, refuse: Refuse) {
+  if ((got?.hash ?? 'none') !== want.hash) refuse(`${prefix}codeHash`, `is ${got?.hash ?? 'none'}, expected ${want.hash}`);
+  else if (got?.data !== want.data) refuse(`${prefix}keyData`, "the account has the published key hash over another key's data");
+}
+
 function judgePermissions(prefix: string, permissions: Record<string, unknown>, refuse: Refuse) {
   for (const [name, want] of Object.entries(permissionsWanted())) {
     const got = JSON.stringify(permissions[name]);
@@ -227,9 +243,9 @@ function judgePermissions(prefix: string, permissions: Record<string, unknown>, 
  * The registry is judged like a vault's account, and its entries are hashed up to its action state, since an archive's
  * answer counts only if they are. The vault must be among them. A fork replaces the registry, so one pin is judged.
  */
-function judgeRegistry(s: VaultSnapshot, registryCodeHash: string, refuse: Refuse) {
+function judgeRegistry(s: VaultSnapshot, registryKey: PublishedKey, refuse: Refuse) {
   const r = s.registry;
-  sameAs(refuse, 'expected')('registry.codeHash', r.verificationKeyHash ?? 'none', registryCodeHash);
+  judgeKey('registry.', r.verificationKey, registryKey, refuse);
   judgePermissions('registry.permissions', r.permissions, refuse);
   if (r.timed) refuse('registry.timing', 'the registry has a vesting schedule');
   const state = extendActionState(Experimental.BatchReducer.initialActionState, r.actions);

@@ -16,6 +16,7 @@ import { deployRegistry } from './vault-registry.js';
 import { reduceMirror, vaultView } from './vault-view.js';
 import { WithdrawalKind, WithdrawalProgram } from './withdrawal.js';
 import { buildWithdrawal } from './withdrawal-sample.js';
+import type { PublishedKey } from './keys.js';
 
 const [SMALL] = policy.DEPOSIT_SIZES;
 const MINA = 1_000_000_000n;
@@ -29,25 +30,38 @@ RequestProgram.setProofsEnabled(false);
 const { payer, deployer, alice, bob, advance, freshVault, treasuryAccount, registry } = vaultHarness(Local);
 const reader = chainReader({ localChain: true });
 
-/** With proofs off every vault carries o1js's dummy key: this is its hash, in place of the published one. */
-let codeHash: string;
-let registryCodeHash: string;
+/** With proofs off every vault carries o1js's dummy key: this is that key, in place of the published one. */
+let key: PublishedKey;
+let registryKey: PublishedKey;
 let registryAddress: PublicKey;
+const keyOf = (address: PublicKey): PublishedKey => {
+  const vk = Mina.getAccount(address).zkapp!.verificationKey!;
+  return { data: vk.data, hash: vk.hash.toString() };
+};
 beforeAll(async () => {
   await batchReducer.compile();
   const h = await freshVault();
-  codeHash = Mina.getAccount(h.vault.address).zkapp!.verificationKey!.hash.toString();
+  key = keyOf(h.vault.address);
   registryAddress = (await registry()).address;
-  registryCodeHash = Mina.getAccount(registryAddress).zkapp!.verificationKey!.hash.toString();
+  registryKey = keyOf(registryAddress);
+});
+/** `reader`, but the node answers `address`'s key as the published hash over another key's data, as a node can store (#81). */
+const rogueKey = (address: PublicKey, inner: VaultReader = reader): VaultReader => ({
+  ...inner,
+  async account(a) {
+    const account = await inner.account(a);
+    if (!account?.zkapp?.verificationKey || !a.equals(address).toBoolean()) return account;
+    return { ...account, zkapp: { ...account.zkapp, verificationKey: { ...account.zkapp.verificationKey, data: 'rogue' } } };
+  },
 });
 
 /**
  * The check on `address`. A forged vault is deployed under its own key, so the registry doesn't list it: unless `asIs`,
  * it is shown listed, and the test sees only the rule it is about. `asIs` reads the registry as it is.
  */
-const check = (address: PublicKey, o: { reader?: VaultReader; codeHash?: string; asIs?: boolean; registryCodeHash?: string; registry?: PublicKey } = {}) =>
+const check = (address: PublicKey, o: { reader?: VaultReader; key?: PublishedKey; asIs?: boolean; registryKey?: PublishedKey; registry?: PublicKey } = {}) =>
   checkVault(address, {
-    codeHash: o.codeHash ?? codeHash, registryCodeHash: o.registryCodeHash ?? registryCodeHash, registry: o.registry ?? registryAddress,
+    key: o.key ?? key, registryKey: o.registryKey ?? registryKey, registry: o.registry ?? registryAddress,
     reader: o.asIs ? o.reader ?? reader : listing(o.reader ?? reader, reader, o.registry ?? registryAddress, address),
   });
 const failed = (v: VaultVerdict) => (v.pass ? [] : v.refusals.map((r) => r.check));
@@ -151,7 +165,12 @@ describe('a vault that is what it says', () => {
 describe('a vault the code hash cannot tell apart', () => {
   it('is refused under another code hash', async () => {
     const { vault } = await freshVault();
-    expect(failed(await check(vault.address, { codeHash: '12345' }))).toEqual(['codeHash']);
+    expect(failed(await check(vault.address, { key: { ...key, hash: '12345' } }))).toEqual(['codeHash']);
+  });
+
+  it("is refused under the published hash with another key's data, which a node can store and then run (#81)", async () => {
+    const { vault } = await freshVault();
+    expect(failed(await check(vault.address, { reader: rogueKey(vault.address) }))).toEqual(['keyData']);
   });
 
   it('is what the forger helper builds, with nothing changed: a pass', async () => {
@@ -424,7 +443,7 @@ describe('a vault whose forged close hides a phantom note', () => {
 });
 
 describe('the registry rule', () => {
-  const real = (address: PublicKey, o: { reader?: VaultReader; registry?: PublicKey; registryCodeHash?: string } = {}) => check(address, { ...o, asIs: true });
+  const real = (address: PublicKey, o: { reader?: VaultReader; registry?: PublicKey; registryKey?: PublishedKey } = {}) => check(address, { ...o, asIs: true });
 
   it('passes a registered vault as the registry shows it, through deposit, close, escape and sweep', async () => {
     const h = await freshVault();
@@ -462,13 +481,18 @@ describe('the registry rule', () => {
 
   it('refuses a registry whose key hash is not the published one', async () => {
     const h = await freshVault();
-    expect(failed(await real(h.vault.address, { registryCodeHash: '12345' }))).toEqual(['registry.codeHash']);
+    expect(failed(await real(h.vault.address, { registryKey: { ...registryKey, hash: '12345' } }))).toEqual(['registry.codeHash']);
+  });
+
+  it("refuses a registry under the published hash with another key's data (#81)", async () => {
+    const h = await freshVault();
+    expect(failed(await real(h.vault.address, { reader: rogueKey(registryAddress) }))).toEqual(['registry.keyData']);
   });
 
   it("refuses a registry whose permissions are not ADR 0006's, and one with a vesting schedule", async () => {
     const h = await freshVault();
     const snapshot = await readVault(h.vault.address, registryAddress, reader);
-    const pins = { codeHash, registryCodeHash };
+    const pins = { key, registryKey };
     expect(judgeVault(snapshot, pins).pass).toBe(true);
     const loose = { ...snapshot, registry: { ...snapshot.registry, permissions: { ...snapshot.registry.permissions, editActionState: 'Signature', setPermissions: 'Signature' } } };
     expect(failed(judgeVault(loose, pins))).toEqual(['registry.permissions.editActionState', 'registry.permissions.setPermissions']);
@@ -500,13 +524,13 @@ describe('the registry rule', () => {
 
 describe('the published vectors', () => {
   const { cases } = JSON.parse(readFileSync(new URL('../../test-vectors/vault-check.json', import.meta.url), 'utf8')) as {
-    cases: { name: string; codeHash: string; registryCodeHash: string; snapshot: VaultSnapshot; refuses: string[] }[];
+    cases: { name: string; key: PublishedKey; registryKey: PublishedKey; snapshot: VaultSnapshot; refuses: string[] }[];
   };
   it('cover a pass and a refusal', () => {
     expect(cases.some((c) => c.refuses.length === 0)).toBe(true);
     expect(cases.some((c) => c.refuses.length > 0)).toBe(true);
   });
   it.each(cases.map((c) => [c.name, c] as const))('answer as recorded: %s', (_name, c) => {
-    expect(failed(judgeVault(c.snapshot, { codeHash: c.codeHash, registryCodeHash: c.registryCodeHash }))).toEqual(c.refuses);
+    expect(failed(judgeVault(c.snapshot, { key: c.key, registryKey: c.registryKey }))).toEqual(c.refuses);
   });
 });
