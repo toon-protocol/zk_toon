@@ -26,7 +26,7 @@ async function evidence(tx: Awaited<ReturnType<typeof Mina.transaction>>, regist
     command,
     commandHash: hash,
     height: '50',
-    block: { failure: null },
+    block: { failure: null, final: true },
     actionHeights: [],
     actions: [],
     account: { verificationKey: publishedKey(), permissions: permissionsWanted(), actionState: empty },
@@ -56,7 +56,11 @@ describe("the registry's sighting", () => {
 
   it("refuses when the archive doesn't list the command as applied at the published height", () => {
     expect(problems({ ...honest, block: undefined })).toEqual([`the archive lists no block with ${honest.record.transaction}`]);
-    expect(problems({ ...honest, block: { failure: 'Cancelled' } })).toEqual(['the deploy failed on chain: Cancelled']);
+    expect(problems({ ...honest, block: { failure: 'Cancelled', final: true } })).toEqual(['the deploy failed on chain: Cancelled']);
+    // The archive marks a block canonical only once it is final, about 290 blocks on.
+    expect(problems({ ...honest, block: { failure: null, final: false } })).toEqual([
+      `the archive lists ${honest.record.transaction} at height 50 only in blocks not yet final`,
+    ]);
   });
 
   it("refuses a deploy that doesn't require a new account, or doesn't lock it, or carries another key", async () => {

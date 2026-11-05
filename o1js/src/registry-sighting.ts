@@ -19,8 +19,11 @@ export type SightingEvidence = {
   commandHash: string;
   /** The block height the published command landed at, as published beside it. */
   height: string;
-  /** The archive's canonical block at `height`, if it lists the recorded transaction, with the command's failure. */
-  block?: { failure: string | null };
+  /**
+   * The archive's block at `height` that lists the recorded transaction, if any, with the command's failure. `final` if
+   * the block is canonical, which the archive marks only once it is final, about 290 blocks on.
+   */
+  block?: { failure: string | null; final: boolean };
   /** The registry's actions as the archive has them, one list per account update, oldest first. */
   actions: string[][][];
   /** The height of the block of each action the archive lists. */
@@ -51,6 +54,7 @@ export function sightingProblems(e: SightingEvidence, registryKey: PublishedKey)
   }
   if (!e.block) problems.push(`the archive lists no block with ${record.transaction}`);
   else if (e.block.failure) problems.push(`the deploy failed on chain: ${e.block.failure}`);
+  else if (!e.block.final) problems.push(`the archive lists ${record.transaction} at height ${e.height} only in blocks not yet final`);
 
   const updates = (e.command as { accountUpdates?: CommandUpdate[] }).accountUpdates ?? [];
   const own = updates.filter((u) => u.body.publicKey === record.registry);
@@ -94,20 +98,27 @@ async function query<T>(url: string, query: string, variables: object = {}): Pro
 }
 
 /**
- * The archive's canonical block at `height`, if it lists `hash`, with the command's failure. The archive API's blocks
- * carry no slot, so the sighting is anchored on heights; the record's slot is the node's, taken at the deploy.
+ * The archive's block at `height` that lists `hash`, if any, with the command's failure, and whether it is canonical
+ * (final). The archive API's blocks carry no slot, so the sighting is anchored on heights; the record's slot is the
+ * node's, taken at the deploy. A block has no canonical field either, only a filter, so a canonical block is asked
+ * for first and then any block, of which a height can have several on forks.
  */
 export async function archivedCommand(archive: string, height: string, hash: string) {
-  const { blocks } = await query<{ blocks: { blockHeight: number; transactions: { zkappCommands: { hash: string; failureReason: string | null }[] } }[] }>(
-    archive,
-    // The archive answers lowest height first (checked on devnet, 2026-11-04).
-    `query($h: Int!) { blocks(limit: 1, query: { blockHeight_gte: $h, canonical: true }) {
-      blockHeight transactions { zkappCommands { hash failureReason } } } }`,
-    { h: Number(height) },
-  );
-  const block = blocks.find((b) => String(b.blockHeight) === height);
-  const found = block?.transactions.zkappCommands.find((c) => c.hash === hash);
-  return block && found ? { failure: found.failureReason } : undefined;
+  const at = async (canonical: boolean) => {
+    const { blocks } = await query<{ blocks: { blockHeight: number; transactions: { zkappCommands: { hash: string; failureReason: string | null }[] } }[] }>(
+      archive,
+      // The archive answers lowest height first (checked on devnet, 2026-11-04).
+      `query($h: Int!) { blocks(limit: ${canonical ? 1 : 10}, query: { blockHeight_gte: $h${canonical ? ', canonical: true' : ''} }) {
+        blockHeight transactions { zkappCommands { hash failureReason } } } }`,
+      { h: Number(height) },
+    );
+    return blocks.filter((b) => String(b.blockHeight) === height)
+      .flatMap((b) => b.transactions.zkappCommands).find((c) => c.hash === hash);
+  };
+  const final = await at(true);
+  if (final) return { failure: final.failureReason, final: true };
+  const pending = await at(false);
+  return pending ? { failure: pending.failureReason, final: false } : undefined;
 }
 
 /** Reads the evidence for `record` from the archive and node of the active Mina instance. */

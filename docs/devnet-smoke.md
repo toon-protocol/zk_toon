@@ -31,17 +31,21 @@ it, under a random key that is never written down (ADR 0011). It writes the depl
 `o1js/registry-deployments.json`. `npm run registry -- sighting` reproduces the record, and `npm run registry -- check
 <address>` runs the vault check against the recorded registry.
 
-**Status, 2026-11-04: not deployed, by the rule #81 set.** On a lightnet the rogue key pair registered, and the
-account ran the rogue contract instead of being refused or stuck (`o1js/lightnet/README.md`). That reopens the
-decision that the vault check compares only the key's hash. The registry, the sighting and a registered smoke run wait
-for that decision.
+**Status, 2026-11-05: deployed, not yet recorded.** On a lightnet the rogue key pair registered and the account ran
+the rogue contract (`o1js/lightnet/README.md`), so the vault check now compares the key's data as well as its hash
+(ADR 0011). The registry was then deployed at `B62qmwYhD1JEfgBRfritFF8eu2wjfcjs4dgUiWDDXZzNaUR2mGUbPbV` by
+`5Judj8kFBkcP1b14Jqsp5r6dGUd59Hfbiey2NEAd42Srw7FdHMPm`, applied at height 585105, slot 934255. The archive lists it,
+with no failure, but only in blocks not yet final. The record, the registered smoke run and `smoke-1`'s check wait
+until that block is canonical, about 290 blocks after it (over a day at devnet's current pace); then run `deploy`
+again.
 
 **Reproducing a sighting.** The public archive API serves a registry's actions and the hashes of the commands in each
 block, but not the commands. So the deploy command is published, and the sighting rests on four reads
 (`registry-sighting.ts`):
 
 1. The published command hashes (`Mina.Transaction.hash`) to the record's `transaction`.
-2. The archive's canonical block at the published height lists that hash, with no failure.
+2. The archive's canonical block at the published height lists that hash, with no failure. The archive marks a
+   block canonical only once it is final, about 290 blocks later, and until then the sighting says so.
 3. In the command, the registry's update requires a new account (`isNew`), sets the published registry key, its data
    as well as its hash, and ADR 0006's permissions, and dispatches nothing. From then on only the registry's proof can
    add an entry.

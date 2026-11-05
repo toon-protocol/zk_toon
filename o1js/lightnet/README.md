@@ -94,13 +94,15 @@ LocalBlockchain accepts it, and so does this daemon. **The outcome is neither a 
 
 On a fresh chain, the rogue contract controls an account that carries the published code hash. The vault's
 `editState`, `send` and `editActionState` permissions are `proof`, and a proof of the rogue contract verifies, so it
-could move whatever a payer deposits. The vault check compares only the key's hash, so it would pass such a vault.
+could move whatever a payer deposits. A check of the hash alone would pass such a vault, so the vault check compares
+the key's data too, and refuses it with `keyData` (ADR 0011).
 Which contract the node verifies against depends on what the node has seen, not on the chain's rules. The test runs
 the rogue registration first, so on a fresh chain it is the first row: it asserts that the registration applies, that
 the stored key is the rogue data under the published hash, and that exactly one of the two contracts' proofs is
-accepted. Run again on a chain where an honest vault has registered (its own second test, or `request-fixtures`), the
-data assertion may not hold; start a fresh chain first. Its final form has not run yet: the run was stopped for want
-of memory.
+accepted, and that the vault check refuses the account naming `keyData`. Run again on a chain where an honest vault
+has registered (its own second test, or `request-fixtures`), the data assertion may not hold; start a fresh chain
+first. It passed on a fresh chain on 2026-11-05: registration 5JumQc7E…, the rogue `poke` applied, the published
+`setup` refused, and the check refused with `keyData` (and `setup`, which had not run).
 
 Why, from Mina's source (`compatible`): a command sent as JSON over GraphQL keeps the key's `data` and `hash` as given
 (`verification_key_with_hash` in `fields_derivers_zkapps.ml`). Its binary form carries the data only and recomputes

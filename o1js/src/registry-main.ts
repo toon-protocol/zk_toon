@@ -3,7 +3,9 @@
 // `deploy` deploys a registry from the dev funder, locked in the command that creates it, under a random key that is
 // never written down: the registry is replaced at a fork, not upgraded, so nobody need hold its key. It publishes the
 // command beside the devnet write-up, checks the sighting and only then writes the record to `registry-deployments.json`.
-// Run again after a stop, it waits for the command it published instead of deploying a second registry.
+// Run again after a stop, it waits for the command it published instead of deploying a second registry. The archive
+// marks the deploy's block canonical only once it is final, about 290 blocks (a day or more on devnet) after it lands:
+// until then `deploy` stops, saying so, and is run again later.
 // `sighting` reproduces the record from the archive, the node and the published command. `check` runs the vault check
 // on an address against the recorded registry. Set `MINA_GRAPHQL` and `MINA_ARCHIVE` to use other endpoints.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -11,7 +13,7 @@ import { Experimental, Mina, PrivateKey, PublicKey, UInt64 } from 'o1js';
 import { minaKeyFromMnemonic } from './devnet.js';
 import { buildKeys } from './keys.js';
 import { REGISTRY_DEPLOYMENTS_PATH, type RegistryDeployment, readDeployments } from './registry-deployments.js';
-import { deployCommandPath, readSighting, sightingProblems } from './registry-sighting.js';
+import { archivedCommand, deployCommandPath, readSighting, sightingProblems } from './registry-sighting.js';
 import { chainReader, checkVault } from './vault-check.js';
 import { registryDeployTx } from './vault-registry.js';
 
@@ -21,6 +23,8 @@ const FUNDER_ADDRESS = 'B62qp9YT9mw27enrwPR3gSPeRkXxAg1runhKK7mx6jj64Lq6EukJRTy'
 const FEE = 100_000_000n;
 const NETWORK = 'devnet';
 const INCLUSION_TIMEOUT_MS = 40 * 60_000;
+/** How far behind the tip the archive marks blocks canonical: devnet's k. */
+const FINALITY_BLOCKS = 290n;
 
 const [command, ...rest] = process.argv.slice(2);
 const wellFormed = (command === 'deploy' || command === 'sighting') ? rest.length === 0 : command === 'check' && rest.length === 1;
@@ -100,6 +104,15 @@ if (command === 'deploy') {
     published = { ...published, height: landed.blockHeight, slot: landed.slotSinceGenesis };
     writePublished(published);
     log(`applied in slot ${landed.slotSinceGenesis}, block ${landed.blockHeight}`);
+  }
+  const height = published.height!;
+  const archived = await archivedCommand(ARCHIVE_URL, height, published.transaction);
+  if (archived && !archived.final) {
+    const { bestChain } = await graphql<{ bestChain: Block[] }>('{ bestChain(maxLength: 1) { protocolState { consensusState { slotSinceGenesis blockHeight } } transactions { zkappCommands { hash } } } }');
+    const tip = BigInt(bestChain[0]!.protocolState.consensusState.blockHeight);
+    const left = BigInt(height) + FINALITY_BLOCKS - tip;
+    log(`the deploy is in the archive at height ${height}, not yet final: about ${left > 0n ? left : 0n} blocks to go (tip ${tip}). Run deploy again then.`);
+    process.exit(0);
   }
   const record: RegistryDeployment = {
     network: NETWORK, registry: published.registry, slot: published.slot!,
