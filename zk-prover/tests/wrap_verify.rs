@@ -66,6 +66,8 @@ fn rust_wrap(branch: usize) -> &'static str {
                 branch,
                 features,
                 step_proof: &step_proof(["002", "001"][branch]),
+                previous_proofs: &[],
+                previous_max_proofs_verified: &[],
             },
             &circuit,
         )

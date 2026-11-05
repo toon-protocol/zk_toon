@@ -10,7 +10,9 @@
 //!
 //! [`wrap::wrap`] wraps a step proof into the Pickles wrap proof of an o1js program: given the
 //! program's step circuits (one per method), its feature flags and its compiled wrap circuit, it
-//! returns the wrap proof and the wrap witness, which equals o1js's value for value.
+//! returns the wrap proof and the wrap witness, which equals o1js's value for value. A method may
+//! verify previous proofs (up to Pickles' maximum of 2): the step proof's previous proofs are
+//! [`wrap::PreviousProof`]s.
 //!
 //! [`land_program::LandProgram`] puts these together: `land`'s arguments in, a proof for its
 //! transaction out.
@@ -48,13 +50,43 @@ impl ProofConstants for WrapLandSetup {
     const ROWS: usize = 6798;
 }
 
+/// Shape of the step circuits of the toy zkApp (`fixture-gen/toy.mjs`): `plain` (`toy_plain_*`) verifies
+/// no proof and `recurse` (`toy_recurse_*`) verifies one. Both have 34 public inputs: the unfinalized
+/// proof (32), the `messages_for_next_step_proof` hash and the `messages_for_next_wrap_proof` hash.
+pub struct StepToyPlain;
+impl ProofConstants for StepToyPlain {
+    const PRIMARY_LEN: usize = 34;
+    const AUX_LEN: usize = 13552;
+    const PREVIOUS_CHALLENGES: usize = 0;
+    const ROWS: usize = 1100;
+}
+
+pub struct StepToyRecurse;
+impl ProofConstants for StepToyRecurse {
+    const PRIMARY_LEN: usize = 34;
+    const AUX_LEN: usize = 143968;
+    const PREVIOUS_CHALLENGES: usize = 1;
+    const ROWS: usize = 10733;
+}
+
+/// Shape of the wrap circuit of the toy zkApp (`toy_wrap_*`), shared by both methods.
+pub struct WrapToy;
+impl ProofConstants for WrapToy {
+    const PRIMARY_LEN: usize = 40;
+    const AUX_LEN: usize = 133337;
+    const PREVIOUS_CHALLENGES: usize = 2;
+    const ROWS: usize = 10150;
+}
+
 /// A compiled step circuit with its prover index.
 pub struct StepCircuit {
     prover: Prover<Fp>,
+    proofs_verified: usize,
 }
 
 impl StepCircuit {
-    /// Build the prover index from o1js's circuit dump. `C` fixes the circuit's size.
+    /// Build the prover index from o1js's circuit dump. `C` fixes the circuit's size; for a step circuit
+    /// its `PREVIOUS_CHALLENGES` is how many proofs the method verifies.
     pub fn load<C: ProofConstants>(
         gates_json: &[u8],
         internal_vars: &[u8],
@@ -70,7 +102,13 @@ impl StepCircuit {
                 rows_rev,
                 index,
             },
+            proofs_verified: C::PREVIOUS_CHALLENGES,
         })
+    }
+
+    /// How many proofs the method verifies: the accumulators its step proof carries.
+    pub fn proofs_verified(&self) -> usize {
+        self.proofs_verified
     }
 
     /// The kimchi prover index, from which the step verification key is read.

@@ -3,7 +3,7 @@
 
 use std::io::Read;
 
-use zk_prover::{pins, StepCircuit, StepLand, StepSetup};
+use zk_prover::{pins, StepCircuit, StepLand, StepSetup, StepToyPlain, StepToyRecurse};
 
 fn fixture(name: &str) -> Vec<u8> {
     let path = format!("{}/fixtures/{name}.gz", env!("CARGO_MANIFEST_DIR"));
@@ -31,6 +31,26 @@ fn land_step_vk_hash_is_pinned() {
 #[test]
 fn setup_step_vk_hash_is_pinned() {
     assert_eq!(load::<StepSetup>("cs004").vk_hash(), pins::SETUP_STEP_VK_HASH);
+}
+
+#[test]
+fn toy_plain_step_vk_hash_is_pinned() {
+    assert_eq!(load::<StepToyPlain>("toy_plain").vk_hash(), pins::TOY_PLAIN_STEP_VK_HASH);
+}
+
+#[test]
+fn toy_recurse_step_vk_hash_is_pinned() {
+    assert_eq!(load::<StepToyRecurse>("toy_recurse").vk_hash(), pins::TOY_RECURSE_STEP_VK_HASH);
+}
+
+#[test]
+fn toy_program_vk_hash_is_pinned() {
+    let inputs: serde_json::Value = serde_json::from_slice(&fixture("toy_inputs.json")).unwrap();
+    assert_eq!(inputs["vkHash"].as_str().unwrap(), pins::TOY_PROGRAM_VK_HASH);
+    // The key data in the fixture hashes to the same value.
+    let vk = zk_prover::verify::load_vk(inputs["vk"].as_str().unwrap()).unwrap();
+    use ark_ff::PrimeField;
+    assert_eq!(vk.hash().into_bigint().to_string(), pins::TOY_PROGRAM_VK_HASH);
 }
 
 #[test]

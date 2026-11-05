@@ -7,20 +7,27 @@
 //! optional gates and lookups. The generalisation follows Mina `228c409a` (the commit o1js v3.1.0 bundles),
 //! `src/lib/crypto/pickles/wrap_main.ml`. Licensed under Apache-2.0; see `LICENSE-APACHE` and `NOTICE`.
 
+use ark_ff::BigInteger256;
 use kimchi::{circuits::wires::COLUMNS, proof::ProverCommitments};
 use ledger::proofs::{
     field::{Boolean, CircuitVar, GroupAffine, ToBoolean},
     public_input::{messages::MessagesForNextWrapProof, prepared_statement::DeferredValues},
     step::{FeatureFlags, OptFlag},
-    transaction::{poseidon::Sponge, Check, ProofWithPublic},
-    util::four_u64_to_field,
+    transaction::{poseidon::Sponge, Check, InnerCurve, ProofWithPublic},
+    unfinalized::{AllEvals, Unfinalized},
+    util::{four_u64_to_field, two_u64_to_field},
     witness::Witness,
-    wrap::{one_hot_vector, Domains, Packed, WrapStatement},
+    wrap::{
+        one_hot_vector, ones_vector, pseudo,
+        wrap_verifier::{all_possible_domains, NUM_POSSIBLE_DOMAINS},
+        Domains, Packed, WrapStatement,
+    },
     ProverIndex,
 };
 use mina_curves::pasta::{Fp, Fq, Vesta};
 
 use super::{
+    finalize::{finalize_other_proof, FinalizeOtherProofParams},
     key::{choose_key, Comm, Opt, StepKey},
     opt_sponge::OptSponge,
     verifier::{self, IncrementallyVerifyProofParams, LookupMessages, Messages},
@@ -271,7 +278,27 @@ impl AllFlags {
     }
 }
 
+/// What the wrap circuit reads of one of the step proof's previous proofs: one per slot, `max_proofs_verified`
+/// slots in all. A branch that verifies fewer proofs fills the front slots with dummies.
+pub struct PreviousSlot {
+    /// The step statement's unfinalized proof for this slot.
+    pub unfinalized: Unfinalized,
+    /// The accumulator `messages_for_next_wrap_proof` holds: the commitment, and the challenges the
+    /// slot's proof was made with (as many as the slot's programs' `maxProofsVerified`, at most).
+    pub sg: InnerCurve<Fq>,
+    pub old_bulletproof_challenges: Vec<[Fq; 15]>,
+    /// The evaluations of the previous (wrap) proof.
+    pub evals: AllEvals<Fq>,
+    /// The index of its wrap domain among `all_possible_domains`.
+    pub wrap_domain_index: u64,
+}
+
 pub struct WrapMainParams<'a> {
+    /// The most previous proofs any method of the program verifies.
+    pub max_proofs_verified: usize,
+    /// The number of proofs each branch verifies.
+    pub step_widths: &'a [u64],
+    pub slots: &'a [PreviousSlot],
     /// The step keys, one per branch.
     pub step_keys: &'a [StepKey],
     pub flags: ProgramFlags,
@@ -309,8 +336,100 @@ fn hash_messages_for_next_wrap_proof(
     sponge.squeeze(w)
 }
 
+/// `pack_statement`: the step statement as the wrap circuit hands it to the verifier (its public
+/// input), with the `messages_for_next_wrap_proof` hashes the circuit computed.
+fn pack_statement(
+    unfinalized_proofs: &[&Unfinalized],
+    messages_for_next_step_proof_hash: &[u64; 4],
+    messages_for_next_wrap_proof: &[[u64; 4]],
+    w: &mut Witness<Fq>,
+) -> anyhow::Result<Vec<Packed<Boolean>>> {
+    let mut packed = Vec::<Packed<Boolean>>::new();
+    let var = CircuitVar::Var;
+
+    let split = |f: Fq, w: &mut Witness<Fq>| {
+        let n: BigInteger256 = f.into();
+        let is_odd = n.0[0] & 1 != 0;
+        let y = if is_odd { f - Fq::from(1u64) } else { f } / Fq::from(2u64);
+        let (y, b) = w.exists((y, is_odd.to_boolean()));
+        (CircuitVar::Var(y), b)
+    };
+
+    for unfinalized in unfinalized_proofs {
+        let Unfinalized {
+            deferred_values:
+                ledger::proofs::unfinalized::DeferredValues {
+                    plonk:
+                        ledger::proofs::public_input::prepared_statement::Plonk {
+                            alpha,
+                            beta,
+                            gamma,
+                            zeta,
+                            zeta_to_srs_length,
+                            zeta_to_domain_size,
+                            perm,
+                            lookup: _,
+                            feature_flags: _,
+                        },
+                    combined_inner_product,
+                    b,
+                    xi,
+                    bulletproof_challenges,
+                },
+            should_finalize,
+            sponge_digest_before_evaluations,
+        } = unfinalized;
+
+        // Fq
+        for shifted in [
+            combined_inner_product,
+            b,
+            zeta_to_srs_length,
+            zeta_to_domain_size,
+            perm,
+        ] {
+            packed.push(Packed::Field(split(shifted.shifted, w)));
+        }
+        packed.push(Packed::PackedBits(
+            var(four_u64_to_field(sponge_digest_before_evaluations)?),
+            255,
+        ));
+        // Challenges, then scalar challenges
+        for c in [beta, gamma, alpha, zeta, xi] {
+            packed.push(Packed::PackedBits(var(two_u64_to_field(c)), 128));
+        }
+        packed.extend(
+            bulletproof_challenges
+                .iter()
+                .map(|v| Packed::PackedBits(var(two_u64_to_field::<Fq, _>(v)), 128)),
+        );
+        packed.push(Packed::PackedBits(var(Fq::from(*should_finalize)), 1));
+    }
+
+    packed.push(Packed::PackedBits(
+        var(four_u64_to_field(messages_for_next_step_proof_hash)?),
+        255,
+    ));
+    for msg in messages_for_next_wrap_proof {
+        packed.push(Packed::PackedBits(var(four_u64_to_field(msg)?), 255));
+    }
+    Ok(packed)
+}
+
+/// `Wrap_hack.Checked.pad_challenges`: a proof's old challenges, front-padded with the dummies to 2.
+fn pad_challenges(chals: &[[Fq; 15]]) -> Vec<[Fq; 15]> {
+    let mut padded = chals.to_vec();
+    while padded.len() < 2 {
+        padded.insert(0, MessagesForNextWrapProof::dummy_padding());
+    }
+    padded
+}
+
 pub fn wrap_main(params: WrapMainParams, w: &mut Witness<Fq>) -> anyhow::Result<()> {
     let WrapMainParams {
+        max_proofs_verified,
+        step_widths,
+        slots,
         step_keys,
         flags,
         which_index,
@@ -326,7 +445,15 @@ pub fn wrap_main(params: WrapMainParams, w: &mut Witness<Fq>) -> anyhow::Result<
     let which_branch = w.exists(Fq::from(which_index));
     let which_branch = one_hot_vector::of_index(which_branch, branches, w);
 
-    // `prev_proof_state`: no unfinalized proofs, then the digest.
+    // Which of the slots hold a proof the branch verifies: those after the first `width` slots' worth
+    // of dummies.
+    let first_zero = pseudo::choose(&which_branch, step_widths);
+    let actual_proofs_verified_mask = ones_vector(first_zero, max_proofs_verified as u64, w);
+
+    // `prev_proof_state`: the unfinalized proofs, then the digest.
+    for slot in slots {
+        w.exists_no_check(&slot.unfinalized);
+    }
     w.exists(four_u64_to_field::<Fq, _>(&messages_for_next_step_proof_hash)?);
 
     let step_plonk_index = choose_key(step_keys, &which_branch, w);
@@ -367,15 +494,97 @@ pub fn wrap_main(params: WrapMainParams, w: &mut Witness<Fq>) -> anyhow::Result<
         ensure_consistent(&k.lookup_selector_ffmul, all.foreign_field_mul)?;
     }
 
-    // No previous proofs: no accumulators, challenges, evaluations or wrap domains.
+    let prev_step_accs = w.exists(slots.iter().map(|s| s.sg.clone()).collect::<Vec<_>>());
+    let old_bp_chals = w.exists(
+        slots
+            .iter()
+            .map(|s| s.old_bulletproof_challenges.clone())
+            .collect::<Vec<_>>(),
+    );
+
+    // The previous proofs' deferred values, which they left for this circuit to check.
+    let new_bulletproof_challenges = if slots.is_empty() {
+        vec![]
+    } else {
+        let evals = slots.iter().map(|s| s.evals.clone()).collect::<Vec<_>>();
+        let evals = w.exists(&evals[..]);
+        let wrap_domains = {
+            let all_possible_domains = all_possible_domains();
+            let indices = w.exists(
+                slots
+                    .iter()
+                    .map(|s| Fq::from(s.wrap_domain_index))
+                    .collect::<Vec<_>>(),
+            );
+            let mut domains = indices
+                .iter()
+                .rev()
+                .map(|index| {
+                    let which = one_hot_vector::of_index(*index, NUM_POSSIBLE_DOMAINS as u64, w);
+                    pseudo::to_domain(&which, &all_possible_domains)
+                })
+                .collect::<Vec<_>>();
+            domains.reverse();
+            domains
+        };
+        slots
+            .iter()
+            .zip(&old_bp_chals)
+            .zip(evals)
+            .zip(&wrap_domains)
+            .map(|(((slot, old_bulletproof_challenges), evals), domain)| {
+                let unfinalized = &slot.unfinalized;
+                let mut sponge = Sponge::<Fq>::new();
+                sponge.absorb2(
+                    &[four_u64_to_field(&unfinalized.sponge_digest_before_evaluations)?],
+                    w,
+                );
+                // `Wrap_hack.Checked.pad_challenges`: the previous proof was made with two, the
+                // missing ones the constant dummies.
+                let padded = pad_challenges(old_bulletproof_challenges);
+                let (finalized, chals) = finalize_other_proof(
+                    FinalizeOtherProofParams {
+                        domain,
+                        sponge,
+                        old_bulletproof_challenges: &padded,
+                        constant_challenges: 2 - old_bulletproof_challenges.len(),
+                        deferred_values: &unfinalized.deferred_values,
+                        evals,
+                    },
+                    w,
+                );
+                Boolean::assert_any(&[finalized, unfinalized.should_finalize.to_boolean().neg()], w);
+                Ok(chals)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?
+    };
+
+    // The previous proofs' `messages_for_next_wrap_proof` hashes, in the order the OCaml computes them.
+    let prev_messages_for_next_wrap_proof = {
+        let mut hashes = prev_step_accs
+            .iter()
+            .zip(&old_bp_chals)
+            .rev()
+            .map(|(sacc, chals)| {
+                let hash = hash_messages_for_next_wrap_proof(chals.len(), sacc.to_affine(), chals, w);
+                let bigint: BigInteger256 = hash.into();
+                bigint.0
+            })
+            .collect::<Vec<_>>();
+        hashes.reverse();
+        hashes
+    };
 
     let openings_proof = w.exists(&proof.proof.proof);
     let messages = exists_messages(&proof.proof.commitments, flags, w);
 
-    let public_input = vec![Packed::PackedBits(
-        CircuitVar::Var(four_u64_to_field::<Fq, _>(&messages_for_next_step_proof_hash)?),
-        255,
-    )];
+    let unfinalized_proofs = slots.iter().map(|s| &s.unfinalized).collect::<Vec<_>>();
+    let public_input = pack_statement(
+        &unfinalized_proofs,
+        &messages_for_next_step_proof_hash,
+        &prev_messages_for_next_wrap_proof,
+        w,
+    )?;
 
     let DeferredValues {
         plonk,
@@ -389,14 +598,14 @@ pub fn wrap_main(params: WrapMainParams, w: &mut Witness<Fq>) -> anyhow::Result<
     let sponge = OptSponge::create();
     verifier::incrementally_verify_proof(
         IncrementallyVerifyProofParams {
-            actual_proofs_verified_mask: vec![],
+            actual_proofs_verified_mask,
             step_domains: &step_domains,
             verification_key: &step_plonk_index,
             srs: step_prover_index.srs.clone(),
             xi,
             sponge,
             public_input,
-            sg_old: vec![],
+            sg_old: prev_step_accs,
             advice: ledger::proofs::wrap::wrap_verifier::Advice {
                 b: b.clone(),
                 combined_inner_product: combined_inner_product.clone(),
@@ -409,7 +618,16 @@ pub fn wrap_main(params: WrapMainParams, w: &mut Witness<Fq>) -> anyhow::Result<
         w,
     );
 
-    hash_messages_for_next_wrap_proof(0, openings_proof.sg, &[], w);
+    let new_bulletproof_challenges = new_bulletproof_challenges
+        .into_iter()
+        .map(|v| <[Fq; 15]>::try_from(v).expect("a wrap proof has 15 bulletproof challenges"))
+        .collect::<Vec<_>>();
+    hash_messages_for_next_wrap_proof(
+        max_proofs_verified,
+        openings_proof.sg,
+        &new_bulletproof_challenges,
+        w,
+    );
 
     Ok(())
 }

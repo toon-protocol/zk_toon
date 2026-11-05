@@ -2,7 +2,9 @@
 //! as `rust_<method>_proof.json` in the directory given: `land_proof.json`'s shape, with `proof` the
 //! Rust wrap proof in the form o1js's `verify` reads for a program (`maxProofsVerified` 0), for
 //! `o1js/src/rust-wrap.test.ts`. Also `rust_witness_land_proof.json`, the same for `land` proved from
-//! the Rust step witness rather than o1js's step proof. `fixture-gen/regenerate.sh --write` runs it.
+//! the Rust step witness rather than o1js's step proof. The toy zkApp's two methods, `plain` and
+//! `recurse` (`fixture-gen/toy.mjs`), likewise as `rust_toy_<method>_proof.json`, at the program's
+//! `maxProofsVerified` of 1. `fixture-gen/regenerate.sh --write` runs it.
 
 use std::{io::Read, str::FromStr};
 
@@ -11,10 +13,10 @@ use ledger::proofs::transaction::ProofWithPublic;
 use mina_curves::pasta::Fp;
 use zk_prover::{
     land_program::LandProgram,
-    verify::WrapProof,
+    verify::{load_vk, WrapProof},
     witness::land::LandInputs,
-    wrap::{deferred::step_features, union_features, wrap, WrapCircuit, WrapParams},
-    StepCircuit, StepLand, StepSetup, WrapLandSetup,
+    wrap::{deferred::step_features, union_features, wrap, PreviousProof, WrapCircuit, WrapParams},
+    StepCircuit, StepLand, StepSetup, StepToyPlain, StepToyRecurse, WrapLandSetup, WrapToy,
 };
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -37,10 +39,68 @@ fn step_proof(n: &str) -> ProofWithPublic<Fp> {
     }
 }
 
+/// `toy_<method>_stepproof` and its public input.
+fn toy_step_proof(method: &str) -> ProofWithPublic<Fp> {
+    let b64 = String::from_utf8(fixture(&format!("toy_{method}_stepproof.b64"))).unwrap();
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).unwrap();
+    let public: Vec<String> =
+        serde_json::from_slice(&fixture(&format!("toy_{method}_stepproof_public.json"))).unwrap();
+    ProofWithPublic {
+        proof: rmp_serde::from_slice(&bytes).unwrap(),
+        public_input: public.iter().map(|s| Fp::from_str(s).unwrap()).collect(),
+    }
+}
+
+/// The toy zkApp's two methods: `plain` verifies no proof, `recurse` one proof of `toy-inner`.
+fn toy(out: &std::path::Path) -> anyhow::Result<()> {
+    let load = |n: &str| {
+        (
+            fixture(&format!("{n}_gates.json")),
+            fixture(&format!("{n}_internal_vars.bin")),
+            fixture(&format!("{n}_rows_rev.bin")),
+        )
+    };
+    let (g, i, r) = load("toy_plain");
+    let plain = StepCircuit::load::<StepToyPlain>(&g, &i, &r)?;
+    let (g, i, r) = load("toy_recurse");
+    let recurse = StepCircuit::load::<StepToyRecurse>(&g, &i, &r)?;
+    let (g, i, r) = load("toy_wrap");
+    let circuit = WrapCircuit::load::<WrapToy>(&g, &i, &r)?;
+    let features = union_features(&[step_features(plain.index()), step_features(recurse.index())]);
+
+    let inputs: serde_json::Value = serde_json::from_slice(&fixture("toy_inputs.json"))?;
+    let inner_proof: serde_json::Value = serde_json::from_slice(&fixture("toy_inner_proof.json"))?;
+    let inner = WrapProof::from_o1js_base64(inner_proof["proof"].as_str().unwrap())?;
+    let inner_vk = load_vk(inputs["innerVk"].as_str().unwrap())?;
+    let inner_public = [Fp::from_str(inputs["innerPublicInput"].as_str().unwrap()).unwrap()];
+    let previous = [PreviousProof { proof: &inner, verification_key: &inner_vk, public_input: &inner_public }];
+
+    // Method order is the branch: `plain`, then `recurse`.
+    for (branch, method) in [(0, "plain"), (1, "recurse")] {
+        let proved = wrap::<WrapToy>(
+            WrapParams {
+                max_proofs_verified: 1,
+                step_circuits: &[&plain, &recurse],
+                branch,
+                features: features.clone(),
+                step_proof: &toy_step_proof(method),
+                previous_proofs: &previous[..branch],
+                previous_max_proofs_verified: &[0],
+            },
+            &circuit,
+        )?;
+        let mut json: serde_json::Value = serde_json::from_slice(&fixture(&format!("toy_{method}_proof.json")))?;
+        json["proof"] = WrapProof::from_prover(&proved.proof).to_o1js_program_base64_for(1)?.into();
+        std::fs::write(out.join(format!("rust_toy_{method}_proof.json")), serde_json::to_vec(&json)?)?;
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let out = std::path::PathBuf::from(
         std::env::args().nth(1).ok_or_else(|| anyhow::anyhow!("usage: rust_wrap_proofs <out dir>"))?,
     );
+    toy(&out)?;
     let load = |n: &str| {
         (
             fixture(&format!("{n}_gates.json")),
@@ -65,6 +125,8 @@ fn main() -> anyhow::Result<()> {
                 branch,
                 features: features.clone(),
                 step_proof: &step_proof(step),
+                previous_proofs: &[],
+                previous_max_proofs_verified: &[],
             },
             &circuit,
         )?;
