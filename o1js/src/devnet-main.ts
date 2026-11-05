@@ -364,6 +364,8 @@ await step('setup', () => land('setup', async () => {
  * Runs the vault check on the run's vault, as a payer would, and journals the verdict. A registered vault must pass; a
  * short-window one isn't checked, since it is deployed directly and refused for want of a registry entry.
  */
+/** The refusals an archive that hasn't caught up with the node gives: its actions don't yet hash to the account's. */
+const ARCHIVE_LAG = new Set(['read', 'actionState', 'registry', 'registry.actionState']);
 const vaultCheck = (name: string) => step(name, async () => {
   if (!registered) return;
   // The archive must hold every action, the registry's entry included, before the check can hash them up.
@@ -375,7 +377,8 @@ const vaultCheck = (name: string) => step(name, async () => {
     journal.facts[name] = { slot: (await wallSlot()).toString(), verdict };
     saveJournal();
     if (verdict.pass) return log(`${name}: passed, ${verdict.dispatched} dispatched and ${verdict.reduced} reduced`);
-    if (tries >= 20) throw Error(`${name}: refused: ${JSON.stringify(verdict.refusals)}`);
+    const lagging = verdict.refusals.every((r) => ARCHIVE_LAG.has(r.check));
+    if (!lagging || tries >= 20) throw Error(`${name}: refused: ${JSON.stringify(verdict.refusals)}`);
     log(`${name}: refused, the archive may be behind: ${JSON.stringify(verdict.refusals)}`);
     await sleep(30_000);
   }

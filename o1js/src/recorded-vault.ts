@@ -2,8 +2,8 @@
 // vault with two reduced notes, one of them escaped. The note left unspent is the one the request-proof
 // fixtures are proved for, so the recording and the proofs describe one chain.
 //
-// The vault's deposit and reduce must land within two slots of a slot they name, and proving outlasts that.
-// So a transaction names a slot far enough ahead to prove in, waits for it, and is built again if it misses.
+// The vault's deposit and reduce must land within two slots of a slot they name, and proving outlasts that, so they
+// land through `lightnetLanding` (`lightnet.ts`).
 import { AccountUpdate, Field, Mina, PrivateKey, Signature, UInt64, Unconstrained, fetchAccount } from 'o1js';
 import { lightnetLanding } from './lightnet.js';
 import type { NoteTree } from './note-tree.js';

@@ -1,9 +1,9 @@
 // The registry's sighting (ADR 0011): a deployment record says a registry was empty and locked at a slot, and anyone can
 // reproduce that. The public archive API serves action lists and command hashes, not commands, so the deploy command is
-// published beside the record. Its hash is the recorded transaction, an archive lists it as applied by the recorded slot,
-// and it shows on its face that the update creating the account (`isNew`) locked it and dispatched nothing. From then on
-// an action needs the registry's proof, so the record holds if the archive lists no action by that slot and its actions
-// hash to the registry's action state on chain. See docs/devnet-smoke.md for the steps.
+// published beside the record. Its hash is the recorded transaction, an archive lists it as applied at the published
+// height, and it shows on its face that the update creating the account (`isNew`) locked it and dispatched nothing. From
+// then on an action needs the registry's proof, so the record holds if the archive lists no action by that height and
+// its actions hash to the registry's action state on chain. See docs/devnet-smoke.md for the steps.
 import { readFileSync } from 'node:fs';
 import { Experimental, Mina, PublicKey, Types, fetchAccount } from 'o1js';
 import type { RegistryDeployment } from './registry-deployments.js';
@@ -16,12 +16,14 @@ export type SightingEvidence = {
   command: unknown;
   /** What `Mina.Transaction.hash` gives for `command`. */
   commandHash: string;
-  /** The archive's block that lists the recorded transaction, if any, with the command's failure. */
-  block?: { slot: string; failure: string | null };
+  /** The block height the published command landed at, as published beside it. */
+  height: string;
+  /** The archive's canonical block at `height`, if it lists the recorded transaction, with the command's failure. */
+  block?: { failure: string | null };
   /** The registry's actions as the archive has them, one list per account update, oldest first. */
   actions: string[][][];
-  /** The slot of the block of each list in `actions`. */
-  actionSlots: string[];
+  /** The height of the block of each action the archive lists. */
+  actionHeights: string[];
   /** The registry as the node has it now. */
   account?: { verificationKeyHash: string | null; permissions: Record<string, unknown>; actionState: string };
 };
@@ -29,14 +31,17 @@ export type SightingEvidence = {
 type CommandUpdate = {
   body: {
     publicKey: string;
-    update: { verificationKey: { hash: string } | null; permissions: Record<string, unknown> | null };
+    update: { verificationKey: { data: string; hash: string } | null; permissions: Record<string, unknown> | null };
     preconditions: { account: { isNew: boolean | null } };
     actions: string[][];
   };
 };
 
-/** What is wrong with the sighting; empty when the record holds. */
-export function sightingProblems(e: SightingEvidence, { registryCodeHash }: { registryCodeHash: string }): string[] {
+/**
+ * What is wrong with the sighting; empty when the record holds. The command's key is compared by its data too, not only
+ * its hash: a key's data under another key's hash is accepted on a node (#81, `o1js/lightnet/README.md`).
+ */
+export function sightingProblems(e: SightingEvidence, { registryCodeHash, registryKeyData }: { registryCodeHash: string; registryKeyData: string }): string[] {
   const problems: string[] = [];
   const { record } = e;
   if (e.commandHash !== record.transaction) {
@@ -44,7 +49,6 @@ export function sightingProblems(e: SightingEvidence, { registryCodeHash }: { re
   }
   if (!e.block) problems.push(`the archive lists no block with ${record.transaction}`);
   else if (e.block.failure) problems.push(`the deploy failed on chain: ${e.block.failure}`);
-  else if (BigInt(e.block.slot) > BigInt(record.slot)) problems.push(`the deploy landed in slot ${e.block.slot}, after the recorded slot ${record.slot}`);
 
   const updates = (e.command as { accountUpdates?: CommandUpdate[] }).accountUpdates ?? [];
   const own = updates.filter((u) => u.body.publicKey === record.registry);
@@ -54,14 +58,15 @@ export function sightingProblems(e: SightingEvidence, { registryCodeHash }: { re
   if (!update) return [...problems, 'the command has no update of the registry'];
   const key = update.body.update.verificationKey?.hash ?? 'none';
   if (key !== registryCodeHash) problems.push(`the command gives the registry key hash ${key}, not the published ${registryCodeHash}`);
+  else if (update.body.update.verificationKey?.data !== registryKeyData) problems.push("the command gives the registry the published key hash with another key's data");
   const set = update.body.update.permissions;
   if (!set || Object.entries(permissionsWanted()).some(([name, want]) => JSON.stringify(set[name]) !== JSON.stringify(want))) {
     problems.push("the command doesn't set the registry's permissions to ADR 0006's table");
   }
   if (own.some((u) => u.body.actions.length > 0)) problems.push('the command dispatches actions to the registry');
 
-  const early = e.actionSlots.find((s) => BigInt(s) <= BigInt(record.slot));
-  if (early !== undefined) problems.push(`the registry has an action in slot ${early}, by the recorded slot ${record.slot}`);
+  const early = e.actionHeights.find((h) => BigInt(h) <= BigInt(e.height));
+  if (early !== undefined) problems.push(`the registry has an action at height ${early}, by the deploy's height ${e.height}`);
 
   if (!e.account) return [...problems, `the node has no account at ${record.registry}`];
   const state = extendActionState(Experimental.BatchReducer.initialActionState, e.actions).toString();
@@ -85,17 +90,21 @@ async function query<T>(url: string, query: string, variables: object = {}): Pro
   return body.data;
 }
 
-/** The archive's block at `height`, if it lists `hash`, with the command's failure. */
+/**
+ * The archive's canonical block at `height`, if it lists `hash`, with the command's failure. The archive API's blocks
+ * carry no slot, so the sighting is anchored on heights; the record's slot is the node's, taken at the deploy.
+ */
 export async function archivedCommand(archive: string, height: string, hash: string) {
-  const { blocks } = await query<{ blocks: { blockHeight: number; protocolState: { consensusState: { slotSinceGenesis: string } }; transactions: { zkappCommands: { hash: string; failureReason: string | null }[] } }[] }>(
+  const { blocks } = await query<{ blocks: { blockHeight: number; transactions: { zkappCommands: { hash: string; failureReason: string | null }[] } }[] }>(
     archive,
-    `query($h: Int!) { blocks(limit: 1, query: { blockHeight_gte: $h }) {
-      blockHeight protocolState { consensusState { slotSinceGenesis } } transactions { zkappCommands { hash failureReason } } } }`,
+    // The archive answers lowest height first (checked on devnet, 2026-11-04).
+    `query($h: Int!) { blocks(limit: 1, query: { blockHeight_gte: $h, canonical: true }) {
+      blockHeight transactions { zkappCommands { hash failureReason } } } }`,
     { h: Number(height) },
   );
   const block = blocks.find((b) => String(b.blockHeight) === height);
   const found = block?.transactions.zkappCommands.find((c) => c.hash === hash);
-  return block && found ? { slot: block.protocolState.consensusState.slotSinceGenesis, failure: found.failureReason } : undefined;
+  return block && found ? { failure: found.failureReason } : undefined;
 }
 
 /** Reads the evidence for `record` from the archive and node of the active Mina instance. */
@@ -104,8 +113,8 @@ export async function readSighting(record: RegistryDeployment, archive: string):
   const address = PublicKey.fromBase58(record.registry);
   const lists = await Mina.fetchActions(address);
   if ('error' in lists) throw Error(JSON.stringify(lists.error));
-  const { actions } = await query<{ actions: { blockInfo: { globalSlotSinceGenesis: number } }[] }>(
-    archive, 'query($a: String!) { actions(input: { address: $a }) { blockInfo { globalSlotSinceGenesis } } }', { a: record.registry },
+  const { actions } = await query<{ actions: { blockInfo: { height: number } }[] }>(
+    archive, 'query($a: String!) { actions(input: { address: $a }) { blockInfo { height } } }', { a: record.registry },
   );
   const { account } = await fetchAccount({ publicKey: address });
   const json = account ? Types.Account.toJSON(account) : undefined;
@@ -113,9 +122,10 @@ export async function readSighting(record: RegistryDeployment, archive: string):
     record,
     command: published.command,
     commandHash: await Mina.Transaction.hash(published.command as never),
+    height: published.height,
     block: await archivedCommand(archive, published.height, record.transaction),
     actions: lists.map((l) => l.actions),
-    actionSlots: actions.map((a) => String(a.blockInfo.globalSlotSinceGenesis)),
+    actionHeights: actions.map((a) => String(a.blockInfo.height)),
     account: account && json ? {
       verificationKeyHash: account.zkapp?.verificationKey?.hash.toString() ?? null,
       permissions: json.permissions as Record<string, unknown>,

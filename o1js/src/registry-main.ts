@@ -63,9 +63,9 @@ async function inclusion(hash: string) {
 }
 
 /** Reproduces `record`'s sighting, waiting a while for the archive to catch up. Answers what is wrong, if anything. */
-async function sighting(record: RegistryDeployment, registryCodeHash: string, { wait = false } = {}) {
+async function sighting(record: RegistryDeployment, { wait = false } = {}) {
   for (let tries = 0; ; tries++) {
-    const problems = sightingProblems(await readSighting(record, ARCHIVE_URL), { registryCodeHash });
+    const problems = sightingProblems(await readSighting(record, ARCHIVE_URL), { registryCodeHash: keys.registry.codeHash, registryKeyData: keys.registry.verificationKey.data });
     if (problems.length === 0 || !wait || tries >= 40) return problems;
     log(`sighting: ${problems.join('; ')}; the archive may be behind, trying again`);
     await sleep(30_000);
@@ -105,7 +105,7 @@ if (command === 'deploy') {
     network: NETWORK, registry: published.registry, slot: published.slot!,
     actionState: Experimental.BatchReducer.initialActionState.toString(), transaction: published.transaction,
   };
-  const problems = await sighting(record, keys.registry.codeHash, { wait: true });
+  const problems = await sighting(record, { wait: true });
   if (problems.length > 0) throw Error(`the sighting does not hold, so nothing is recorded: ${problems.join('; ')}`);
   const file = JSON.parse(readFileSync(REGISTRY_DEPLOYMENTS_PATH, 'utf8')) as { deployments: RegistryDeployment[] };
   file.deployments.push(record);
@@ -116,7 +116,7 @@ if (command === 'deploy') {
   const record = recorded();
   if (!record) throw Error(`registry-deployments.json records no ${NETWORK} registry`);
   if (command === 'sighting') {
-    const problems = await sighting(record, keys.registry.codeHash);
+    const problems = await sighting(record);
     log(problems.length === 0 ? `the sighting holds: ${record.registry} was empty and locked at slot ${record.slot}` : `the sighting does not hold: ${problems.join('; ')}`);
     process.exit(problems.length === 0 ? 0 : 1);
   }

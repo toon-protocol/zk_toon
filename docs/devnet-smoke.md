@@ -41,11 +41,15 @@ block, but not the commands. So the deploy command is published, and the sightin
 (`registry-sighting.ts`):
 
 1. The published command hashes (`Mina.Transaction.hash`) to the record's `transaction`.
-2. The archive's block at the published height lists that hash, with no failure, in a slot no later than the record's.
-3. In the command, the registry's update requires a new account (`isNew`), sets the published registry key hash and
-   ADR 0006's permissions, and dispatches nothing. From then on only the registry's proof can add an entry.
-4. The archive lists no registry action by the record's slot, its actions hash to the registry's action state on the
-   node, and the node shows the registry still carrying the published key hash and permissions.
+2. The archive's canonical block at the published height lists that hash, with no failure.
+3. In the command, the registry's update requires a new account (`isNew`), sets the published registry key, its data
+   as well as its hash, and ADR 0006's permissions, and dispatches nothing. From then on only the registry's proof can
+   add an entry.
+4. The archive lists no registry action at or below the deploy's height, its actions hash to the registry's action
+   state on the node, and the node shows the registry still carrying the published key hash and permissions.
+
+The archive API's blocks carry no slot, so the record's slot is the node's, read when the deploy landed; the height is
+what the archive confirms.
 
 ## Run `short-1`, 2026-11-02: the escape pays out, on a short-window test vault
 

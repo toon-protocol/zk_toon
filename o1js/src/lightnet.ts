@@ -1,5 +1,6 @@
 // Connects o1js to the proofs-on lightnet started by `lightnet/lightnet.sh up`, and lends a funded
-// genesis account from its account manager. Shared by the lightnet tests (`*.lightnet.ts`) and `request-fixtures-main.ts`.
+// genesis account from its account manager, and lands commands on it (`lightnetLanding`). Shared by the lightnet tests
+// (`*.lightnet.ts`) and `request-fixtures-main.ts`.
 import { Lightnet, Mina, PrivateKey, fetchAccount } from 'o1js';
 
 export const MINA = 'http://127.0.0.1:8080/graphql';
@@ -40,8 +41,9 @@ export function lightnetLanding(mina: string, sender: Mina.TestPublicKey, log: (
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ query: '{ daemonStatus { consensusTimeNow { globalSlot } } }' }),
     });
-    const { data } = await response.json();
-    return BigInt(data.daemonStatus.consensusTimeNow.globalSlot);
+    const body = await response.json();
+    if (!body.data) throw Error(`daemonStatus: ${JSON.stringify(body.errors)}`);
+    return BigInt(body.data.daemonStatus.consensusTimeNow.globalSlot);
   }
 
   /** Sends `tx` and answers why it did not apply, or nothing if it did. */

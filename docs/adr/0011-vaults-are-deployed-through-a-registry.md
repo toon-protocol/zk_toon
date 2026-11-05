@@ -77,7 +77,7 @@ account holds nothing, and only `setDelegate` needs a signature.
 - **The key's data isn't compared, only its hash, and on a node that is not safe** (#81). `{ data: <rogue>, hash:
   <published> }` on a new account is accepted by `LocalBlockchain` and by a single-node lightnet. On a fresh lightnet
   the account then runs the rogue contract: its proofs are accepted, the published contract's are refused, and the
-  vault check passes the account. After an honest vault had registered on the same chain, the reverse held. Mina's
+  vault check, which reads only the hash, would pass the account (not run). After an honest vault had registered on the same chain, the reverse held. Mina's
   binary form recomputes a key's hash from its data, so peers that get the command by gossip should refuse it, but
   that hasn't run on devnet (`o1js/lightnet/README.md`). This reopens the decision that the check stays hash-only;
   until it is settled, no registry is deployed on devnet and no sighting is published.
