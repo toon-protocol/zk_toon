@@ -38,7 +38,29 @@ byte-identical on a rerun.
 Two things are pinned so a rerun is byte-identical: the fee payer (o1js picks a random one) and
 the blinding of each account update's `callData` (`Fp.random`).
 
-The private keys in `prove-local.mjs` are toy scalars. Never use them for anything else.
+The private keys in `prove-local.mjs` and `prove-toy.mjs` are toy scalars. Never use them for anything else.
+
+## The toy zkApp that verifies a proof
+
+`land` and `setup` verify no proof. `toy.mjs` is a second toy, kept apart from the vault, for the wrap of a step proof that
+verified a previous one: a ZkProgram `toy-inner` with one method (`base`, proving that 49 is a square) and a zkApp `Outer`
+with two methods, `plain`, which verifies no proof, and `recurse`, which verifies a proof of `toy-inner`. The zkApp's
+`maxProofsVerified` is 1. `prove-toy.mjs` proves both methods on a `LocalBlockchain`, dumping with the same patch; `check-toy.mjs`
+checks the numbered dump is laid out as `regenerate.sh` assumes. `./regenerate.sh --write` writes these fixtures too, and
+`./regenerate.sh --toy-only` writes only them (and `rust_toy_*`), leaving the `land` and `setup` fixtures as they are.
+
+- `toy_plain_*` and `toy_recurse_*` (`gates.json`, `internal_vars.bin`, `rows_rev.bin`) are the step circuits, `toy_wrap_*` the
+  wrap circuit both share.
+- `toy_<method>_stepproof.b64` is o1js's step proof and `toy_<method>_stepproof_public.json` its public input: 34 fields, the
+  unfinalized proof (32, a dummy for `plain`), the `messages_for_next_step_proof` hash and the `messages_for_next_wrap_proof`
+  hash. `toy_<method>_wrap_witness.json` is o1js's wrap witness for that step proof, reduced to its `external` values.
+- `toy_inner_proof.json` is the proof of `toy-inner` that `recurse` verified, `toy_inputs.json` holds the zkApp's verification key
+  and hash and `toy-inner`'s, and `toy_<method>_proof.json` o1js's final proofs. `rust_toy_<method>_proof.json` are the Rust wrap
+  proofs, at `maxProofsVerified` 1, for `o1js/src/rust-wrap.test.ts`.
+
+The circuits, `inputs`-style files (`toy_inputs.json`) and the VK hashes in `zk-prover/src/pins.rs` are byte-identical on a rerun;
+the step proofs, the wrap witnesses and `*_proof.json` are not (o1js's proofs are randomised), and neither is the step witness of
+`recurse`, which holds the inner proof.
 
 `trace-land.mjs` is a development tool for `zk-prover/src/witness`: it proves `land` as `prove-local.mjs`
 does and logs the calls into o1js's OCaml side (Poseidon, `scaleFastUnpack`, `truncateToBits16`) and the

@@ -66,6 +66,8 @@ impl LandProgram {
                 branch: LAND_BRANCH,
                 features,
                 step_proof: &step_proof,
+                previous_proofs: &[],
+                previous_max_proofs_verified: &[],
             },
             &self.wrap,
         )?;

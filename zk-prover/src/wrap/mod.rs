@@ -3,7 +3,8 @@
 //!
 //! mina-rust's `wrap` / `wrap_main` fix the number of previous proofs at 2, take a single step key
 //! and leave out optional gates and lookups. This module is a generalised copy: the number of
-//! previous proofs, the program's step keys (one per method) and its feature flags are parameters.
+//! previous proofs (up to Pickles' maximum, 2) and the proofs the step proof verified, the program's
+//! step keys (one per method) and its feature flags are parameters.
 //! See the headers of the submodules for what each is derived from.
 //!
 //! `wrap` and `prepare` are derived from `wrap` in `crates/ledger/src/proofs/wrap.rs` of
@@ -16,13 +17,13 @@ use std::rc::Rc;
 
 use ledger::proofs::{
     public_input::{
-        messages::MessagesForNextWrapProof,
+        messages::{dummy_ipa_step_sg, MessagesForNextWrapProof},
         prepared_statement::{PreparedStatement, ProofState},
     },
     step::FeatureFlags,
     transaction::{InnerCurve, ProofWithPublic, ReducedMessagesForNextStepProof},
     witness::Witness,
-    unfinalized::{AllEvals, EvalsWithPublicInput},
+    unfinalized::{AllEvals, EvalsWithPublicInput, Unfinalized},
     wrap::{dummy_ipa_wrap_sg, Domain, Domains, WrapProof, WrapProofState, WrapStatement},
 };
 use mina_curves::pasta::{Fp, Fq};
@@ -31,12 +32,15 @@ use ledger::proofs::constants::ProofConstants;
 
 use crate::StepCircuit;
 
+pub mod constant_term;
 pub mod deferred;
 pub mod endo;
+pub mod finalize;
 pub mod group_map;
 pub mod key;
 pub mod main_circuit;
 pub mod opt_sponge;
+pub mod previous;
 pub mod prove;
 
 pub use prove::WrapCircuit;
@@ -45,15 +49,23 @@ pub mod verifier;
 use ark_ff::BigInteger256;
 use deferred::{deferred_values, step_features, DeferredValuesParams};
 use key::StepKey;
-use main_circuit::{wrap_main, ProgramFlags, WrapMainParams};
+use main_circuit::{wrap_main, PreviousSlot, ProgramFlags, WrapMainParams};
+pub use previous::PreviousProof;
+use previous::{expand, expand_prechallenge, unfinalized_of_fields, UNFINALIZED_FIELDS};
+
+/// Pickles' maximum number of previous proofs: the wrap circuit pads its accumulators to this many. The
+/// fixtures exercise programs of 0 and 1 (`tests/wrap.rs`, `tests/wrap_recursive.rs`); 2 goes through the
+/// same code, with a second slot.
+pub const MAX_PROOFS_VERIFIED: usize = 2;
 
 /// The public input size of a wrap circuit.
 const WRAP_PUBLIC_INPUT_SIZE: usize = 40;
 
 /// What the wrap proves.
 pub struct WrapParams<'a> {
-    /// The most previous proofs any method of the program verifies (`maxProofsVerified`). Only 0
-    /// is supported; recursion lands with #32.
+    /// The most previous proofs any method of the program verifies (`maxProofsVerified`): at most
+    /// [`MAX_PROOFS_VERIFIED`]. The step proof's public input has that many unfinalized proofs, the
+    /// first of them dummies if the method verifies fewer.
     pub max_proofs_verified: usize,
     /// The program's step circuits, one per method, in method order.
     pub step_circuits: &'a [&'a StepCircuit],
@@ -63,6 +75,13 @@ pub struct WrapParams<'a> {
     pub features: FeatureFlags<bool>,
     /// The step proof, with its public input.
     pub step_proof: &'a ProofWithPublic<Fp>,
+    /// The proofs the step proof verified, in order: as many as the method (`step_circuits[branch]`)
+    /// verifies, none for a program that verifies no proof.
+    pub previous_proofs: &'a [PreviousProof<'a>],
+    /// For each of the `max_proofs_verified` slots, the most proofs any program whose proof a method
+    /// of this program verifies in that slot itself verifies (its `maxProofsVerified`). The wrap
+    /// circuit witnesses that many old challenges for the slot. Empty if `max_proofs_verified` is 0.
+    pub previous_max_proofs_verified: &'a [usize],
 }
 
 /// The values of the wrap circuit: the public input, then the auxiliary values, as o1js dumps them
@@ -117,6 +136,9 @@ struct Prepared {
     witness: WrapWitness,
     statement: WrapStatement,
     x_hat_evals: kimchi::proof::PointEvaluations<Vec<Fp>>,
+    /// The accumulators of the wrap proof: two, the first the dummy if the program verifies at most one
+    /// proof.
+    prev_challenges: Vec<kimchi::proof::RecursionChallenge<mina_curves::pasta::Pallas>>,
 }
 
 /// The wrap witness for a step proof.
@@ -134,17 +156,9 @@ pub fn wrap<C: ProofConstants>(
         witness,
         mut statement,
         x_hat_evals,
+        prev_challenges,
     } = prepare(params)?;
 
-    // No previous proofs: the wrap proof's accumulators are two dummies.
-    let prev_challenges = (0..2)
-        .map(|_| kimchi::proof::RecursionChallenge {
-            comm: poly_commitment::PolyComm::<mina_curves::pasta::Pallas> {
-                chunks: vec![dummy_ipa_wrap_sg()],
-            },
-            chals: MessagesForNextWrapProof::dummy_padding().to_vec(),
-        })
-        .collect();
     let proof = circuit.prove::<C>(&witness, prev_challenges)?;
 
     // A Pickles proof carries `old_bulletproof_challenges` at length 2, padded in front with the
@@ -177,6 +191,18 @@ pub struct WrapOutput {
     pub witness: WrapWitness,
 }
 
+/// A dummy slot: what Pickles puts in front of the previous proofs of a method that verifies fewer than
+/// the program's maximum.
+fn dummy_slot(unfinalized: Unfinalized, local_max: usize, wrap_domain_index: u64) -> PreviousSlot {
+    PreviousSlot {
+        unfinalized,
+        sg: InnerCurve::<Fq>::from(dummy_ipa_step_sg()),
+        old_bulletproof_challenges: vec![MessagesForNextWrapProof::dummy_padding(); local_max],
+        evals: AllEvals::dummy(),
+        wrap_domain_index,
+    }
+}
+
 fn prepare(params: WrapParams) -> anyhow::Result<Prepared> {
     let WrapParams {
         max_proofs_verified,
@@ -184,12 +210,33 @@ fn prepare(params: WrapParams) -> anyhow::Result<Prepared> {
         branch,
         features,
         step_proof,
+        previous_proofs,
+        previous_max_proofs_verified,
     } = params;
     anyhow::ensure!(
-        max_proofs_verified == 0,
-        "wrapping a program that verifies proofs is not supported yet (#32)"
+        max_proofs_verified <= MAX_PROOFS_VERIFIED,
+        "a program verifies at most {MAX_PROOFS_VERIFIED} proofs (Pickles' maximum), not {max_proofs_verified}"
     );
     anyhow::ensure!(branch < step_circuits.len(), "no such branch");
+    anyhow::ensure!(
+        previous_max_proofs_verified.len() == max_proofs_verified,
+        "previous_max_proofs_verified has one entry per slot: {max_proofs_verified}, not {}",
+        previous_max_proofs_verified.len()
+    );
+    let step_widths = step_circuits
+        .iter()
+        .map(|c| c.proofs_verified() as u64)
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        step_widths.iter().all(|w| *w as usize <= max_proofs_verified),
+        "a method verifies more proofs than the program's maxProofsVerified of {max_proofs_verified}"
+    );
+    let width = step_widths[branch] as usize;
+    anyhow::ensure!(
+        previous_proofs.len() == width,
+        "method {branch} verifies {width} proofs, but {} previous proofs were given",
+        previous_proofs.len()
+    );
 
     let branch_features = step_circuits
         .iter()
@@ -212,29 +259,150 @@ fn prepare(params: WrapParams) -> anyhow::Result<Prepared> {
         .collect::<Vec<_>>();
     let step_index = step_circuits[branch].index();
 
-    // The step proof's public input is the hash of its `messages_for_next_step_proof`.
-    let [messages_for_next_step_proof_hash] = step_proof.public_input.as_slice() else {
-        anyhow::bail!("a step proof with no previous proofs has one public input")
-    };
+    // The step proof's public input: an unfinalized proof for each slot, the hash of its
+    // `messages_for_next_step_proof` and the hash of each slot's `messages_for_next_wrap_proof`.
+    let public = &step_proof.public_input;
+    let n = max_proofs_verified;
+    anyhow::ensure!(
+        public.len() == n * UNFINALIZED_FIELDS + 1 + n,
+        "a step proof of a program that verifies at most {n} proofs has {} public inputs, not {}",
+        n * UNFINALIZED_FIELDS + 1 + n,
+        public.len()
+    );
     let to_u = |f: Fp| {
         let b: BigInteger256 = f.into();
         b.0
     };
-    let messages_for_next_step_proof_hash = to_u(*messages_for_next_step_proof_hash);
+    let unfinalized_proofs = public[..n * UNFINALIZED_FIELDS]
+        .chunks(UNFINALIZED_FIELDS)
+        .map(unfinalized_of_fields)
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let messages_for_next_step_proof_hash = to_u(public[n * UNFINALIZED_FIELDS]);
+    let public_messages_for_next_wrap_proof = &public[n * UNFINALIZED_FIELDS + 1..];
+
+    // What the step proof carries of its previous proofs.
+    let previous = previous_proofs.iter().map(expand).collect::<anyhow::Result<Vec<_>>>()?;
+    anyhow::ensure!(
+        step_proof.proof.prev_challenges.len() == width,
+        "the step proof has {} accumulators, but method {branch} verifies {width} proofs",
+        step_proof.proof.prev_challenges.len()
+    );
+    let prev_challenges_of_step_proof = step_proof
+        .proof
+        .prev_challenges
+        .iter()
+        .map(|c| {
+            <[Fp; 16]>::try_from(c.chals.clone())
+                .map_err(|_| anyhow::anyhow!("a step accumulator has 16 challenges"))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    // Dummies in front, then the previous proofs.
+    let mut slots = Vec::with_capacity(n);
+    let padding = n - width;
+    for (i, unfinalized) in unfinalized_proofs.iter().enumerate() {
+        let local_max = previous_max_proofs_verified[i];
+        if i < padding {
+            slots.push(dummy_slot(unfinalized.clone(), local_max, DUMMY_WRAP_DOMAIN_INDEX));
+            continue;
+        }
+        let prev = &previous[i - padding];
+        anyhow::ensure!(
+            prev.max_proofs_verified <= local_max,
+            "the proof in slot {i} comes from a program that verifies {} proofs, more than slot {i}'s {local_max}",
+            prev.max_proofs_verified
+        );
+        let mut old = prev.old_bulletproof_challenges[2 - prev.max_proofs_verified..].to_vec();
+        while old.len() < local_max {
+            old.insert(0, MessagesForNextWrapProof::dummy_padding());
+        }
+        slots.push(PreviousSlot {
+            unfinalized: unfinalized.clone(),
+            sg: prev.sg.clone(),
+            old_bulletproof_challenges: old,
+            evals: prev.evals.clone(),
+            wrap_domain_index: prev.max_proofs_verified as u64,
+        });
+    }
+    // The step statement hashes the accumulators it was given; they must be the previous proofs'.
+    for (i, slot) in slots.iter().enumerate() {
+        let mut all = slot.old_bulletproof_challenges.clone();
+        while all.len() < 2 {
+            all.insert(0, MessagesForNextWrapProof::dummy_padding());
+        }
+        let hash = MessagesForNextWrapProof {
+            challenge_polynomial_commitment: slot.sg.clone(),
+            old_bulletproof_challenges: all,
+        }
+        .hash();
+        anyhow::ensure!(
+            hash == to_u(public_messages_for_next_wrap_proof[i]),
+            "the accumulator of the previous proof in slot {i} is not the one the step proof hashed"
+        );
+    }
 
     let d = deferred_values(DeferredValuesParams {
-        prev_challenges: vec![],
+        prev_challenges: prev_challenges_of_step_proof,
         proof_with_public: step_proof,
-        actual_proofs_verified: 0,
+        actual_proofs_verified: width,
         prover_index: step_index,
         features: branch_features[branch].clone(),
     });
 
+    // `messages_for_next_wrap_proof`: this proof's own accumulator, and the challenges of the proofs it
+    // verified, which the circuit finalized. A Pickles proof carries them at length 2.
+    let expand_chals = |u: &Unfinalized| {
+        u.deferred_values
+            .bulletproof_challenges
+            .iter()
+            .map(expand_prechallenge)
+            .collect::<Vec<_>>()
+    };
+    let to_fq = |[a, b]: [u64; 2]| Fq::from(BigInteger256::new([a, b, 0, 0]));
     let messages_for_next_wrap_proof = MessagesForNextWrapProof {
         challenge_polynomial_commitment: InnerCurve::of_affine(step_proof.proof.proof.sg),
-        old_bulletproof_challenges: vec![],
+        old_bulletproof_challenges: unfinalized_proofs
+            .iter()
+            .map(|u| {
+                // The 128-bit prechallenges, which the proof carries.
+                let chals: Vec<Fq> = u.deferred_values.bulletproof_challenges.iter().copied().map(to_fq).collect();
+                <[Fq; 15]>::try_from(chals).map_err(|_| anyhow::anyhow!("15 challenges"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?,
     };
-    let messages_for_next_wrap_proof_hash = messages_for_next_wrap_proof.hash();
+    let messages_for_next_wrap_proof_prepared = MessagesForNextWrapProof {
+        challenge_polynomial_commitment: messages_for_next_wrap_proof.challenge_polynomial_commitment.clone(),
+        old_bulletproof_challenges: unfinalized_proofs
+            .iter()
+            .map(|u| <[Fq; 15]>::try_from(expand_chals(u)).map_err(|_| anyhow::anyhow!("15 challenges")))
+            .collect::<anyhow::Result<Vec<_>>>()?,
+    };
+    let messages_for_next_wrap_proof_hash = messages_for_next_wrap_proof_prepared.hash();
+
+    // The wrap proof's accumulators: the dummy in front if the program verifies fewer than 2 proofs, then
+    // one for each slot (its proof's own accumulator, or the dummy).
+    let mut prev_challenges = Vec::with_capacity(MAX_PROOFS_VERIFIED);
+    let dummy_accumulator = || kimchi::proof::RecursionChallenge {
+        comm: poly_commitment::PolyComm::<mina_curves::pasta::Pallas> {
+            chunks: vec![dummy_ipa_wrap_sg()],
+        },
+        chals: MessagesForNextWrapProof::dummy_padding().to_vec(),
+    };
+    for _ in 0..(MAX_PROOFS_VERIFIED - n) {
+        prev_challenges.push(dummy_accumulator());
+    }
+    for (i, unfinalized) in unfinalized_proofs.iter().enumerate() {
+        prev_challenges.push(if i < padding {
+            dummy_accumulator()
+        } else {
+            kimchi::proof::RecursionChallenge {
+                comm: poly_commitment::PolyComm::<mina_curves::pasta::Pallas> {
+                    chunks: vec![previous[i - padding].wrap_sg],
+                },
+                chals: expand_chals(unfinalized),
+            }
+        });
+    }
 
     let next_statement = WrapStatement {
         proof_state: WrapProofState {
@@ -244,8 +412,11 @@ fn prepare(params: WrapParams) -> anyhow::Result<Prepared> {
         },
         messages_for_next_step_proof: ReducedMessagesForNextStepProof {
             app_state: Rc::new(()),
-            challenge_polynomial_commitments: vec![],
-            old_bulletproof_challenges: vec![],
+            challenge_polynomial_commitments: previous
+                .iter()
+                .map(|p| InnerCurve::of_affine(p.wrap_sg))
+                .collect(),
+            old_bulletproof_challenges: previous.iter().map(|p| p.step_bulletproof_challenges).collect(),
         },
     };
 
@@ -264,6 +435,9 @@ fn prepare(params: WrapParams) -> anyhow::Result<Prepared> {
 
     wrap_main(
         WrapMainParams {
+            max_proofs_verified: n,
+            step_widths: &step_widths,
+            slots: &slots,
             step_keys: &step_keys,
             flags,
             which_index: branch as u64,
@@ -281,8 +455,12 @@ fn prepare(params: WrapParams) -> anyhow::Result<Prepared> {
         witness: WrapWitness::of_witness(&w)?,
         statement: next_statement,
         x_hat_evals: d.x_hat_evals,
+        prev_challenges,
     })
 }
+
+/// The index of the wrap domain Pickles records for a dummy slot (`Vector.extend_front_exn ... Tock.Field.one`).
+const DUMMY_WRAP_DOMAIN_INDEX: u64 = 1;
 
 pub fn union_features(branches: &[FeatureFlags<bool>]) -> FeatureFlags<bool> {
     let any = |f: fn(&FeatureFlags<bool>) -> bool| branches.iter().any(f);

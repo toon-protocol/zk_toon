@@ -2,7 +2,7 @@
 
 use std::io::Read;
 
-use zk_prover::{StepCircuit, StepLand, StepSetup};
+use zk_prover::{StepCircuit, StepLand, StepSetup, StepToyPlain, StepToyRecurse};
 
 fn fixture(name: &str) -> Vec<u8> {
     let path = format!("{}/fixtures/{name}.gz", env!("CARGO_MANIFEST_DIR"));
@@ -21,4 +21,10 @@ fn main() {
     println!("SETUP_STEP_VK_HASH={}", StepCircuit::load::<StepSetup>(&g, &i, &r).unwrap().vk_hash());
     let inputs: serde_json::Value = serde_json::from_slice(&fixture("inputs.json")).unwrap();
     println!("PROGRAM_VK_HASH={}", inputs["vkHash"].as_str().unwrap());
+    let (g, i, r) = load("toy_plain");
+    println!("TOY_PLAIN_STEP_VK_HASH={}", StepCircuit::load::<StepToyPlain>(&g, &i, &r).unwrap().vk_hash());
+    let (g, i, r) = load("toy_recurse");
+    println!("TOY_RECURSE_STEP_VK_HASH={}", StepCircuit::load::<StepToyRecurse>(&g, &i, &r).unwrap().vk_hash());
+    let inputs: serde_json::Value = serde_json::from_slice(&fixture("toy_inputs.json")).unwrap();
+    println!("TOY_PROGRAM_VK_HASH={}", inputs["vkHash"].as_str().unwrap());
 }

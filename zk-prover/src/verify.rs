@@ -106,6 +106,11 @@ fn pad_proof(sexp: &mut rsexp::Sexp) -> anyhow::Result<()> {
 }
 
 impl WrapProof {
+    /// The proof in the form `ledger` reads.
+    pub(crate) fn repr(&self) -> &PicklesProofProofsVerified2ReprStableV2 {
+        &self.0
+    }
+
     /// A proof made by [`crate::wrap::wrap`].
     pub fn from_prover(proof: &ledger::proofs::wrap::WrapProof) -> Self {
         Self(proof.into())
@@ -127,8 +132,16 @@ impl WrapProof {
     /// The proof as o1js's `verify` reads a `JsonProof` for a program that verifies no proofs
     /// (`maxProofsVerified` 0): [`WrapProof::to_o1js_base64`] without the two dummy wrap challenges.
     pub fn to_o1js_program_base64(&self) -> anyhow::Result<String> {
+        self.to_o1js_program_base64_for(0)
+    }
+
+    /// The proof as o1js's `verify` reads a `JsonProof` for a program with the given `maxProofsVerified`:
+    /// [`WrapProof::to_o1js_base64`] with the dummy wrap challenges that pad it past that many dropped.
+    pub fn to_o1js_program_base64_for(&self, max_proofs_verified: usize) -> anyhow::Result<String> {
         let mut sexp = self.sexp();
-        old_challenges(&mut sexp)?.clear();
+        let chals = old_challenges(&mut sexp)?;
+        anyhow::ensure!(max_proofs_verified <= chals.len(), "a proof carries at most {} wrap challenges", chals.len());
+        chals.drain(..chals.len() - max_proofs_verified);
         Ok(base64::engine::general_purpose::URL_SAFE.encode(sexp.to_bytes_mach()))
     }
 

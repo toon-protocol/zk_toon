@@ -35,12 +35,25 @@ pub const SETUP_STEP_VK_HASH: &str =
 pub const PROGRAM_VK_HASH: &str =
     "9870947700175903446193934776973478446598173288641875524808838875088037769766";
 
+/// The hash of the toy zkApp's `plain` step verification key (`fixtures/toy_plain_*`).
+pub const TOY_PLAIN_STEP_VK_HASH: &str =
+    "6279678157646795894865339794829825192322996445997763437735970678449960369703";
+
+/// The hash of the toy zkApp's `recurse` step verification key (`fixtures/toy_recurse_*`).
+pub const TOY_RECURSE_STEP_VK_HASH: &str =
+    "5105609968364276340990762059103720003819918745642557013862680382508641391884";
+
+/// The hash of the toy zkApp's verification key (the wrap key `Outer.compile()` returns), from
+/// `fixtures/toy_inputs.json`. It covers both methods.
+pub const TOY_PROGRAM_VK_HASH: &str =
+    "22436708804274709820754207430171157129176884119614341959218710625595556361495";
+
 // To regenerate the fixtures (after bumping the fork rev, proof-systems or o1js):
 //
 // 1. Change the pin: `Cargo.toml`'s `rev`s, `fixture-gen/package.json`'s and `o1js/package.json`'s
 //    o1js version (and the patch) and the constants above.
 // 2. Run `fixture-gen/regenerate.sh --write`. It rewrites `fixtures/` from o1js and prints the VK hashes.
-// 3. Put the printed hashes in the three `*_VK_HASH` constants. `tests/pins.rs` fails until they
+// 3. Put the printed hashes in the `*_VK_HASH` constants. `tests/pins.rs` fails until they
 //    match the committed circuits and `inputs.json`.
 // 4. Run `cargo test --workspace` and commit the fixtures with the pins.
 //

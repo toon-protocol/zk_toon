@@ -110,6 +110,8 @@ fn land_wrap_witness_equals_o1js_at_every_index() {
         branch: 0,
         features,
         step_proof: &step_proof(),
+        previous_proofs: &[],
+        previous_max_proofs_verified: &[],
     })
     .unwrap();
     assert_equals_o1js(&witness);
@@ -136,6 +138,8 @@ fn land_wrap_proof_satisfies_the_circuit_and_verifies() {
             branch: 0,
             features,
             step_proof: &step_proof(),
+            previous_proofs: &[],
+            previous_max_proofs_verified: &[],
         },
         &circuit,
     )
@@ -156,21 +160,6 @@ fn land_wrap_proof_satisfies_the_circuit_and_verifies() {
     .unwrap();
 }
 
-#[test]
-fn a_program_that_verifies_proofs_is_refused() {
-    let [land, setup] = step_circuits();
-    let features = union_features(&[step_features(land.index()), step_features(setup.index())]);
-    let err = wrap_witness(WrapParams {
-        max_proofs_verified: 1,
-        step_circuits: &[&land, &setup],
-        branch: 0,
-        features,
-        step_proof: &step_proof(),
-    })
-    .unwrap_err();
-    assert!(err.to_string().contains("#32"), "{err:#}");
-}
-
 /// `setup`'s step proof (`stepproof001`, branch 1) wraps to o1js's witness (`w002_cs005`) at every
 /// index: one wrap circuit, two methods, two step keys.
 #[test]
@@ -183,6 +172,8 @@ fn setup_wrap_witness_equals_o1js_at_every_index() {
         branch: 1,
         features,
         step_proof: &step_proof_of("001"),
+        previous_proofs: &[],
+        previous_max_proofs_verified: &[],
     })
     .unwrap();
     assert_equals(&witness, &o1js_wrap_witness_of("w002_cs005"));
