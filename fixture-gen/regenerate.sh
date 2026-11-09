@@ -10,6 +10,17 @@ cd "$(dirname "$0")"
 # `npm ci` runs patch-package, which applies patches/o1js+3.1.0.patch (the SPIKE_DUMP dump).
 npm ci
 fixtures=../zk-prover/fixtures
+# The Rust wrap proofs, in the form o1js's `verify` reads (o1js/src/rust-wrap.test.ts). A leading `--vault`
+# makes only the vault's.
+rust_proofs() {
+  rust=$(mktemp -d)
+  args=("$rust")
+  if [ "$1" = "--vault" ]; then args+=(--vault); shift; fi
+  cargo run --quiet --release -p zk-prover --example rust_wrap_proofs -- "${args[@]}"
+  for m in "$@"; do
+    gzip -9nc "$rust/rust_${m}_proof.json" > "$fixtures/rust_${m}_proof.json.gz"
+  done
+}
 if [ "${1:?--write, --toy-only, --vault or an output dir}" = "--vault" ]; then
   # The vault's sources are TypeScript in ../o1js, run by that package's `tsx`; `vault-register.mjs` points their
   # `import 'o1js'` at this package's patched copy.
@@ -27,11 +38,8 @@ if [ "${1:?--write, --toy-only, --vault or an output dir}" = "--vault" ]; then
   done
   node vault-collect.mjs "$work" "$fixtures"
   # The Rust wrap proofs of the vault's cases, which o1js verifies under the vault's key (o1js/src/rust-wrap.test.ts).
-  rust=$(mktemp -d)
-  cargo run --quiet --release -p zk-prover --example rust_wrap_proofs -- "$rust"
-  for c in setup deposit mutualClose escape finalize defeat raise sweepExpired reduce reduce_recursive; do
-    gzip -9nc "$rust/rust_vault_${c}_proof.json" > "$fixtures/rust_vault_${c}_proof.json.gz"
-  done
+  rust_proofs --vault vault_setup vault_deposit vault_mutualClose vault_escape vault_finalize vault_defeat vault_raise \
+    vault_sweepExpired vault_reduce vault_reduce_recursive
   cargo run --quiet -p zk-prover --example vk_hashes
   exit 0
 fi
@@ -76,14 +84,6 @@ if [ "$1" = "--write" ] || [ "$1" = "--toy-only" ]; then
     gzip -9nc "$toy/$f" > "$fixtures/toy_$f.gz"
   done
 fi
-# The Rust wrap proofs, in the form o1js's `verify` reads (o1js/src/rust-wrap.test.ts).
-rust_proofs() {
-  rust=$(mktemp -d)
-  cargo run --quiet --release -p zk-prover --example rust_wrap_proofs -- "$rust"
-  for m in "$@"; do
-    gzip -9nc "$rust/rust_${m}_proof.json" > "$fixtures/rust_${m}_proof.json.gz"
-  done
-}
 if [ "$1" = "--toy-only" ]; then
   rust_proofs toy_plain toy_recurse
   cargo run --quiet -p zk-prover --example vk_hashes

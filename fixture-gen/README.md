@@ -93,7 +93,7 @@ made it, checks that every circuit is among `compile`'s and that no two vault me
   `raise`), `<case>_previous.json`: that proof, with the `key` of its program in `vault_keys.json`. The first `reduce`
   verifies a dummy action-stack proof.
 - `rust_vault_<case>_proof.json`: the Rust wrap proof of each vault case (`zk-prover`'s `rust_wrap_proofs` example, which
-  `--vault` runs last), which `o1js/src/rust-wrap.test.ts` verifies under the vault's key.
+  `--vault` runs after collecting), which `o1js/src/rust-wrap.test.ts` verifies under the vault's key.
 - `vault_keys.json`: the verification keys (`data` and `hash`) of the vault, its reducer (`vaultReducer`) and the programs
   the vault verifies (`request`, `withdrawal`). `zk-prover/src/pins.rs` pins the vault's and the reducer's hashes.
 

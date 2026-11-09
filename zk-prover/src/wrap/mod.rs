@@ -54,8 +54,8 @@ pub use previous::PreviousProof;
 use previous::{compute_sg, expand, expand_prechallenge, unfinalized_of_fields, UNFINALIZED_FIELDS};
 
 /// Pickles' maximum number of previous proofs: the wrap circuit pads its accumulators to this many. The
-/// fixtures exercise programs of 0 and 1 (`tests/wrap.rs`, `tests/wrap_recursive.rs`); 2 goes through the
-/// same code, with a second slot.
+/// fixtures exercise programs of 0 and 1 (`tests/wrap.rs`, `tests/wrap_recursive.rs`, `tests/wrap_vault.rs`); 2
+/// goes through the same code, with a second slot.
 pub const MAX_PROOFS_VERIFIED: usize = 2;
 
 /// The public input size of a wrap circuit.

@@ -55,7 +55,8 @@ pub(super) struct Previous {
     pub sg: InnerCurve<Fq>,
     pub old_bulletproof_challenges: Vec<[Fq; 15]>,
     pub evals: AllEvals<Fq>,
-    /// The proof's own accumulator (its opening's `sg`), which the wrap proof takes on in turn.
+    /// The proof's own accumulator (its opening's `sg`), which the wrap proof takes on in turn; for a
+    /// proof the step did not verify (a dummy), `prepare` replaces it with [`compute_sg`] of the step's challenges.
     pub wrap_sg: GroupAffine<Fp>,
     /// `maxProofsVerified` of the program that made the proof, and the index of its wrap domain among
     /// the possible ones (they run with `maxProofsVerified`).
@@ -294,7 +295,9 @@ pub(super) fn expand(prev: &PreviousProof) -> anyhow::Result<Previous> {
             .messages_for_next_step_proof
             .old_bulletproof_challenges
             .iter()
-            .map(|v| v.0.clone().map(|v| ScalarChallenge::limbs_to_field::<Fp>(&v.prechallenge.inner.0.map(|v| v.as_u64()))))
+            .map(|challenges| {
+                challenges.0.clone().map(|c| ScalarChallenge::limbs_to_field::<Fp>(&c.prechallenge.inner.0.map(|l| l.as_u64())))
+            })
             .collect(),
     }
     .hash();

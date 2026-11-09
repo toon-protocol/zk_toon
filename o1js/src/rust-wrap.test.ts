@@ -1,5 +1,5 @@
 // The wrap proofs zk-prover makes in Rust (`fixture-gen/regenerate.sh --write` writes
-// `rust_<method>_proof.json`) verify in o1js under the verification key o1js compiled for the
+// `rust_<method>_proof.json`, `--vault` the vault's `rust_vault_<case>_proof.json`) verify in o1js under the verification key o1js compiled for the
 // program with the methods `land` and `setup`, and for the toy zkApp (`fixture-gen/toy.mjs`), whose
 // methods verify no proof and one proof, and for the real vault, each of whose methods (and `reduce` from a
 // real chunk) is wrapped from o1js's step proof. A changed proof or public input is refused.

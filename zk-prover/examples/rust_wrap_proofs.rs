@@ -5,7 +5,8 @@
 //! the Rust step witness rather than o1js's step proof. The toy zkApp's two methods, `plain` and
 //! `recurse` (`fixture-gen/toy.mjs`), likewise as `rust_toy_<method>_proof.json`, at the program's
 //! `maxProofsVerified` of 1. The real vault's ten cases (`vault_*`, `fixture-gen/vault-fixtures.ts`) likewise,
-//! as `rust_vault_<case>_proof.json`. `fixture-gen/regenerate.sh --write` runs it.
+//! as `rust_vault_<case>_proof.json`, and only those when run with `--vault`.
+//! `fixture-gen/regenerate.sh --write` runs it, and `--vault` runs it with `--vault`.
 
 use std::{io::Read, str::FromStr};
 
@@ -213,10 +214,12 @@ fn case_step_proof(case: &str) -> ProofWithPublic<Fp> {
 
 fn main() -> anyhow::Result<()> {
     let out = std::path::PathBuf::from(
-        std::env::args().nth(1).ok_or_else(|| anyhow::anyhow!("usage: rust_wrap_proofs <out dir>"))?,
+        std::env::args().nth(1).ok_or_else(|| anyhow::anyhow!("usage: rust_wrap_proofs <out dir> [--vault]"))?,
     );
+    if std::env::args().nth(2).as_deref() == Some("--vault") {
+        return vault(&out);
+    }
     toy(&out)?;
-    vault(&out)?;
     let load = |n: &str| {
         (
             fixture(&format!("{n}_gates.json")),
