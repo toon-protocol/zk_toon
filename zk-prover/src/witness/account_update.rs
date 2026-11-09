@@ -1,4 +1,4 @@
-//! The body of `Land`'s account update, as o1js hashes it.
+//! The body of an account update that a zkApp method makes, as o1js hashes it.
 //!
 //! `AccountUpdate.hash` is `Poseidon.hashWithPrefix(prefix, packToFields(Types.AccountUpdate.toInput))`.
 //! The input of `toInput` for the account update `land` builds has 86 fields and 178 packed
@@ -64,17 +64,18 @@ const PACKED: [(u8, u64); 178] = [
     (1, 0), (1, 0), (1, 0), (1, 1),
 ];
 
-/// What the circuit supplies to the account update.
+/// What the circuit supplies to the account update. `Land` sets the first app state and three state
+/// preconditions; a method that sets none leaves them `None`.
 pub struct Body {
     /// The zkApp's address, `publicKey.x` and the parity of `y`.
     pub public_key_x: Field,
     pub public_key_is_odd: Field,
     /// `update.appState[0].value`: the new `landed`.
-    pub app_state0: Field,
+    pub app_state0: Option<Field>,
     /// `callData`.
     pub call_data: Field,
     /// `preconditions.account.state[0..3].value`: `landed`, `payer.x` and `payer.isOdd`.
-    pub state_preconditions: [Field; 3],
+    pub state_preconditions: Option<[Field; 3]>,
     /// `authorizationKind.verificationKeyHash`.
     pub verification_key_hash: Field,
 }
@@ -87,17 +88,26 @@ impl Body {
             fields[i] = Field::constant(Fp::from_str(v).unwrap());
         }
         fields[0] = self.public_key_x.clone();
-        fields[2] = self.app_state0.clone();
         fields[40] = self.call_data.clone();
-        fields[52] = self.state_preconditions[0].clone();
-        fields[53] = self.state_preconditions[1].clone();
-        fields[54] = self.state_preconditions[2].clone();
         fields[85] = self.verification_key_hash.clone();
+        if let Some(v) = &self.app_state0 {
+            fields[2] = v.clone();
+        }
+        if let Some(pre) = &self.state_preconditions {
+            fields[52..55].clone_from_slice(pre);
+        }
         let mut packed: Vec<(Field, u32)> = PACKED
             .iter()
             .map(|&(bits, v)| (Field::constant(Fp::from(v)), bits as u32))
             .collect();
         packed[0].0 = self.public_key_is_odd.clone();
+        // the `isSome` flags of the first app state and of the three state preconditions
+        if self.app_state0.is_none() {
+            packed[1].0 = Field::zero();
+        }
+        if self.state_preconditions.is_none() {
+            packed[132..135].fill((Field::zero(), 1));
+        }
         (fields, packed)
     }
 }
