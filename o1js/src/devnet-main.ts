@@ -109,17 +109,41 @@ async function balance(account: PublicKey) {
 }
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Waits for `hash` in the best chain; a command that fails is included too, and charged. */
-async function inclusion(hash: string) {
+/**
+ * Waits for `hash` in the best chain; a command that fails is included too, and charged. With `fromHeight`, a command
+ * no longer among the node's last 290 blocks is looked for in the archive, which has no slots: `slotSinceGenesis` is
+ * then undefined, and a failure is only known to be one.
+ */
+async function inclusion(hash: string, { fromHeight }: { fromHeight?: string } = {}) {
   const deadline = Date.now() + INCLUSION_TIMEOUT_MS;
   while (Date.now() < deadline) {
     for (const block of await bestChain(290)) {
       const found = block.transactions.zkappCommands.find((c) => c.hash === hash);
-      if (found) return { block, failure: found.failureReason };
+      if (found) return { ...block.protocolState.consensusState, failure: found.failureReason };
+    }
+    if (fromHeight !== undefined) {
+      const archived = await archivedInclusion(hash, fromHeight);
+      if (archived) return archived;
     }
     await sleep(15_000);
   }
   throw Error(`${hash} was not included within ${INCLUSION_TIMEOUT_MS / 60_000} minutes; if it was dropped, remove \`sent\` from the journal before running again`);
+}
+
+async function archivedInclusion(hash: string, fromHeight: string) {
+  const response = await fetch(ARCHIVE_URL, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      query: `query($h: Int!) { blocks(limit: 1000, query: { blockHeight_gte: $h }) { blockHeight transactions { zkappCommands { hash failureReason } } } }`,
+      variables: { h: Number(fromHeight) },
+    }),
+  });
+  const { data } = (await response.json()) as { data?: { blocks: { blockHeight: number; transactions: { zkappCommands: { hash: string; failureReason: unknown }[] } }[] } };
+  for (const block of data?.blocks ?? []) {
+    const found = block.transactions.zkappCommands.find((c) => c.hash === hash);
+    if (found) return { slotSinceGenesis: undefined, blockHeight: String(block.blockHeight), failure: found.failureReason };
+  }
+  return undefined;
 }
 
 const proveEstimates = new Map<string, number>();
@@ -134,12 +158,15 @@ async function settleSent(step: string) {
   if (journal.sent?.step !== step) return false;
   const { hash } = journal.sent;
   log(`${step}: looking for ${hash}, sent before this run stopped`);
-  const { block, failure } = await inclusion(hash);
-  const { slotSinceGenesis, blockHeight } = block.protocolState.consensusState;
+  // A run paused for long enough lands its command out of the node's reach: the archive is asked from the last height seen.
+  const heights = journal.attempts.map((a) => a.height).filter((h): h is string => h !== undefined);
+  const fromHeight = heights.length > 0 ? heights.reduce((x, y) => (BigInt(x) > BigInt(y) ? x : y)) : undefined;
+  const { slotSinceGenesis, blockHeight, failure } = await inclusion(hash, { fromHeight });
   journal.attempts.push({ step, hash, landedSlot: slotSinceGenesis, height: blockHeight, failure: failure ?? undefined, fee: FEE.toString() });
   delete journal.sent;
   saveJournal();
-  if (failure && !isSlotMiss(failure)) throw Error(`${step}: failed on chain: ${JSON.stringify(failure)}`);
+  // The archive's failures are codes, not names: one found there is tried again, and a real fault shows on the next try.
+  if (failure && slotSinceGenesis !== undefined && !isSlotMiss(failure)) throw Error(`${step}: failed on chain: ${JSON.stringify(failure)}`);
   return !failure;
 }
 
@@ -178,10 +205,10 @@ async function land(step: string, build: (target: bigint) => Promise<object>, { 
     saveJournal();
     const sentSlot = await wallSlot();
     log(`${step}: sent ${pending.hash}`);
-    const { block, failure } = await inclusion(pending.hash);
+    const { slotSinceGenesis, blockHeight, failure } = await inclusion(pending.hash);
     const entry: Attempt = {
       step, hash: pending.hash, target: aimed ? target.toString() : undefined, sentSlot: sentSlot.toString(),
-      landedSlot: block.protocolState.consensusState.slotSinceGenesis, height: block.protocolState.consensusState.blockHeight,
+      landedSlot: slotSinceGenesis, height: blockHeight,
       proveSeconds: Math.round(proveMs / 1000), inclusionSeconds: Math.round((Date.now() - sentMs) / 1000),
       failure: failure ?? undefined, fee: FEE.toString(),
     };

@@ -31,13 +31,18 @@ it, under a random key that is never written down (ADR 0011). It writes the depl
 `o1js/registry-deployments.json`. `npm run registry -- sighting` reproduces the record, and `npm run registry -- check
 <address>` runs the vault check against the recorded registry.
 
-**Status, 2026-11-05: deployed, not yet recorded.** On a lightnet the rogue key pair registered and the account ran
-the rogue contract (`o1js/lightnet/README.md`), so the vault check now compares the key's data as well as its hash
-(ADR 0011). The registry was then deployed at `B62qmwYhD1JEfgBRfritFF8eu2wjfcjs4dgUiWDDXZzNaUR2mGUbPbV` by
-`5Judj8kFBkcP1b14Jqsp5r6dGUd59Hfbiey2NEAd42Srw7FdHMPm`, applied at height 585105, slot 934255. The archive lists it,
-with no failure, but only in blocks not yet final. The record, the registered smoke run and `smoke-1`'s check wait
-until that block is canonical, about 290 blocks after it (over a day at devnet's current pace); then run `deploy`
-again.
+**Status, 2026-11-08: deployed and recorded.** On a lightnet the rogue key pair registered and the account ran the
+rogue contract (`o1js/lightnet/README.md`), so the vault check compares the key's data as well as its hash (ADR 0011).
+The registry is at `B62qmwYhD1JEfgBRfritFF8eu2wjfcjs4dgUiWDDXZzNaUR2mGUbPbV`, deployed by
+`5Judj8kFBkcP1b14Jqsp5r6dGUd59Hfbiey2NEAd42Srw7FdHMPm` at height 585105, slot 934255, under a discarded key. The
+archive marked that block canonical about 290 blocks later, and `deploy` then reproduced the sighting and wrote the
+record: empty action state at slot 934255.
+
+- `smoke-1`, deployed before the registry, is refused naming only `registry` ("not listed by the registry").
+- `smoke-2` deployed its vault (`B62qmCpRax2bkLJeBVosypdSDtnv8s2mpo2AGMTPjCo1qt6wQFtWRHR`) through the registry. The vault
+  check passed it after setup (slot 937506) and after two deposits were reduced (slot 937515, 2 dispatched and 2
+  reduced), as journaled in `smoke-2.json`. It went on through the request proof, the close, the escape and their
+  reduce, and waits for the escape's window to close at slot 939444 before it finalizes, which #81 doesn't need.
 
 **Reproducing a sighting.** The public archive API serves a registry's actions and the hashes of the commands in each
 block, but not the commands. So the deploy command is published, and the sighting rests on four reads
