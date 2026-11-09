@@ -78,10 +78,11 @@ jobs:
       max-parallel: 3
       matrix:
         issue: ${{ fromJSON(needs.select.outputs.issues) }}
-    # A large ticket can run past 90 minutes. The runner step's own
-    # timeout is lower, so a wall-clock kill still leaves time for the always()
-    # steps below.
-    timeout-minutes: 180
+    # A large ticket can take implement 100 minutes, review 20, and the gate
+    # (every step of ci.yml's gate job) an hour or more; #88 and #89 ran out at
+    # 170. GitHub-hosted jobs stop at 360. The runner step's own timeout is
+    # lower, so a wall-clock kill still leaves time for the always() steps below.
+    timeout-minutes: 330
     concurrency:
       group: agent-implement-issue-${{ matrix.issue }}
       cancel-in-progress: false
@@ -129,7 +130,7 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Run the implement runner
-        timeout-minutes: 170
+        timeout-minutes: 320
         env:
           SANDCASTLE_ISSUE_NUMBER: ${{ matrix.issue }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
