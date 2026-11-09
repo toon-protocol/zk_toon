@@ -78,6 +78,38 @@ really differ. This confirms the order within a command only. It does not exerci
 `impossibleDuringCurrentVersion` and its fallback to `signature` after a hard fork, which a lightnet
 can't do. There is no LocalBlockchain counterpart: with proofs off, both circuits get the same dummy key.
 
+## The rogue key pair (#81)
+
+`vault-registry.lightnet.ts` registers vaults through the vault registry (ADR 0011). A 132-character zkApp URI, as
+long as an operator's fork-notice location might be, registers and reads back as given.
+
+It then registers a vault whose key is `{ data: <rogue>, hash: <published vault code hash> }`, where the rogue data is
+another contract's. The registry's proof checks only the hash, so the command is valid as far as the registry goes.
+LocalBlockchain accepts it, and so does this daemon. **The outcome is neither a refusal nor a stuck account:**
+
+| Run, 2026-11-04 | Registration | Key stored | Published vault's `setup` | Rogue contract's `poke` |
+| --- | --- | --- | --- | --- |
+| Fresh chain, rogue vault first | applied | rogue data, published hash | refused: `Invalid_proof (Pickles.verify dlog_check)` | **applied** |
+| After an honest vault registered on the same chain | applied | published hash (data not read) | applied | refused: `Invalid_proof (Pickles.verify dlog_check)` |
+
+On a fresh chain, the rogue contract controls an account that carries the published code hash. The vault's
+`editState`, `send` and `editActionState` permissions are `proof`, and a proof of the rogue contract verifies, so it
+could move whatever a payer deposits. A check of the hash alone would pass such a vault, so the vault check compares
+the key's data too, and refuses it with `keyData` (ADR 0011).
+Which contract the node verifies against depends on what the node has seen, not on the chain's rules. The test runs
+the rogue registration first, so on a fresh chain it is the first row: it asserts that the registration applies, that
+the stored key is the rogue data under the published hash, and that exactly one of the two contracts' proofs is
+accepted, and that the vault check refuses the account naming `keyData`. Run again on a chain where an honest vault
+has registered (its own second test, or `request-fixtures`), the data assertion may not hold; start a fresh chain
+first. It passed on a fresh chain on 2026-11-05: registration 5JumQc7E…, the rogue `poke` applied, the published
+`setup` refused, and the check refused with `keyData` (and `setup`, which had not run).
+
+Why, from Mina's source (`compatible`): a command sent as JSON over GraphQL keeps the key's `data` and `hash` as given
+(`verification_key_with_hash` in `fields_derivers_zkapps.ml`). Its binary form carries the data only and recomputes
+the hash on receipt (`Verification_key_wire`). So a peer that receives the command by gossip would see the rogue
+data's own hash, and the registry's proof wouldn't verify there. That suggests a multi-node network refuses the
+command unless a block producer is sent it directly. It has not been run on devnet: this is a single-node lightnet.
+
 ## Recording a vault
 
 `npm run request-fixtures` (#67) runs a real vault here, which the tests above do not, and writes the

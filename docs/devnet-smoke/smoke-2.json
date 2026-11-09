@@ -1,0 +1,228 @@
+{
+  "run": "smoke-2",
+  "build": {
+    "notice": "Published vault build: a challenge window of 1920 slots.",
+    "challengeWindowSlots": "1920"
+  },
+  "vault": "B62qmCpRax2bkLJeBVosypdSDtnv8s2mpo2AGMTPjCo1qt6wQFtWRHR",
+  "funder": "B62qp9YT9mw27enrwPR3gSPeRkXxAg1runhKK7mx6jj64Lq6EukJRTy",
+  "treasury": "B62qnKmnPwMqHvPMexGWzrhRCsCiph6RNH887WP76Sjx8DkT2W6v3uU",
+  "destination": "B62qm8AmSQS5WpD7nCsuLzaCYhgryauxNg7BjMzvQF1HWsnckfeJJRa",
+  "facts": {
+    "o1js": "3.1.0",
+    "vaultCodeHash": "18683408031881884777656720181449885515444520266556316685557148949849565333999",
+    "registryCodeHash": "4910587772071844094190663918973298271883613208403961506190992444917282443058",
+    "requestKeyHash": "17783576495452972973648719307576910001175195573379209737447262132918659765208",
+    "withdrawalKeyHash": "28877533772266448557051119453732424795096415066979773862017799580394750732454",
+    "reducerKeyHash": "1068455914940987064575851783351747747170540515314043943192078195676266005847",
+    "challengeWindowOnChain": "1920",
+    "check-before-deposits": {
+      "slot": "937506",
+      "verdict": {
+        "pass": true,
+        "dispatched": 0,
+        "reduced": 0
+      }
+    },
+    "depositTime.close": "937509",
+    "depositTime.escape": "937512",
+    "reduce-deposits.actions": 2,
+    "check-after-deposits": {
+      "slot": "937515",
+      "verdict": {
+        "pass": true,
+        "dispatched": 2,
+        "reduced": 2
+      }
+    },
+    "requestProof": {
+      "requestTime": "937515",
+      "root": "2707485998829387362424123162323568437815298304125053294958891588647246270201",
+      "valid": true,
+      "proveSeconds": 6
+    },
+    "payees.before-exits": {
+      "destination": "1000000000",
+      "treasury": "1000000000"
+    },
+    "reduce-exits.actions": 2,
+    "payees.after-close": {
+      "destination": "10900000000",
+      "treasury": "1100000000"
+    },
+    "escapeDeadline": "939444"
+  },
+  "done": [
+    "accounts",
+    "deploy",
+    "setup",
+    "check-before-deposits",
+    "deposit-close",
+    "deposit-escape",
+    "reduce-deposits",
+    "check-after-deposits",
+    "request-proof",
+    "close",
+    "escape",
+    "reduce-exits"
+  ],
+  "attempts": [
+    {
+      "step": "accounts",
+      "hash": "5JuKWN5AgQPqtWz9YX9QaznE8zcTYtpgVXp2P28hbPeFo1eNRuaK",
+      "sentSlot": "937501",
+      "landedSlot": "937502",
+      "height": "586740",
+      "proveSeconds": 1,
+      "inclusionSeconds": 66,
+      "fee": "100000000"
+    },
+    {
+      "step": "deploy",
+      "hash": "5Jv5M9RvXHwFVi5x4d4TeN3FzHeeDWMJEnGb2nHcdRr3KrN2KTdd",
+      "target": "937505",
+      "sentSlot": "937504",
+      "landedSlot": "937505",
+      "height": "586741",
+      "proveSeconds": 22,
+      "inclusionSeconds": 82,
+      "fee": "100000000"
+    },
+    {
+      "step": "setup",
+      "hash": "5JvREgdRn2J1dP3SPn3rEDartS6L3pARTtBGmCznQ7LWEz9C6QWM",
+      "sentSlot": "937505",
+      "landedSlot": "937506",
+      "height": "586742",
+      "proveSeconds": 12,
+      "inclusionSeconds": 66,
+      "fee": "100000000"
+    },
+    {
+      "step": "deposit-close",
+      "hash": "5Jv56f55ucyMpm83QkMfUfwH5NmJMxzCdkQJU9xtEX9zRjA9vZY3",
+      "target": "937509",
+      "sentSlot": "937508",
+      "landedSlot": "937509",
+      "height": "586744",
+      "proveSeconds": 31,
+      "inclusionSeconds": 83,
+      "fee": "100000000"
+    },
+    {
+      "step": "deposit-escape",
+      "hash": "5Ju54eNroaE6kvxk263w4FQtrsKJc3jhACeiquFpBZuy2gpYwhQQ",
+      "target": "937512",
+      "sentSlot": "937511",
+      "landedSlot": "937512",
+      "height": "586747",
+      "proveSeconds": 19,
+      "inclusionSeconds": 82,
+      "fee": "100000000"
+    },
+    {
+      "step": "reduce-deposits-0",
+      "hash": "5JtivuKsnckkTeiYvBuf689e55G62PgbWphxFnWSjV5VY3HaLMkC",
+      "target": "937515",
+      "sentSlot": "937514",
+      "landedSlot": "937515",
+      "height": "586749",
+      "proveSeconds": 27,
+      "inclusionSeconds": 66,
+      "fee": "100000000"
+    },
+    {
+      "step": "close",
+      "hash": "5JucHpjvfxLNNbGST2NkHyap3gbNUggWv4537hWE6Jpf1yshXbqM",
+      "sentSlot": "937515",
+      "landedSlot": "937516",
+      "height": "586750",
+      "proveSeconds": 16,
+      "inclusionSeconds": 82,
+      "fee": "100000000"
+    },
+    {
+      "step": "escape",
+      "hash": "5JvRYwjxqoDGtKBDtQWrsuUgncG3cEvWPFteVSg4MGBhuU3eCoWh",
+      "sentSlot": "937516",
+      "landedSlot": "937517",
+      "height": "586751",
+      "proveSeconds": 14,
+      "inclusionSeconds": 67,
+      "fee": "100000000"
+    },
+    {
+      "step": "reduce-exits-0",
+      "hash": "5Jum8L9CyS2mJsjCQVTALRWVpPkp7sXqyRPvan99D2zTNg3N9taK",
+      "target": "937520",
+      "sentSlot": "937519",
+      "landedSlot": "937522",
+      "height": "586753",
+      "proveSeconds": 21,
+      "inclusionSeconds": 275,
+      "failure": [
+        {
+          "index": "9",
+          "failures": [
+            "Cancelled"
+          ]
+        },
+        {
+          "index": "8",
+          "failures": [
+            "Cancelled"
+          ]
+        },
+        {
+          "index": "7",
+          "failures": [
+            "Cancelled"
+          ]
+        },
+        {
+          "index": "6",
+          "failures": [
+            "Cancelled"
+          ]
+        },
+        {
+          "index": "5",
+          "failures": [
+            "Cancelled"
+          ]
+        },
+        {
+          "index": "4",
+          "failures": [
+            "Cancelled"
+          ]
+        },
+        {
+          "index": "3",
+          "failures": [
+            "Cancelled"
+          ]
+        },
+        {
+          "index": "2",
+          "failures": [
+            "Cancelled"
+          ]
+        },
+        {
+          "index": "1",
+          "failures": [
+            "Valid_while_precondition_unsatisfied"
+          ]
+        }
+      ],
+      "fee": "100000000"
+    },
+    {
+      "step": "reduce-exits-0",
+      "hash": "5Jttdee72NXkvjZELzqTXU8ZNcgx3FV5zpNBZLenkH3bi5VNHF7R",
+      "height": "586754",
+      "fee": "100000000"
+    }
+  ]
+}

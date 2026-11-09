@@ -1,3 +1,11 @@
 {
-  "deployments": []
+  "deployments": [
+    {
+      "network": "devnet",
+      "registry": "B62qmwYhD1JEfgBRfritFF8eu2wjfcjs4dgUiWDDXZzNaUR2mGUbPbV",
+      "slot": "934255",
+      "actionState": "25079927036070901246064867767436987657692091363973573142121686150614948079097",
+      "transaction": "5Judj8kFBkcP1b14Jqsp5r6dGUd59Hfbiey2NEAd42Srw7FdHMPm"
+    }
+  ]
 }

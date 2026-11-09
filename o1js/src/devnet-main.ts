@@ -19,6 +19,7 @@ import { stateFields } from './state.js';
 import { createBuilder } from './tx-builder.js';
 import { VAULT_URI, Vault, batchReducer, setupFields } from './vault.js';
 import { Uri, registryClass, vaultKey } from './vault-registry.js';
+import { chainReader, checkVault } from './vault-check.js';
 import { pendingEscapesView, provableBatches, reduceMirror } from './vault-view.js';
 
 const MINA_URL = process.env.MINA_GRAPHQL ?? 'https://devnet-plain-1.gcp.o1test.net/graphql';
@@ -108,17 +109,41 @@ async function balance(account: PublicKey) {
 }
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Waits for `hash` in the best chain; a command that fails is included too, and charged. */
-async function inclusion(hash: string) {
+/**
+ * Waits for `hash` in the best chain; a command that fails is included too, and charged. With `fromHeight`, a command
+ * no longer among the node's last 290 blocks is looked for in the archive, which has no slots: `slotSinceGenesis` is
+ * then undefined, and a failure is only known to be one.
+ */
+async function inclusion(hash: string, { fromHeight }: { fromHeight?: string } = {}) {
   const deadline = Date.now() + INCLUSION_TIMEOUT_MS;
   while (Date.now() < deadline) {
     for (const block of await bestChain(290)) {
       const found = block.transactions.zkappCommands.find((c) => c.hash === hash);
-      if (found) return { block, failure: found.failureReason };
+      if (found) return { ...block.protocolState.consensusState, failure: found.failureReason };
+    }
+    if (fromHeight !== undefined) {
+      const archived = await archivedInclusion(hash, fromHeight);
+      if (archived) return archived;
     }
     await sleep(15_000);
   }
   throw Error(`${hash} was not included within ${INCLUSION_TIMEOUT_MS / 60_000} minutes; if it was dropped, remove \`sent\` from the journal before running again`);
+}
+
+async function archivedInclusion(hash: string, fromHeight: string) {
+  const response = await fetch(ARCHIVE_URL, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      query: `query($h: Int!) { blocks(limit: 1000, query: { blockHeight_gte: $h }) { blockHeight transactions { zkappCommands { hash failureReason } } } }`,
+      variables: { h: Number(fromHeight) },
+    }),
+  });
+  const { data } = (await response.json()) as { data?: { blocks: { blockHeight: number; transactions: { zkappCommands: { hash: string; failureReason: unknown }[] } }[] } };
+  for (const block of data?.blocks ?? []) {
+    const found = block.transactions.zkappCommands.find((c) => c.hash === hash);
+    if (found) return { slotSinceGenesis: undefined, blockHeight: String(block.blockHeight), failure: found.failureReason };
+  }
+  return undefined;
 }
 
 const proveEstimates = new Map<string, number>();
@@ -133,12 +158,15 @@ async function settleSent(step: string) {
   if (journal.sent?.step !== step) return false;
   const { hash } = journal.sent;
   log(`${step}: looking for ${hash}, sent before this run stopped`);
-  const { block, failure } = await inclusion(hash);
-  const { slotSinceGenesis, blockHeight } = block.protocolState.consensusState;
+  // A run paused for long enough lands its command out of the node's reach: the archive is asked from the last height seen.
+  const heights = journal.attempts.map((a) => a.height).filter((h): h is string => h !== undefined);
+  const fromHeight = heights.length > 0 ? heights.reduce((x, y) => (BigInt(x) > BigInt(y) ? x : y)) : undefined;
+  const { slotSinceGenesis, blockHeight, failure } = await inclusion(hash, { fromHeight });
   journal.attempts.push({ step, hash, landedSlot: slotSinceGenesis, height: blockHeight, failure: failure ?? undefined, fee: FEE.toString() });
   delete journal.sent;
   saveJournal();
-  if (failure && !isSlotMiss(failure)) throw Error(`${step}: failed on chain: ${JSON.stringify(failure)}`);
+  // The archive's failures are codes, not names: one found there is tried again, and a real fault shows on the next try.
+  if (failure && slotSinceGenesis !== undefined && !isSlotMiss(failure)) throw Error(`${step}: failed on chain: ${JSON.stringify(failure)}`);
   return !failure;
 }
 
@@ -177,10 +205,10 @@ async function land(step: string, build: (target: bigint) => Promise<object>, { 
     saveJournal();
     const sentSlot = await wallSlot();
     log(`${step}: sent ${pending.hash}`);
-    const { block, failure } = await inclusion(pending.hash);
+    const { slotSinceGenesis, blockHeight, failure } = await inclusion(pending.hash);
     const entry: Attempt = {
       step, hash: pending.hash, target: aimed ? target.toString() : undefined, sentSlot: sentSlot.toString(),
-      landedSlot: block.protocolState.consensusState.slotSinceGenesis, height: block.protocolState.consensusState.blockHeight,
+      landedSlot: slotSinceGenesis, height: blockHeight,
       proveSeconds: Math.round(proveMs / 1000), inclusionSeconds: Math.round((Date.now() - sentMs) / 1000),
       failure: failure ?? undefined, fee: FEE.toString(),
     };
@@ -302,10 +330,16 @@ await step('accounts', () => land('accounts', async () => {
   return sealed(tx);
 }, { aimed: false }));
 
-/** The registry this network's deployment record names, with its account fetched. There is no record until #81 deploys one. */
-async function pinnedRegistry() {
+const registered = challengeWindow === CHALLENGE_WINDOW_SLOTS;
+const registryRecord = () => {
   const record = readDeployments().find((d) => d.network === 'devnet');
-  if (!record) throw Error('no registry deployment record for devnet in registry-deployments.json: deploy one first (#81), or use --short-window');
+  if (!record) throw Error('no registry deployment record for devnet in registry-deployments.json: deploy one first (`npm run registry -- deploy`), or use --short-window');
+  return record;
+};
+
+/** The registry this network's deployment record names, with its account fetched. */
+async function pinnedRegistry() {
+  const record = registryRecord();
   const Registry = await registryClass(Field(keys.vault.codeHash));
   const registry = new Registry(PublicKey.fromBase58(record.registry));
   await fetchAccount({ publicKey: registry.address });
@@ -325,7 +359,6 @@ await step('deploy', () => land('deploy', async (target) => {
   try {
     // The published window goes through the registry (ADR 0011). A short-window vault is deployed directly, and the
     // vault check refuses it for want of a registry entry: it exists to wait out a window of minutes.
-    const registered = challengeWindow === CHALLENGE_WINDOW_SLOTS;
     const registry = registered ? await pinnedRegistry() : undefined;
     const [vk, uri] = [await vaultKey(), Uri.from(VAULT_URI)];
     const tx = await Mina.transaction(payer, async () => {
@@ -354,6 +387,31 @@ await step('setup', () => land('setup', async () => {
   return sealed(tx);
 }, { aimed: false }));
 
+/**
+ * Runs the vault check on the run's vault, as a payer would, and journals the verdict. A registered vault must pass; a
+ * short-window one isn't checked, since it is deployed directly and refused for want of a registry entry.
+ */
+/** The refusals an archive that hasn't caught up with the node gives: its actions don't yet hash to the account's. */
+const ARCHIVE_LAG = new Set(['read', 'actionState', 'registry', 'registry.actionState']);
+const vaultCheck = (name: string) => step(name, async () => {
+  if (!registered) return;
+  // The archive must hold every action, the registry's entry included, before the check can hash them up.
+  for (let tries = 0; ; tries++) {
+    const verdict = await checkVault(vaultAddress, {
+      key: keys.vault.verificationKey, registryKey: keys.registry.verificationKey,
+      registry: PublicKey.fromBase58(registryRecord().registry), reader: chainReader({ localChain: false }),
+    });
+    journal.facts[name] = { slot: (await wallSlot()).toString(), verdict };
+    saveJournal();
+    if (verdict.pass) return log(`${name}: passed, ${verdict.dispatched} dispatched and ${verdict.reduced} reduced`);
+    const lagging = verdict.refusals.every((r) => ARCHIVE_LAG.has(r.check));
+    if (!lagging || tries >= 20) throw Error(`${name}: refused: ${JSON.stringify(verdict.refusals)}`);
+    log(`${name}: refused, the archive may be behind: ${JSON.stringify(verdict.refusals)}`);
+    await sleep(30_000);
+  }
+});
+await vaultCheck('check-before-deposits');
+
 for (const [label, note] of [['close', closing], ['escape', escaping]] as const) {
   await step(`deposit-${label}`, () => land(`deposit-${label}`, async (target) => {
     const { zkappCommand } = await op<{ zkappCommand: object }>('deposit', {
@@ -366,6 +424,7 @@ for (const [label, note] of [['close', closing], ['escape', escaping]] as const)
 
 journal.facts['reduce-deposits.actions'] = 2;
 await step('reduce-deposits', () => reduceAll('reduce-deposits'));
+await vaultCheck('check-after-deposits');
 
 const depositTime = (label: string) => journal.facts[`depositTime.${label}`] as string;
 

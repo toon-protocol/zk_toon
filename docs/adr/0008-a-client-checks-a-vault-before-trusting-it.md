@@ -16,7 +16,7 @@ a window of 2 slots under the published hash.
 ## Decision
 
 `checkVault` in `o1js/src/vault-check.ts` asks one question of a vault address and answers with a pass, or a refusal
-naming each thing that failed. A wallet calls it with the published vault code hash and a `VaultReader`. Nothing is
+naming each thing that failed. A wallet calls it with the published vault and registry keys and a `VaultReader`. Nothing is
 changed in the vault, so its key is unchanged. `judgeVault` is the same check as a pure function of a snapshot, and
 `test-vectors/vault-check.json` holds snapshots with their answers.
 
@@ -24,7 +24,9 @@ A pass means:
 
 0. The pinned vault registry lists the vault, and the registry's own key, permissions and entries check out. This rule
    was added by ADR 0011, which supersedes the limit below: the rest of this ADR stands.
-1. The account's verification key hash is the published code hash.
+1. The account's verification key is the published one: its hash is the published code hash, and its data is the
+   published key's data. The data is compared since #81: a node can store another contract's data under the published
+   hash, and then verifies proofs against that data (ADR 0011).
 2. Every permission equals ADR 0006's table, and the account has no vesting schedule, which could lock deposits.
 3. `depositSizes`, `noteLifetime` and `challengeWindow` equal policy.
 4. `setup` has run and the treasury's account exists. A reduce paying a treasury with no account would fail, and

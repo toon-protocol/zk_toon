@@ -217,13 +217,15 @@ _Avoid_: VK dump, key bundle
 **Vault code hash**:
 The hash of the vault's verification key: the key a deployed vault account carries, and so the only
 thing that names its code on chain. It names nothing else: not the state or permissions a deployer wrote, which
-only the vault check covers (ADR 0008).
+only the vault check covers (ADR 0008). On its own it doesn't show the code either: a node can store another key's
+data under it, so the check compares the key's data too (ADR 0011).
 _Avoid_: Contract hash, bytecode hash
 
 **Vault check**:
 What a client runs on a vault address before trusting it: a pass, or a refusal naming what failed. It refuses a
 vault that the pinned vault registry doesn't list, judges the registry too, compares the account with the published
-code hash, ADR 0006's permissions and policy, and replays its actions from the empty tree (ADR 0008, ADR 0011).
+key, its data as well as its hash, ADR 0006's permissions and policy, and replays its actions from the empty tree
+(ADR 0008, ADR 0011).
 _Avoid_: Vault audit, vault verification
 
 **Vault registry**:
@@ -238,6 +240,17 @@ A vault the pinned vault registry deployed and lists. It never had an unlocked p
 written to it. The vault check refuses any other vault (ADR 0011). Being registered says how the vault was deployed,
 and nothing about its treasury, its state key or its operator's conduct.
 _Avoid_: Verified vault, trusted vault
+
+**Deployment record**:
+One entry in `registry-deployments.json`: a vault registry's network, address, deploy slot, empty action state and
+deploy transaction. A client pins the registry it names. It is only written once its sighting holds (ADR 0011).
+_Avoid_: Registry config, registry pin
+
+**Sighting**:
+The proof that a deployment record is true, reproduced by anyone from the published deploy command, an archive and a
+node: the command hashes to the recorded transaction, created the registry locked under the published key with no
+actions, and the archive's actions hash to the action state on chain (ADR 0011, `docs/devnet-smoke.md`).
+_Avoid_: Deployment proof, attestation
 
 **Proofs-on set**:
 The named tests that compile the circuits and prove for real: the request proof, the subsidised proof,

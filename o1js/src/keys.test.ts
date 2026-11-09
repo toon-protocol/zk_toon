@@ -43,8 +43,8 @@ describe('the published keys', () => {
     await setup.prove();
     await setup.sign([payer.key]).send();
     const reader = chainReader({ localChain: true });
-    expect(await checkVault(vault.address, { codeHash: keys.vault.codeHash, registryCodeHash: keys.registry.codeHash, registry: registry.address, reader })).toEqual({ pass: true, dispatched: 0, reduced: 0 });
-    expect((await checkVault(vault.address, { codeHash: keys.circuits.request.verificationKey.hash, registryCodeHash: keys.registry.codeHash, registry: registry.address, reader })).pass).toBe(false);
+    expect(await checkVault(vault.address, { key: keys.vault.verificationKey, registryKey: keys.registry.verificationKey, registry: registry.address, reader })).toEqual({ pass: true, dispatched: 0, reduced: 0 });
+    expect((await checkVault(vault.address, { key: keys.circuits.request.verificationKey, registryKey: keys.registry.verificationKey, registry: registry.address, reader })).pass).toBe(false);
 
     // A real request proof verifies against the published request key, read back from its JSON.
     const published = new VerificationKey(VerificationKey.fromJSON(keys.circuits.request.verificationKey));

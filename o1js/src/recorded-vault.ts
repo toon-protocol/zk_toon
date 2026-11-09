@@ -2,9 +2,10 @@
 // vault with two reduced notes, one of them escaped. The note left unspent is the one the request-proof
 // fixtures are proved for, so the recording and the proofs describe one chain.
 //
-// The vault's deposit and reduce must land within two slots of a slot they name, and proving outlasts that.
-// So a transaction names a slot far enough ahead to prove in, waits for it, and is built again if it misses.
+// The vault's deposit and reduce must land within two slots of a slot they name, and proving outlasts that, so they
+// land through `lightnetLanding` (`lightnet.ts`).
 import { AccountUpdate, Field, Mina, PrivateKey, Signature, UInt64, Unconstrained, fetchAccount } from 'o1js';
+import { lightnetLanding } from './lightnet.js';
 import type { NoteTree } from './note-tree.js';
 import { DEPOSIT_SIZES } from './policy.js';
 import { commitSecret } from './primitives.js';
@@ -15,14 +16,9 @@ import { WithdrawalKind, WithdrawalProgram } from './withdrawal.js';
 import { buildWithdrawal } from './withdrawal-sample.js';
 
 const FEE = 100_000_000;
-/** The lightnet's slot. */
-const SLOT_MS = 20_000;
-/** How many times a transaction is built again before the run gives up. */
-const ATTEMPTS = 12;
 /** How long after its request slot the escape may land: long enough to prove it and to retry. */
 const ESCAPE_VALIDITY_SLOTS = 60n;
 
-type Tx = Awaited<ReturnType<typeof Mina.transaction>>;
 export type Endpoints = { mina: string; archive: string };
 
 /** What the daemon and the archive answered, in the shapes the challenger adapter reads. */
@@ -66,56 +62,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function recordVault(
   endpoints: Endpoints, sender: Mina.TestPublicKey, log: (line: string) => void = console.log,
 ): Promise<RecordedVault> {
-  /**
-   * The slot the daemon's clock is in, which may be past the tip's. It counts from the last fork, not from
-   * the original genesis (ADR 0007), and a lightnet has had no fork, so here the two are the same.
-   */
-  const clockSlot = async () => {
-    const { data } = await graphql(endpoints.mina, 'Clock', 'query Clock { daemonStatus { consensusTimeNow { globalSlot } } }');
-    return BigInt(data.daemonStatus.consensusTimeNow.globalSlot);
-  };
-
-  /** Sends `tx` and answers why it did not apply, or nothing if it did. */
-  async function submit(tx: Tx, keys: PrivateKey[]): Promise<string | undefined> {
-    const sent = await tx.sign([sender.key, ...keys]).safeSend();
-    if (sent.status === 'rejected') return sent.errors.map(String).join('; ');
-    const done = await sent.safeWait({ maxAttempts: 60, interval: 5_000 });
-    return done.status === 'rejected' ? done.errors.map(String).join('; ') : undefined;
-  }
-
-  /** Lands a transaction whose slots `build` chooses, building it again whenever a block refuses it. */
-  async function land(name: string, build: () => Promise<Tx>, keys: PrivateKey[] = []) {
-    for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
-      await fetchAccount({ publicKey: sender });
-      const failure = await submit(await build(), keys);
-      if (failure === undefined) return log(`${name}: landed, attempt ${attempt}`);
-      log(`${name}: refused, attempt ${attempt}: ${failure}`);
-    }
-    throw Error(`${name}: did not land in ${ATTEMPTS} attempts`);
-  }
-
-  /**
-   * Lands a transaction that must land at the slot it names or the slot after. `build` proves it for the
-   * slot it is given; the lead grows to what proving last took, plus a slot to reach the mempool.
-   */
-  async function landAt(name: string, build: (slot: bigint) => Promise<Tx>, lead: bigint) {
-    for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
-      const slot = (await clockSlot()) + lead;
-      await fetchAccount({ publicKey: sender });
-      const started = Date.now();
-      const tx = await build(slot);
-      lead = BigInt(Math.ceil((Date.now() - started) / SLOT_MS)) + 2n;
-      if ((await clockSlot()) >= slot) {
-        log(`${name}: proving outlasted slot ${slot}, attempt ${attempt}; next, ${lead} slots ahead`);
-        continue;
-      }
-      while ((await clockSlot()) < slot - 1n) await sleep(1_000);
-      const failure = await submit(tx, []);
-      if (failure === undefined) return log(`${name}: landed for slot ${slot}, attempt ${attempt}`);
-      log(`${name}: missed slot ${slot}, attempt ${attempt}: ${failure}`);
-    }
-    throw Error(`${name}: did not land in ${ATTEMPTS} attempts`);
-  }
+  const { clockSlot, land, landAt } = lightnetLanding(endpoints.mina, sender, log);
 
   const zkappKey = PrivateKey.random();
   const stateKey = PrivateKey.random();

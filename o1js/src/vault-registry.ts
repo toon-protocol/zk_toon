@@ -86,16 +86,28 @@ export async function registryClass(codeHash: Field, o: { cache?: Cache; compile
   return entry.cls;
 }
 
+/**
+ * The transaction that deploys a registry at `key`'s address for the vault this build compiles, locked under ADR 0006's
+ * permissions in the update that creates the account (`isNew`), so the command itself shows the registry never had an
+ * unlocked phase. `payer` pays and signs with `key`.
+ */
+export async function registryDeployTx(payer: PublicKey | { sender: PublicKey; fee?: number | string | UInt64 }, key: PrivateKey) {
+  const cls = await registryClass((await vaultKey()).hash);
+  const registry = new cls(key.toPublicKey());
+  const sender = payer instanceof PublicKey ? payer : payer.sender;
+  const tx = await Mina.transaction(payer, async () => {
+    AccountUpdate.fundNewAccount(sender);
+    await registry.deploy();
+    registry.account.isNew.requireEquals(Bool(true));
+    registry.account.permissions.set(registryPermissions());
+  });
+  return { tx, registry };
+}
+
 /** Deploys a registry for the vault this build compiles, under ADR 0006's permissions. */
 export async function deployRegistry(deployer: Account, o: { key?: PrivateKey } = {}) {
   const key = o.key ?? PrivateKey.random();
-  const cls = await registryClass((await vaultKey()).hash);
-  const registry = new cls(key.toPublicKey());
-  const tx = await Mina.transaction(deployer, async () => {
-    AccountUpdate.fundNewAccount(deployer);
-    await registry.deploy();
-    registry.account.permissions.set(registryPermissions());
-  });
+  const { tx, registry } = await registryDeployTx(deployer, key);
   await tx.prove();
   await tx.sign([deployer.key, key]).send();
   return registry;
