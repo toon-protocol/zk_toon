@@ -46,7 +46,7 @@ const find = (dir, prefix) => {
 };
 const circuitOf = (file) => Number(/_cs(\d+)\.json$/.exec(file)[1]);
 
-// [process, case, [fixture prefix, step circuit, wrap circuit] for each proof o1js made in it]
+// case: [fixture prefix, step circuit] for each proof o1js made in it (the wrap circuit is `wrapName`'s)
 const NAMES = {
   setup: [['vault_setup', 'vault_setup']],
   deposit: [['vault_deposit', 'vault_deposit']],

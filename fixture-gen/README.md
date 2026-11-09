@@ -7,7 +7,7 @@ a script that proves both on a `LocalBlockchain` (`prove-local.mjs`) and a patch
 o1js is pinned to 3.1.0 in `package.json` and `package-lock.json`. This package is separate from the `o1js/`
 vector package.
 
-Regenerate every committed fixture, from a clean checkout:
+Regenerate every committed fixture except the real vault's (`vault_*`, `chunk_*`, see below), from a clean checkout:
 
 ```sh
 ./regenerate.sh --write

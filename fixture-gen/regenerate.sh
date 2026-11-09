@@ -10,7 +10,7 @@ cd "$(dirname "$0")"
 # `npm ci` runs patch-package, which applies patches/o1js+3.1.0.patch (the SPIKE_DUMP dump).
 npm ci
 fixtures=../zk-prover/fixtures
-if [ "${1:?--write or an output dir}" = "--vault" ]; then
+if [ "${1:?--write, --toy-only, --vault or an output dir}" = "--vault" ]; then
   # The vault's sources are TypeScript in ../o1js, run by that package's `tsx`; `vault-register.mjs` points their
   # `import 'o1js'` at this package's patched copy.
   (cd ../o1js && npm ci)

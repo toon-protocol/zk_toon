@@ -1,6 +1,5 @@
-import { pathToFileURL } from 'node:url';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const patched = pathToFileURL(path.join(here, 'node_modules/o1js/dist/node/index.js')).href;
