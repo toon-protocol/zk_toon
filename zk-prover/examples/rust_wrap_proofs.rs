@@ -4,7 +4,8 @@
 //! `o1js/src/rust-wrap.test.ts`. Also `rust_witness_land_proof.json`, the same for `land` proved from
 //! the Rust step witness rather than o1js's step proof. The toy zkApp's two methods, `plain` and
 //! `recurse` (`fixture-gen/toy.mjs`), likewise as `rust_toy_<method>_proof.json`, at the program's
-//! `maxProofsVerified` of 1. `fixture-gen/regenerate.sh --write` runs it.
+//! `maxProofsVerified` of 1. The real vault's ten cases (`vault_*`, `fixture-gen/vault-fixtures.ts`) likewise,
+//! as `rust_vault_<case>_proof.json`. `fixture-gen/regenerate.sh --write` runs it.
 
 use std::{io::Read, str::FromStr};
 
@@ -16,7 +17,9 @@ use zk_prover::{
     verify::{load_vk, WrapProof},
     witness::land::LandInputs,
     wrap::{deferred::step_features, union_features, wrap, PreviousProof, WrapCircuit, WrapParams},
-    StepCircuit, StepLand, StepSetup, StepToyPlain, StepToyRecurse, WrapLandSetup, WrapToy,
+    StepCircuit, StepLand, StepSetup, StepToyPlain, StepToyRecurse, StepVaultDefeat, StepVaultDeposit,
+    StepVaultEscape, StepVaultFinalize, StepVaultMutualClose, StepVaultRaise, StepVaultReduce, StepVaultSetup,
+    StepVaultSweepExpired, WrapLandSetup, WrapToy, WrapVault,
 };
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -96,11 +99,124 @@ fn toy(out: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The real vault's cases, in the branch order of its methods: each fixture prefix with its branch.
+const VAULT_CASES: [(&str, usize); 10] = [
+    ("vault_setup", 0),
+    ("vault_deposit", 1),
+    ("vault_mutualClose", 2),
+    ("vault_escape", 3),
+    ("vault_finalize", 4),
+    ("vault_defeat", 5),
+    ("vault_raise", 6),
+    ("vault_sweepExpired", 7),
+    ("vault_reduce", 8),
+    ("vault_reduce_recursive", 8),
+];
+
+/// The vault's methods, each as o1js proved it: the Rust wrap proof as o1js's `verify` reads it, in the
+/// shape of a `JsonProof` (the zkApp public input, no output, `maxProofsVerified` 1).
+fn vault(out: &std::path::Path) -> anyhow::Result<()> {
+    let load = |n: &str| {
+        (
+            fixture(&format!("vault_{n}_gates.json")),
+            fixture(&format!("vault_{n}_internal_vars.bin")),
+            fixture(&format!("vault_{n}_rows_rev.bin")),
+        )
+    };
+    let circuits = {
+        let (g, i, r) = load("setup");
+        let setup = StepCircuit::load::<StepVaultSetup>(&g, &i, &r)?;
+        let (g, i, r) = load("deposit");
+        let deposit = StepCircuit::load::<StepVaultDeposit>(&g, &i, &r)?;
+        let (g, i, r) = load("mutualClose");
+        let mutual_close = StepCircuit::load::<StepVaultMutualClose>(&g, &i, &r)?;
+        let (g, i, r) = load("escape");
+        let escape = StepCircuit::load::<StepVaultEscape>(&g, &i, &r)?;
+        let (g, i, r) = load("finalize");
+        let finalize = StepCircuit::load::<StepVaultFinalize>(&g, &i, &r)?;
+        let (g, i, r) = load("defeat");
+        let defeat = StepCircuit::load::<StepVaultDefeat>(&g, &i, &r)?;
+        let (g, i, r) = load("raise");
+        let raise = StepCircuit::load::<StepVaultRaise>(&g, &i, &r)?;
+        let (g, i, r) = load("sweepExpired");
+        let sweep = StepCircuit::load::<StepVaultSweepExpired>(&g, &i, &r)?;
+        let (g, i, r) = load("reduce");
+        let reduce = StepCircuit::load::<StepVaultReduce>(&g, &i, &r)?;
+        [setup, deposit, mutual_close, escape, finalize, defeat, raise, sweep, reduce]
+    };
+    let refs: Vec<&StepCircuit> = circuits.iter().collect();
+    let (g, i, r) = load("wrap");
+    let circuit = WrapCircuit::load::<WrapVault>(&g, &i, &r)?;
+    let features = union_features(&circuits.iter().map(|c| step_features(c.index())).collect::<Vec<_>>());
+    let keys: serde_json::Value = serde_json::from_slice(&fixture("vault_keys.json"))?;
+
+    for (case, branch) in VAULT_CASES {
+        let previous_json = std::path::Path::new(&format!("{}/fixtures/{case}_previous.json.gz", env!("CARGO_MANIFEST_DIR")))
+            .exists()
+            .then(|| serde_json::from_slice::<serde_json::Value>(&fixture(&format!("{case}_previous.json"))))
+            .transpose()?;
+        let previous = match &previous_json {
+            None => None,
+            Some(f) => {
+                let strs = |v: &serde_json::Value| -> Vec<String> {
+                    v.as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect()
+                };
+                let mut public = Vec::new();
+                for v in [&f["publicInput"], &f["publicOutput"]] {
+                    public.extend(zk_prover::verify::fields(&strs(v).iter().map(String::as_str).collect::<Vec<_>>())?);
+                }
+                Some((
+                    WrapProof::from_o1js_base64(f["proof"].as_str().unwrap())?,
+                    load_vk(keys[f["key"].as_str().unwrap()]["data"].as_str().unwrap())?,
+                    public,
+                ))
+            }
+        };
+        let previous_proofs: Vec<PreviousProof> = previous
+            .iter()
+            .map(|(proof, vk, public)| PreviousProof { proof, verification_key: vk, public_input: public })
+            .collect();
+        let proved = wrap::<WrapVault>(
+            WrapParams {
+                max_proofs_verified: 1,
+                step_circuits: &refs,
+                branch,
+                features: features.clone(),
+                step_proof: &case_step_proof(case),
+                previous_proofs: &previous_proofs,
+                previous_max_proofs_verified: &[1],
+            },
+            &circuit,
+        )?;
+        let public: Vec<String> = serde_json::from_slice(&fixture(&format!("{case}_zkapp_public.json")))?;
+        let json = serde_json::json!({
+            "publicInputFields": public,
+            "publicOutputFields": Vec::<String>::new(),
+            "maxProofsVerified": 1,
+            "proof": WrapProof::from_prover(&proved.proof).to_o1js_program_base64_for(1)?,
+        });
+        std::fs::write(out.join(format!("rust_{case}_proof.json")), serde_json::to_vec(&json)?)?;
+    }
+    Ok(())
+}
+
+/// `<case>_stepproof`, o1js's step proof of a vault case, and its public input.
+fn case_step_proof(case: &str) -> ProofWithPublic<Fp> {
+    let b64 = String::from_utf8(fixture(&format!("{case}_stepproof.b64"))).unwrap();
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).unwrap();
+    let public: Vec<String> = serde_json::from_slice(&fixture(&format!("{case}_stepproof_public.json"))).unwrap();
+    ProofWithPublic {
+        proof: rmp_serde::from_slice(&bytes).unwrap(),
+        public_input: public.iter().map(|s| Fp::from_str(s).unwrap()).collect(),
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let out = std::path::PathBuf::from(
         std::env::args().nth(1).ok_or_else(|| anyhow::anyhow!("usage: rust_wrap_proofs <out dir>"))?,
     );
     toy(&out)?;
+    vault(&out)?;
     let load = |n: &str| {
         (
             fixture(&format!("{n}_gates.json")),

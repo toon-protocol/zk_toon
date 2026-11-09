@@ -1,7 +1,8 @@
 // The wrap proofs zk-prover makes in Rust (`fixture-gen/regenerate.sh --write` writes
 // `rust_<method>_proof.json`) verify in o1js under the verification key o1js compiled for the
 // program with the methods `land` and `setup`, and for the toy zkApp (`fixture-gen/toy.mjs`), whose
-// methods verify no proof and one proof. A changed proof or public input is refused.
+// methods verify no proof and one proof, and for the real vault, each of whose methods (and `reduce` from a
+// real chunk) is wrapped from o1js's step proof. A changed proof or public input is refused.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
@@ -12,6 +13,10 @@ const fixture = (name: string) =>
 
 const vk: string = fixture('inputs.json').vk;
 const toyVk: string = fixture('toy_inputs.json').vk;
+const vaultVk: string = fixture('vault_keys.json').vault.data;
+const VAULT_CASES = [
+  'setup', 'deposit', 'mutualClose', 'escape', 'finalize', 'defeat', 'raise', 'sweepExpired', 'reduce', 'reduce_recursive',
+];
 
 type Saved = { proof: string; publicInputFields: string[]; publicOutputFields: string[]; maxProofsVerified?: number };
 const jsonProof = (f: Saved, over: Partial<JsonProof> = {}): JsonProof => ({
@@ -31,6 +36,7 @@ describe('the Rust wrap proof under the program verification key', () => {
     ['witness_land', vk],
     ['toy_plain', toyVk],
     ['toy_recurse', toyVk],
+    ...VAULT_CASES.map((c) => [`vault_${c}`, vaultVk]),
   ]) {
     it(`${name}: o1js verifies it, and refuses a changed proof or public input`, async () => {
       const rust: Saved = fixture(`rust_${name}_proof.json`);

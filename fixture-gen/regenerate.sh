@@ -26,6 +26,12 @@ if [ "${1:?--write, --toy-only, --vault or an output dir}" = "--vault" ]; then
       ../o1js/node_modules/.bin/tsx --tsconfig ../o1js/tsconfig.json --import ./vault-register.mjs vault-fixtures.ts "$mode" "$work/cache" "$work/$mode"
   done
   node vault-collect.mjs "$work" "$fixtures"
+  # The Rust wrap proofs of the vault's cases, which o1js verifies under the vault's key (o1js/src/rust-wrap.test.ts).
+  rust=$(mktemp -d)
+  cargo run --quiet --release -p zk-prover --example rust_wrap_proofs -- "$rust"
+  for c in setup deposit mutualClose escape finalize defeat raise sweepExpired reduce reduce_recursive; do
+    gzip -9nc "$rust/rust_vault_${c}_proof.json" > "$fixtures/rust_vault_${c}_proof.json.gz"
+  done
   cargo run --quiet -p zk-prover --example vk_hashes
   exit 0
 fi

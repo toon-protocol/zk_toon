@@ -45,10 +45,29 @@ if (mode === 'compile') {
 // What o1js's step proofs and witnesses are numbered by: the patch counts them from 1 in each process.
 const counter = (n: '__spikeP' | '__spikeW') => ((globalThis as any)[n] ?? 0) as number;
 const manifest: { name: string; proofs: [number, number]; witnesses: [number, number] }[] = [];
-/** Runs `fn` and records the step proofs and witnesses o1js made meanwhile as case `name`. */
-async function capture<T>(name: string, fn: () => Promise<T>): Promise<T> {
+// The zkApp public input (`accountUpdate`, `calls`) o1js proves each call under: the wrap proof's public input
+// is not in the step proof's, which holds only its hash.
+const zkappInputs: { accountUpdate: Field; calls: Field }[] = [];
+const toPublicInput = AccountUpdate.prototype.toPublicInput;
+AccountUpdate.prototype.toPublicInput = function (this: AccountUpdate, ...args: Parameters<typeof toPublicInput>) {
+  const input = toPublicInput.apply(this, args);
+  // Only the account updates that carry a proof (the fee payer and signed updates are hashed the same way).
+  if (this.body.authorizationKind.isProved.toBoolean()) zkappInputs.push(input);
+  return input;
+};
+/**
+ * Runs `fn` and records the step proofs and witnesses o1js made meanwhile as case `name`, with the zkApp public
+ * input of its call and `previous`, the proof its method verifies (`<name>_previous.json`).
+ */
+async function capture<T>(name: string, fn: () => Promise<T>, previous?: { toJSON(): unknown }): Promise<T> {
   const [p, w] = [counter('__spikeP'), counter('__spikeW')];
+  zkappInputs.length = 0;
   const result = await fn();
+  const distinct = [...new Set(zkappInputs.map((i) => `${i.accountUpdate.toString()},${i.calls.toString()}`))];
+  // The chunk proofs are not a call: no zkApp public input.
+  if (distinct.length > 1) throw Error(`${name}: expected one zkApp public input, saw ${distinct.length}`);
+  if (distinct.length === 1) fs.writeFileSync(`${out}/${name}_zkapp_public.json`, JSON.stringify(distinct[0].split(',')));
+  if (previous) fs.writeFileSync(`${out}/${name}_previous.json`, JSON.stringify(previous.toJSON()));
   manifest.push({ name, proofs: [p + 1, counter('__spikeP')], witnesses: [w + 1, counter('__spikeW')] });
   return result;
 }
@@ -98,7 +117,7 @@ async function main() {
             await h.vault.reduce(batch, proof, Unconstrained.from(witnesses), nullifiers, escapes, UInt64.from(t));
           })
         );
-      if (proven && first) await capture('reduce', () => proved(send));
+      if (proven && first) await capture('reduce', () => proved(send), proof);
       else await send();
       first = false;
     }
@@ -107,20 +126,20 @@ async function main() {
 
   const { escape: ESCAPE, mutualClose } = WithdrawalKind;
   const close = await h.withdrawalProof(a, { kind: mutualClose, signed: true, step: 1, balance: 4n * MINA, destination: bob });
-  await capture('mutualClose', () => proved(() => h.close(close)));
+  await capture('mutualClose', () => proved(() => h.close(close)), close);
   // Three escapes: `finalize` pays one, `defeat` and `raise` challenge the others.
   const genesis = (note: typeof b) => h.withdrawalProof(note, { kind: ESCAPE, signed: false, step: 0, balance: SMALL, destination: alice });
   const [toFinalize, toDefeat] = [await genesis(b), await genesis(c)];
   const toRaise = await h.withdrawalProof(d, { kind: ESCAPE, signed: true, step: 1, balance: 3n * MINA, conceded: MINA / 100n, destination: alice });
-  await capture('escape', () => proved(() => h.escape(toFinalize)));
+  await capture('escape', () => proved(() => h.escape(toFinalize)), toFinalize);
   await h.escape(toDefeat);
   await h.escape(toRaise);
   await reduce(false);
 
   const defeatEvidence = await h.requestProof(c, { step: 1, balance: 4n * MINA, tier: TOP_TIER });
-  await capture('defeat', () => proved(() => h.defeat(toDefeat.publicInput.nullifier, defeatEvidence)));
+  await capture('defeat', () => proved(() => h.defeat(toDefeat.publicInput.nullifier, defeatEvidence)), defeatEvidence);
   const raiseEvidence = await h.requestProof(d, { balance: 3n * MINA, tier: TOP_TIER });
-  await capture('raise', () => proved(() => h.raise(toRaise.publicInput.nullifier, raiseEvidence, MINA / 2n)));
+  await capture('raise', () => proved(() => h.raise(toRaise.publicInput.nullifier, raiseEvidence, MINA / 2n)), raiseEvidence);
   advance(h.mirror.pendingEscape(toFinalize.publicInput.nullifier)!.deadline.toBigInt() - now());
   await capture('finalize', () => proved(() => h.finalize(toFinalize.publicInput.nullifier)));
 
@@ -148,7 +167,7 @@ async function recursive() {
           await h.vault.reduce(batch, proof, Unconstrained.from(witnesses), nullifiers, escapes, UInt64.from(t));
         })
       );
-    if (index++ === 0) await capture('reduceRecursive', () => proved(send));
+    if (index++ === 0) await capture('reduceRecursive', () => proved(send), proof);
     else await send();
   }
 }

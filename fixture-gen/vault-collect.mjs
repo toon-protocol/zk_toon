@@ -1,6 +1,7 @@
 // Turns the dumps of `vault-fixtures.ts` (the `compile`, `main` and `recursive` directories under <work>) into
 // the committed fixtures: for each case, the step circuit, the wrap circuit, o1js's step proof with its public
-// input and the wrap witness (reduced to what the Rust tests read); and the verification keys.
+// input and the wrap witness (reduced to what the Rust tests read), the zkApp public input of the call and, for a
+// method that verifies a proof, that proof (`_previous.json`, with the name of its program's key); and the verification keys.
 // Usage: node vault-collect.mjs <work dir> <fixtures dir>
 import fs from 'node:fs';
 import zlib from 'node:zlib';
@@ -62,6 +63,11 @@ const NAMES = {
   chunks: [['chunk_dummy', 'chunk'], ['chunk_chained', 'chunk']],
 };
 const wrapName = (prefix) => (prefix.startsWith('chunk') ? 'chunk_wrap' : 'vault_wrap');
+// The cases whose method verifies a proof, and the key of the program that made it (`vault_keys.json`).
+const PREVIOUS = {
+  reduce: 'vaultReducer', reduceRecursive: 'vaultReducer', mutualClose: 'withdrawal', escape: 'withdrawal',
+  defeat: 'request', raise: 'request',
+};
 const seen = new Set();
 for (const proc of ['main', 'recursive']) {
   const dir = `${work}/${proc}`;
@@ -71,6 +77,15 @@ for (const proc of ['main', 'recursive']) {
     const [nProofs, nWitnesses] = [c.proofs[1] - c.proofs[0] + 1, c.witnesses[1] - c.witnesses[0] + 1];
     if (nProofs !== names.length || nWitnesses !== 2 * names.length) {
       die(`${c.name}: ${nProofs} step proofs and ${nWitnesses} witnesses, expected ${names.length} and ${2 * names.length}`);
+    }
+    // A vault method's call: the public input of its zkApp proof, and the proof its method verified.
+    if (c.name !== 'chunks') {
+      const [prefix] = names[0];
+      gz(`${prefix}_zkapp_public.json`, fs.readFileSync(`${dir}/${c.name}_zkapp_public.json`));
+      if (PREVIOUS[c.name]) {
+        const previous = JSON.parse(fs.readFileSync(`${dir}/${c.name}_previous.json`, 'utf8'));
+        gz(`${prefix}_previous.json`, JSON.stringify({ ...previous, key: PREVIOUS[c.name] }));
+      } else if (fs.existsSync(`${dir}/${c.name}_previous.json`)) die(`${c.name} verifies no proof`);
     }
     names.forEach(([prefix, stepName], i) => {
       // Each proof is a step witness, o1js's step proof, then the wrap witness for it.

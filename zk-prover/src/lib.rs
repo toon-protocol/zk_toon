@@ -69,6 +69,42 @@ impl ProofConstants for StepToyRecurse {
     const ROWS: usize = 10733;
 }
 
+/// Shapes of the step circuits of the real vault (`vault_<method>_*`, `fixture-gen/vault-fixtures.ts`), for
+/// [`StepCircuit::load`], which reads `ROWS` and `PREVIOUS_CHALLENGES`. Each has the 34 public inputs of a
+/// program of `maxProofsVerified` 1. `AUX_LEN` is 0: no step witness is built for them (the step proofs
+/// are o1js's), so nothing reads it.
+macro_rules! vault_step {
+    ($($name:ident: $rows:expr, $verifies:expr;)*) => {$(
+        pub struct $name;
+        impl ProofConstants for $name {
+            const PRIMARY_LEN: usize = 34;
+            const AUX_LEN: usize = 0;
+            const PREVIOUS_CHALLENGES: usize = $verifies;
+            const ROWS: usize = $rows;
+        }
+    )*};
+}
+vault_step! {
+    StepVaultSetup: 2096, 0;
+    StepVaultDeposit: 2461, 0;
+    StepVaultMutualClose: 13028, 1;
+    StepVaultEscape: 13170, 1;
+    StepVaultFinalize: 2335, 0;
+    StepVaultDefeat: 12591, 1;
+    StepVaultRaise: 12666, 1;
+    StepVaultSweepExpired: 7169, 0;
+    StepVaultReduce: 56124, 1;
+}
+
+/// Shape of the vault's wrap circuit (`vault_wrap_*`), shared by its methods.
+pub struct WrapVault;
+impl ProofConstants for WrapVault {
+    const PRIMARY_LEN: usize = 40;
+    const AUX_LEN: usize = 144735;
+    const PREVIOUS_CHALLENGES: usize = 2;
+    const ROWS: usize = 11814;
+}
+
 /// Shape of the wrap circuit of the toy zkApp (`toy_wrap_*`), shared by both methods.
 pub struct WrapToy;
 impl ProofConstants for WrapToy {
