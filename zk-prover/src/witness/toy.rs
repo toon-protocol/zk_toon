@@ -32,6 +32,9 @@ use super::{
 };
 use crate::{verify::load_vk, wrap::PreviousProof};
 
+/// The toy zkApp's `maxProofsVerified`: `recurse` verifies one proof, `plain` none.
+const MAX_PROOFS_VERIFIED: usize = 1;
+
 /// Everything the toy methods' witnesses depend on besides the previous proof.
 #[derive(Clone, Debug)]
 pub struct ToyInputs {
@@ -137,10 +140,7 @@ fn witness(inputs: &ToyInputs, name: &str, previous: Option<&PreviousProof>) -> 
 
     // Pickles: the rest of the step circuit, with the previous proof
     let vk = load_vk(&inputs.vk)?;
-    let previous: Vec<PreviousProof> = previous
-        .map(|p| PreviousProof { proof: p.proof, verification_key: p.verification_key, public_input: p.public_input })
-        .into_iter()
-        .collect();
-    let primary = step_main_tail(&mut cs, &vk, 1, &previous)?;
+    let previous: Vec<PreviousProof> = previous.copied().into_iter().collect();
+    let primary = step_main_tail(&mut cs, &vk, MAX_PROOFS_VERIFIED, &previous)?;
     Ok(ToyWitness { primary, aux: cs.into_aux(), account_update_hash })
 }

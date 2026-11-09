@@ -38,17 +38,12 @@ use ledger::proofs::{
     }, VerifierIndex, BACKEND_TICK_ROUNDS_N, BACKEND_TOCK_ROUNDS_N,
 };
 use ledger::{verifier::{get_srs, get_srs_mut}, VerificationKey};
-use super::{pickles::from_fork, step_verifier::{verify_one, VerifyOneParams}, Cs, Field, gadgets::poseidon::Sponge};
+use super::{pickles::from_fork, step_verifier::{to_bytes, verify_one, VerifyOneParams}, Cs, Field, gadgets::poseidon::Sponge};
 use crate::wrap::PreviousProof;
 use mina_curves::pasta::{Fp, Fq};
 use mina_p2p_messages::{bigint::InvalidBigInt, v2};
 use poly_commitment::commitment::b_poly_coefficients;
 use std::rc::Rc;
-
-fn to_bytes(f: Fp) -> [u64; 4] {
-    let bigint: BigInteger256 = f.into();
-    bigint.0
-}
 
 fn wrap_compute_sg(challenges: &[[u64; 2]]) -> GroupAffine<Fp> {
     use ledger::proofs::public_input::scalar_challenge::ScalarChallenge;
@@ -497,9 +492,19 @@ struct Verified {
     bulletproof_challenges: [Fp; 16],
 }
 
+/// `zk_rows` of a Pickles proof whose circuit is not chunked.
+const ZK_ROWS: u64 = 3;
+
+/// The length of a wrap proof's public input: the packed fields of its statement.
+const WRAP_PUBLIC_INPUT_LENGTH: usize = 40;
+
 /// The feature flags of a previous program, as Pickles' `For_step` carries them: none of the optional
 /// gates (a program only has them when its methods use them), and the statement with the lookup slot
 /// that o1js's wrap circuit has.
+///
+/// The previous program is taken to have one method (`branches: 1`), whose step domain is the one
+/// the proof's `branch_data` names. A program with several methods would need each method's domain
+/// here; nothing verified so far (the toy's `toy-inner`) has more than one.
 fn for_step(previous: &PreviousProof, zk_rows: u64) -> anyhow::Result<ForStep> {
     let vk = previous.verification_key;
     let proofs_verified = vk.max_proofs_verified.to_int();
@@ -548,7 +553,7 @@ pub fn step_main_tail(
     let start = cs.next_var();
     let (result, aux) = from_fork(|w| -> anyhow::Result<_> {
         let own_index = w.exists((*own.wrap_index).clone());
-        let datas = previous.iter().map(|p| for_step(p, 3)).collect::<anyhow::Result<Vec<_>>>()?;
+        let datas = previous.iter().map(|p| for_step(p, ZK_ROWS)).collect::<anyhow::Result<Vec<_>>>()?;
         let apps: Vec<Rc<dyn ToFieldElementsDebug>> = previous
             .iter()
             .map(|p| Rc::new(PublicInput(p.public_input.to_vec())) as Rc<dyn ToFieldElementsDebug>)
@@ -564,11 +569,11 @@ pub fn step_main_tail(
                     dlog_plonk_index: &dlog_plonk_index,
                     app_state,
                     t: p.proof.repr(),
-                    public_input_length: 40,
+                    public_input_length: WRAP_PUBLIC_INPUT_LENGTH,
                     tag: (),
                     must_verify: CircuitVar::Constant(Boolean::True),
                     hack_feature_flags: OptFlag::No,
-                    zk_rows: 3,
+                    zk_rows: ZK_ROWS,
                     proofs_verified: vk.max_proofs_verified.to_int(),
                 })
             })
@@ -630,7 +635,8 @@ pub fn step_main_tail(
     let mut sponge = Sponge::new();
     for (i, f) in fields.iter().enumerate() {
         let field = match i {
-            // the 56 fields of the 28 commitments are the first variables `exists` created
+            // the 56 fields of the wrap index's 28 commitments (every wrap index has 28) are the
+            // first variables `exists` created; the app state is variables 1 and 2
             0..=55 => cs.var(start + i),
             56 | 57 => cs.var(i - 55),
             _ => Field::constant(*f),

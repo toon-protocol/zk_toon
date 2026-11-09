@@ -43,6 +43,7 @@ use crate::verify::WrapProof;
 
 /// A proof the step proof verified: a Pickles proof as o1js writes it, the verification key of the
 /// program that made it, and its public input.
+#[derive(Clone, Copy)]
 pub struct PreviousProof<'a> {
     pub proof: &'a WrapProof,
     pub verification_key: &'a VerificationKey,

@@ -89,7 +89,7 @@ impl From<LandWitness> for crate::StepWitness {
     }
 }
 
-/// The method name `land` as `Encoding.stringToFields` makes it: bytes, then the stop byte `1`.
+/// A method name (`land`, say) as `Encoding.stringToFields` makes it: bytes, then the stop byte `1`.
 pub(super) fn string_to_field(s: &str) -> Fp {
     assert!(s.len() < 31);
     let mut bytes = s.as_bytes().to_vec();

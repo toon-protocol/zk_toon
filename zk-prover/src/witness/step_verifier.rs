@@ -15,45 +15,36 @@
 //! `maxProofsVerified`, padded to two with the dummy where Pickles pads them (`Wrap_hack`); and
 //! side-loaded verification keys are not supported, only a known one (the key is a constant).
 
+use ark_ff::{BigInteger256, One, Zero};
+use kimchi::{
+    curve::KimchiCurve,
+    proof::{PointEvaluations, ProofEvaluations},
+};
 use ledger::proofs::{
     field::{Boolean, CircuitVar, FieldWitness, GroupAffine},
-    public_input::plonk_checks::PlonkMinimal,
+    public_input::{
+        plonk_checks::{InCircuit, PlonkMinimal, ScalarsEnv, ShiftingValue},
+        prepared_statement::{DeferredValues, Plonk, PreparedStatement, ProofState},
+    },
+    step::{FeatureFlags, ForStep, ForStepKind, Opt, OptFlag, Packed, PerProofWitness},
     to_field_elements::ToFieldElements,
     transaction::{
-        scalar_challenge::to_field_checked, CircuitPlonkVerificationKeyEvals,
-        InnerCurve, PlonkVerificationKeyEvals,
-        ReducedMessagesForNextStepProof,
+        endos, scalar_challenge::to_field_checked, CircuitPlonkVerificationKeyEvals, InnerCurve,
+        PlonkVerificationKeyEvals, ReducedMessagesForNextStepProof,
     },
     unfinalized::{AllEvals, Unfinalized},
-    util::two_u64_to_field,
+    util::{four_u64_to_field, two_u64_to_field},
     witness::Witness,
-    wrap::Domains,
+    wrap::{wrap_verifier, Domain, Domains, COMMON_MAX_DEGREE_STEP_LOG2},
     ProverProof,
 };
-use ledger::proofs::{
-        public_input::{
-            plonk_checks::{InCircuit, ShiftingValue},
-            prepared_statement::{DeferredValues, Plonk, PreparedStatement, ProofState},
-        },
-        transaction::endos,
-        util::four_u64_to_field,
-        wrap::{
-            wrap_verifier, Domain,
-            COMMON_MAX_DEGREE_STEP_LOG2,
-        },
-    };
-use ledger::proofs::step::{
-    FeatureFlags, ForStep, ForStepKind, Opt, OptFlag, Packed, PerProofWitness,
-};
-use ark_ff::{BigInteger256, One, Zero};
-use kimchi::{curve::KimchiCurve, proof::{PointEvaluations, ProofEvaluations}};
-use ledger::proofs::public_input::plonk_checks::ScalarsEnv;
-use super::constant_term::constant_term;
-use crate::wrap::endo::{bullet_reduce, endo, endo_cvar};
-use poly_commitment::ipa::OpeningProof;
 use mina_curves::pasta::{Fp, Fq, Pallas};
 use mina_p2p_messages::v2;
+use poly_commitment::ipa::OpeningProof;
 use std::rc::Rc;
+
+use super::constant_term::constant_term;
+use crate::wrap::endo::{bullet_reduce, endo, endo_cvar};
 
 /// `Plonk_checks.ft_eval0`, the evaluation of the linearization at zeta that the proof leaves out, for a
 /// step proof that uses none of the optional gates and no lookups.
@@ -1473,7 +1464,7 @@ pub fn verify_one(params: VerifyOneParams, w: &mut Witness<Fp>) -> anyhow::Resul
     Ok((chals, b.as_boolean()))
 }
 
-fn to_bytes(f: Fp) -> [u64; 4] {
+pub(super) fn to_bytes(f: Fp) -> [u64; 4] {
     let bigint: BigInteger256 = f.into();
     bigint.0
 }

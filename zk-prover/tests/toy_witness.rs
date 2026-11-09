@@ -71,7 +71,7 @@ fn call_site(method: &str, index: usize) -> String {
 /// first public input that differs.
 fn first_difference(method: &str, primary: &[Fp], aux: &[Fp]) -> Option<String> {
     let o1js = o1js_witness(method);
-    let public = o1js_public_inputs();
+    let public = o1js_public_inputs(method);
     for (i, (rust, theirs)) in aux.iter().zip(&o1js[public..]).enumerate() {
         if rust != theirs {
             return Some(format!(
@@ -98,10 +98,11 @@ fn first_difference(method: &str, primary: &[Fp], aux: &[Fp]) -> Option<String> 
     })
 }
 
-/// Both toy step circuits have 34 public inputs: the unfinalized proof (32), then the hashes of
-/// `messages_for_next_step_proof` and `messages_for_next_wrap_proof`.
-fn o1js_public_inputs() -> usize {
-    34
+/// How many of o1js's witness values are public inputs, as its fixture records. Both toy step
+/// circuits have 34: the unfinalized proof (32), then the hashes of `messages_for_next_step_proof`
+/// and `messages_for_next_wrap_proof`.
+fn o1js_public_inputs(method: &str) -> usize {
+    json(&format!("toy_{method}_step_witness.json"))["public_input_size"].as_u64().unwrap() as usize
 }
 
 /// What `toy-inner`'s proof of 49 is, for `recurse` to verify.

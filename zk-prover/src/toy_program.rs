@@ -59,12 +59,7 @@ impl ToyProgram {
     /// Prove `recurse(x, proof)`, `previous` being the proof of `toy-inner` and its public input.
     pub fn prove_recurse(&self, inputs: &ToyInputs, previous: &PreviousProof) -> anyhow::Result<ProvedToy> {
         let witness = recurse_witness(inputs, previous)?;
-        let previous = [PreviousProof {
-            proof: previous.proof,
-            verification_key: previous.verification_key,
-            public_input: previous.public_input,
-        }];
-        self.prove(RECURSE_BRANCH, witness, &previous)
+        self.prove(RECURSE_BRANCH, witness, &[*previous])
     }
 
     fn prove(&self, branch: usize, witness: ToyWitness, previous: &[PreviousProof]) -> anyhow::Result<ProvedToy> {
