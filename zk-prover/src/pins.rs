@@ -48,13 +48,26 @@ pub const TOY_RECURSE_STEP_VK_HASH: &str =
 pub const TOY_PROGRAM_VK_HASH: &str =
     "22436708804274709820754207430171157129176884119614341959218710625595556361495";
 
+/// The hash of the real vault's verification key, its code hash (`Vault.compile()`), from
+/// `fixtures/vault_keys.json`. `npm run keys` publishes the same hash.
+pub const VAULT_VK_HASH: &str =
+    "18683408031881884777656720181449885515444520266556316685557148949849565333999";
+
+/// The hash of the vault's batch reducer's verification key (the action-stack program that `proveChunk`
+/// proves), from `fixtures/vault_keys.json`. `npm run keys` publishes the same hash.
+pub const VAULT_REDUCER_VK_HASH: &str =
+    "1068455914940987064575851783351747747170540515314043943192078195676266005847";
+
 // To regenerate the fixtures (after bumping the fork rev, proof-systems or o1js):
 //
 // 1. Change the pin: `Cargo.toml`'s `rev`s, `fixture-gen/package.json`'s and `o1js/package.json`'s
 //    o1js version (and the patch) and the constants above.
-// 2. Run `fixture-gen/regenerate.sh --write`. It rewrites `fixtures/` from o1js and prints the VK hashes.
+// 2. Run `fixture-gen/regenerate.sh --write`. It rewrites `fixtures/` from o1js, all but `vault_*` and
+//    `chunk_*`, and prints the VK hashes.
 // 3. Put the printed hashes in the `*_VK_HASH` constants. `tests/pins.rs` fails until they
 //    match the committed circuits and `inputs.json`.
+//    For the vault's and reducer's (`fixture-gen/regenerate.sh --vault`, which takes about half an hour,
+//    rewrites only `vault_*` and `chunk_*`), `tests/pins.rs` names that step when they differ.
 // 4. Run `cargo test --workspace` and commit the fixtures with the pins.
 //
 // o1js proofs are randomised, so a regenerated `stepproof*`, `w002`/`w004` and `*_proof.json` never

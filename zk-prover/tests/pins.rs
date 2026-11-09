@@ -1,6 +1,7 @@
 //! The VK hashes in `src/pins.rs` are the ones the committed circuits give, and the pins agree with
 //! the manifests they mirror. A moved fork rev, proof-systems rev, o1js version or circuit fails here.
 
+use ark_ff::PrimeField;
 use std::io::Read;
 
 use zk_prover::{pins, StepCircuit, StepLand, StepSetup, StepToyPlain, StepToyRecurse};
@@ -49,7 +50,6 @@ fn toy_program_vk_hash_is_pinned() {
     assert_eq!(inputs["vkHash"].as_str().unwrap(), pins::TOY_PROGRAM_VK_HASH);
     // The key data in the fixture hashes to the same value.
     let vk = zk_prover::verify::load_vk(inputs["vk"].as_str().unwrap()).unwrap();
-    use ark_ff::PrimeField;
     assert_eq!(vk.hash().into_bigint().to_string(), pins::TOY_PROGRAM_VK_HASH);
 }
 
@@ -59,7 +59,6 @@ fn program_vk_hash_is_pinned() {
     assert_eq!(inputs["vkHash"].as_str().unwrap(), pins::PROGRAM_VK_HASH);
     // The key data in the fixture hashes to the same value.
     let vk = zk_prover::verify::load_vk(inputs["vk"].as_str().unwrap()).unwrap();
-    use ark_ff::PrimeField;
     assert_eq!(vk.hash().into_bigint().to_string(), pins::PROGRAM_VK_HASH);
 }
 
@@ -82,4 +81,33 @@ fn pins_match_the_manifests() {
     let lock: serde_json::Value =
         serde_json::from_slice(&std::fs::read(format!("{root}/../o1js/package-lock.json")).unwrap()).unwrap();
     assert_eq!(lock["packages"]["node_modules/o1js"]["version"], pins::O1JS_VERSION);
+}
+
+/// The verification keys of the real vault and its action-stack program, as `fixture-gen/vault-fixtures.ts`
+/// compiled them (`fixtures/vault_keys.json`).
+fn vault_keys() -> serde_json::Value {
+    serde_json::from_slice(&fixture("vault_keys.json")).unwrap()
+}
+
+/// `name`'s key in `vault_keys.json` has the pinned hash, and its data hashes to it as the Rust verifier
+/// reads it. `pin_name` is the pin's constant, for the failure message.
+fn assert_key_pinned(name: &str, pinned: &str, pin_name: &str) {
+    let keys = vault_keys();
+    let key = &keys[name];
+    let regenerate = "regenerate the vault fixtures with `fixture-gen/regenerate.sh --vault`, \
+         then put the printed hashes in zk-prover/src/pins.rs";
+    assert_eq!(key["hash"].as_str().unwrap(), pinned, "the fixtures' {name} VK hash is not {pin_name}: {regenerate}");
+    // The key data in the fixture hashes to the same value.
+    let vk = zk_prover::verify::load_vk(key["data"].as_str().unwrap()).unwrap();
+    assert_eq!(vk.hash().into_bigint().to_string(), pinned, "the {name} key data does not hash to {pin_name}: {regenerate}");
+}
+
+#[test]
+fn vault_vk_hash_is_pinned() {
+    assert_key_pinned("vault", pins::VAULT_VK_HASH, "pins::VAULT_VK_HASH");
+}
+
+#[test]
+fn vault_reducer_vk_hash_is_pinned() {
+    assert_key_pinned("vaultReducer", pins::VAULT_REDUCER_VK_HASH, "pins::VAULT_REDUCER_VK_HASH");
 }

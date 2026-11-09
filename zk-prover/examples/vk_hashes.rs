@@ -27,4 +27,7 @@ fn main() {
     println!("TOY_RECURSE_STEP_VK_HASH={}", StepCircuit::load::<StepToyRecurse>(&g, &i, &r).unwrap().vk_hash());
     let inputs: serde_json::Value = serde_json::from_slice(&fixture("toy_inputs.json")).unwrap();
     println!("TOY_PROGRAM_VK_HASH={}", inputs["vkHash"].as_str().unwrap());
+    let keys: serde_json::Value = serde_json::from_slice(&fixture("vault_keys.json")).unwrap();
+    println!("VAULT_VK_HASH={}", keys["vault"]["hash"].as_str().unwrap());
+    println!("VAULT_REDUCER_VK_HASH={}", keys["vaultReducer"]["hash"].as_str().unwrap());
 }

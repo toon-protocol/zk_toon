@@ -1,5 +1,5 @@
 diff --git a/node_modules/o1js/dist/node/bindings/compiled/node_bindings/o1js_node.bc.cjs b/node_modules/o1js/dist/node/bindings/compiled/node_bindings/o1js_node.bc.cjs
-index 953648b..a4ed33b 100644
+index 953648b..895a3db 100644
 --- a/node_modules/o1js/dist/node/bindings/compiled/node_bindings/o1js_node.bc.cjs
 +++ b/node_modules/o1js/dist/node/bindings/compiled/node_bindings/o1js_node.bc.cjs
 @@ -4491,6 +4491,7 @@
@@ -14,7 +14,7 @@ index 953648b..a4ed33b 100644
                                 var _ksk_=_ksj_;
                                return _ksk_}
                              iter$6(of_msb_first(sys[5]),_ksg_);
-+                            if(process.env.SPIKE_DUMP){var __ts=function(v){return caml_jsbytes_of_string(caml_call1(Fp[30],v))};var __ext=[];for(var __i=0;;__i++){try{__ext.push(__ts(caml_call1(external_values,__i)))}catch(e){break}}globalThis.__spikeW=(globalThis.__spikeW||0)+1;var __cols=[];for(var __c=0;__c<columns;__c++){var __col=res[1+__c];var __o=[];for(var __r=0;__r<num_rows;__r++)__o.push(__ts(__col[1+__r]));__cols.push(__o)}require("fs").writeFileSync(process.env.SPIKE_DUMP+"/w"+String(globalThis.__spikeW).padStart(3,"0")+"_cs"+String(sys.__spikeId||0).padStart(3,"0")+".json",JSON.stringify({public_input_size:public_input_size,external:__ext,witness:__cols,trace:globalThis.__spikeTrace||[]}));globalThis.__spikeTrace=[]}
++                            if(process.env.SPIKE_DUMP){var __ts=function(v){return caml_jsbytes_of_string(caml_call1(Fp[30],v))};var __ext=[];for(var __i=0;;__i++){try{__ext.push(__ts(caml_call1(external_values,__i)))}catch(e){break}}globalThis.__spikeW=(globalThis.__spikeW||0)+1;var __cols=[];for(var __c=0;__c<(process.env.SPIKE_DUMP_LIGHT?0:columns);__c++){var __col=res[1+__c];var __o=[];for(var __r=0;__r<num_rows;__r++)__o.push(__ts(__col[1+__r]));__cols.push(__o)}require("fs").writeFileSync(process.env.SPIKE_DUMP+"/w"+String(globalThis.__spikeW).padStart(3,"0")+"_cs"+String(sys.__spikeId||0).padStart(3,"0")+".json",JSON.stringify({public_input_size:public_input_size,external:__ext,witness:__cols,trace:process.env.SPIKE_DUMP_LIGHT?[]:globalThis.__spikeTrace||[]}));globalThis.__spikeTrace=[]}
                              return [0,res,runtime_tables]}
                            function union_find(sys,v)
                             {function _ksb_(param){return create$40(v)}
@@ -29,7 +29,7 @@ index 953648b..a4ed33b 100644
                               {var _krt_=sys[4];
                                if(1 === _krt_[0])
 diff --git a/node_modules/o1js/dist/node/lib/provable/core/exists.js b/node_modules/o1js/dist/node/lib/provable/core/exists.js
-index c674b30..b295e2e 100644
+index c674b30..b6ed53c 100644
 --- a/node_modules/o1js/dist/node/lib/provable/core/exists.js
 +++ b/node_modules/o1js/dist/node/lib/provable/core/exists.js
 @@ -29,8 +29,15 @@ function exists(size, compute) {
@@ -40,7 +40,7 @@ index c674b30..b295e2e 100644
      return TupleN.fromArray(size, vars);
  }
 +function spikeTrace(vars, size) {
-+    if (!process.env.SPIKE_DUMP || size === 0) return;
++    if (!process.env.SPIKE_DUMP || process.env.SPIKE_DUMP_LIGHT || size === 0) return;
 +    const v = vars[0].value; // FieldVar: [1, index] for a fresh variable
 +    const site = (new Error().stack.split('\n').slice(3, 9).filter(l => !l.includes('/provable/core/') ).map(l => l.trim().replace(/^at /, '').replace(/\(?(file:\/\/)?\/\S*?node_modules\/o1js\/dist\/node\//, '').replace(/\(?(file:\/\/)?\/\S*?fixture-gen\//, 'APP:')).slice(0, 4).join(' < '));
 +    (globalThis.__spikeTrace ??= []).push([v[0] === 1 ? v[1] : -1, size, site]);

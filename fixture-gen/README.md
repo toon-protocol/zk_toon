@@ -7,7 +7,7 @@ a script that proves both on a `LocalBlockchain` (`prove-local.mjs`) and a patch
 o1js is pinned to 3.1.0 in `package.json` and `package-lock.json`. This package is separate from the `o1js/`
 vector package.
 
-Regenerate every committed fixture, from a clean checkout:
+Regenerate every committed fixture except the real vault's (`vault_*`, `chunk_*`, see below), from a clean checkout:
 
 ```sh
 ./regenerate.sh --write
@@ -61,6 +61,40 @@ checks the numbered dump is laid out as `regenerate.sh` assumes. `./regenerate.s
 The circuits, `inputs`-style files (`toy_inputs.json`) and the VK hashes in `zk-prover/src/pins.rs` are byte-identical on a rerun;
 the step proofs, the wrap witnesses and `*_proof.json` are not (o1js's proofs are randomised), and neither is the step witness of
 `recurse`, which holds the inner proof.
+
+## The real vault and the action-stack program
+
+`./regenerate.sh --vault` (about half an hour; leave the other fixtures as they are) proves every method of the real `Vault`
+(`../o1js/src/vault.ts`) on a `LocalBlockchain`, with the dump patch on in its light mode (`SPIKE_DUMP_LIGHT=1`, which leaves
+out the witness columns and the call-site trace), and writes the fixtures for `zk-prover`'s wrap of them. The vault is
+deployed under its own key, not through the registry, whose circuit no fixture needs. o1js's wasm prover hangs on `reduce`
+(about 56k rows, 2^16) when every prover key is held in memory, so the run is three processes, all `vault-fixtures.ts`,
+which `../o1js`'s `tsx` runs with `vault-register.mjs` pointing the vault sources' `import 'o1js'` at this package's patched copy:
+
+- `compile` compiles with an empty cache directory: every circuit is dumped, and the keys are written to the cache.
+- `main` compiles from that cache (the keys load lazily) and proves `setup`, `deposit`, `reduce`, `mutualClose`, `escape`,
+  `defeat`, `raise`, `finalize` and `sweepExpired`.
+- `recursive` does the same and proves the real action-stack chunks (`proveChunk`) for more pending action lists than
+  one `reduce` takes, then `reduce` again from them. `provableBatches` (`../o1js/src/vault-view.ts`) builds them: the last
+  chunk from a dummy proof of the program's domain, 2^15 (o1js 3.1.0's own dummy has the wrong domain, see #71), the one before
+  from that chunk.
+
+Each process numbers circuits and witnesses from 1; `vault-collect.mjs` reads each case's files from the process that
+made it, checks that every circuit is among `compile`'s and that no two vault methods share a step circuit, and writes:
+
+- `vault_<method>_*` and `chunk_*` (`gates.json`, `internal_vars.bin`, `rows_rev.bin`), the step circuits; `vault_wrap_*` and
+  `chunk_wrap_*`, the wrap circuit of the vault and of the action-stack program.
+- For each case, `<case>_stepproof.b64` (o1js's step proof), `<case>_stepproof_public.json` (its public input),
+  `<case>_wrap_witness.json` (o1js's wrap witness, reduced to its `external` values). The cases are the nine methods
+  (`vault_<method>`), `vault_reduce_recursive` (`reduce` from the real chunk, the same circuit as `vault_reduce`),
+  `chunk_dummy` and `chunk_chained` (`proveChunk` from the dummy and from the real previous chunk, one circuit, `chunk`).
+- `vault_keys.json`: the verification keys (`data` and `hash`) of the vault, its reducer (`vaultReducer`) and the programs
+  the vault verifies (`request`, `withdrawal`). `zk-prover/src/pins.rs` pins the vault's and the reducer's hashes.
+
+The circuits and keys are byte-identical on a rerun; the step proofs and wrap witnesses are not.
+
+The new fixtures are 73 gzipped files, 56.5 MB committed: each wrap witness is about 4 MB (118,000 field elements, which
+`xz` shrinks by only about 14%), 11 of them make 43 MB, and the circuits are the rest.
 
 `trace-land.mjs` is a development tool for `zk-prover/src/witness`: it proves `land` as `prove-local.mjs`
 does and logs the calls into o1js's OCaml side (Poseidon, `scaleFastUnpack`, `truncateToBits16`) and the

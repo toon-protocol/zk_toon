@@ -3,18 +3,39 @@
 #   ./regenerate.sh --write        rewrite ../zk-prover/fixtures/ (gzipped) and print the VK hashes to pin
 #   ./regenerate.sh <dir>          only dump o1js's raw output to <dir> (the toy's to <dir>/toy)
 #   ./regenerate.sh --toy-only     rewrite only the toy fixtures (`toy_*`), which `toy.mjs` makes
+#   ./regenerate.sh --vault        rewrite only the real vault's and action-stack program's (`vault_*`, `chunk_*`);
+#                                  takes about half an hour
 set -euo pipefail
 cd "$(dirname "$0")"
 # `npm ci` runs patch-package, which applies patches/o1js+3.1.0.patch (the SPIKE_DUMP dump).
 npm ci
-if [ "${1:?--write or an output dir}" = "--write" ]; then
+fixtures=../zk-prover/fixtures
+if [ "${1:?--write, --toy-only, --vault or an output dir}" = "--vault" ]; then
+  # The vault's sources are TypeScript in ../o1js, run by that package's `tsx`; `vault-register.mjs` points their
+  # `import 'o1js'` at this package's patched copy.
+  (cd ../o1js && npm ci)
+  work=$(mktemp -d)
+  # o1js's wasm prover hangs on `reduce` (2^16 rows) when every prover key is held in memory, as after a compile
+  # with no cache or after proving every circuit in one process. So one process compiles with an empty cache,
+  # which dumps every circuit and writes the keys to it, and each proving process compiles from that cache, where
+  # the keys load lazily. `main` proves the nine methods, `recursive` the real action-stack chunks and then
+  # `reduce` from them. Light dump mode leaves out the witness columns and the call-site trace.
+  for mode in compile main recursive; do
+    mkdir -p "$work/$mode"
+    SPIKE_DUMP="$work/$mode" SPIKE_DUMP_LIGHT=1 \
+      ../o1js/node_modules/.bin/tsx --tsconfig ../o1js/tsconfig.json --import ./vault-register.mjs vault-fixtures.ts "$mode" "$work/cache" "$work/$mode"
+  done
+  node vault-collect.mjs "$work" "$fixtures"
+  cargo run --quiet -p zk-prover --example vk_hashes
+  exit 0
+fi
+if [ "$1" = "--write" ]; then
   out=$(mktemp -d)
 elif [ "$1" = "--toy-only" ]; then
   out=$(mktemp -d)
 else
   out=$(mkdir -p "$1" && cd "$1" && pwd)
 fi
-fixtures=../zk-prover/fixtures
 if [ "$1" != "--toy-only" ]; then
 SPIKE_DUMP="$out" node prove-local.mjs
 fi
