@@ -8,8 +8,8 @@ const record = (over: object = {}) => ({
 });
 
 describe('the registry deployment records', () => {
-  it('are well-formed as checked in (none yet)', () => {
-    expect(readDeployments()).toEqual([]);
+  it('are well-formed as checked in, with the devnet registry recorded', () => {
+    expect(readDeployments().map((d) => d.network)).toEqual(['devnet']);
   });
 
   it('accept one record per network', () => {
