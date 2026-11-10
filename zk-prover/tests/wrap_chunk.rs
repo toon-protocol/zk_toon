@@ -57,8 +57,7 @@ fn o1js_wrap_witness(case: &str) -> Vec<Fq> {
         .collect()
 }
 
-/// The proof a case's method verified, with its program's key and its public input; `None` for a method
-/// that verifies none.
+/// The proof a case's `proveChunk` verified, with its program's key and its public input.
 struct Previous {
     proof: WrapProof,
     key: ledger::VerificationKey,

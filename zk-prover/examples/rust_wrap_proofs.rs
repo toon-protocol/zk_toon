@@ -7,8 +7,8 @@
 //! `maxProofsVerified` of 1, and as `rust_witness_toy_<method>_proof.json` proved from the Rust step
 //! witness too, `recurse` with the proof of `toy-inner` it verifies. The real vault's ten cases (`vault_*`,
 //! `fixture-gen/vault-fixtures.ts`) likewise, as `rust_vault_<case>_proof.json`, and only those when run
-//! with `--vault`, which also writes the action-stack program's `proveChunk` cases (`chunk_dummy`, `chunk_chained`) as
-//! `rust_chunk_<case>_proof.json`. `fixture-gen/regenerate.sh --write` runs it, and `--vault` runs it with `--vault`.
+//! with `--vault`, which also writes the action-stack program's `proveChunk` cases as
+//! `rust_chunk_dummy_proof.json` and `rust_chunk_chained_proof.json`. `fixture-gen/regenerate.sh --write` runs it, and `--vault` runs it with `--vault`.
 
 use std::{io::Read, str::FromStr};
 
@@ -259,7 +259,7 @@ fn chunks(out: &std::path::Path, keys: &serde_json::Value) -> anyhow::Result<()>
     Ok(())
 }
 
-/// `<case>_stepproof`, o1js's step proof of a vault case, and its public input.
+/// `<case>_stepproof`, o1js's step proof of a vault or chunk case, and its public input.
 fn case_step_proof(case: &str) -> ProofWithPublic<Fp> {
     let b64 = String::from_utf8(fixture(&format!("{case}_stepproof.b64"))).unwrap();
     let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).unwrap();
