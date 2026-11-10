@@ -56,11 +56,16 @@ checks the numbered dump is laid out as `regenerate.sh` assumes. `./regenerate.s
   hash. `toy_<method>_wrap_witness.json` is o1js's wrap witness for that step proof, reduced to its `external` values.
 - `toy_inner_proof.json` is the proof of `toy-inner` that `recurse` verified, `toy_inputs.json` holds the zkApp's verification key
   and hash and `toy-inner`'s, and `toy_<method>_proof.json` o1js's final proofs. `rust_toy_<method>_proof.json` are the Rust wrap
-  proofs, at `maxProofsVerified` 1, for `o1js/src/rust-wrap.test.ts`.
+  proofs, at `maxProofsVerified` 1, for `o1js/src/rust-wrap.test.ts`, and `rust_witness_toy_<method>_proof.json` the same for the
+  methods proved wholly in Rust, from the Rust step witness (`zk-prover`'s `ToyProgram`).
+- `toy_<method>_step_witness.json` is o1js's step witness for the method (its public input, then the auxiliary values), and
+  `toy_<method>_step_map.txt` names the o1js call site of each variable, as `land-step-map.txt` does, for `zk-prover`'s
+  `tests/toy_witness.rs`. `step-map.mjs <dir> <witness> <map>` writes them: o1js's trace counts external values, the public
+  input first, and also holds the calls that built the transaction, which it drops.
 
 The circuits, `inputs`-style files (`toy_inputs.json`) and the VK hashes in `zk-prover/src/pins.rs` are byte-identical on a rerun;
 the step proofs, the wrap witnesses and `*_proof.json` are not (o1js's proofs are randomised), and neither is the step witness of
-`recurse`, which holds the inner proof.
+`recurse`, which holds the inner proof, so the step witnesses of `recurse` and the `toy_inner_proof.json` it holds come from one run.
 
 ## The real vault and the action-stack program
 

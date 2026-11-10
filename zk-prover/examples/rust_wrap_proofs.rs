@@ -4,7 +4,9 @@
 //! `o1js/src/rust-wrap.test.ts`. Also `rust_witness_land_proof.json`, the same for `land` proved from
 //! the Rust step witness rather than o1js's step proof. The toy zkApp's two methods, `plain` and
 //! `recurse` (`fixture-gen/toy.mjs`), likewise as `rust_toy_<method>_proof.json`, at the program's
-//! `maxProofsVerified` of 1. `fixture-gen/regenerate.sh --write` runs it.
+//! `maxProofsVerified` of 1, and as `rust_witness_toy_<method>_proof.json` proved from the Rust step
+//! witness too, `recurse` with the proof of `toy-inner` it verifies. `fixture-gen/regenerate.sh --write`
+//! runs it.
 
 use std::{io::Read, str::FromStr};
 
@@ -14,7 +16,8 @@ use mina_curves::pasta::Fp;
 use zk_prover::{
     land_program::LandProgram,
     verify::{load_vk, WrapProof},
-    witness::land::LandInputs,
+    toy_program::ToyProgram,
+    witness::{land::LandInputs, toy::ToyInputs},
     wrap::{deferred::step_features, union_features, wrap, PreviousProof, WrapCircuit, WrapParams},
     StepCircuit, StepLand, StepSetup, StepToyPlain, StepToyRecurse, WrapLandSetup, WrapToy,
 };
@@ -92,6 +95,19 @@ fn toy(out: &std::path::Path) -> anyhow::Result<()> {
         let mut json: serde_json::Value = serde_json::from_slice(&fixture(&format!("toy_{method}_proof.json")))?;
         json["proof"] = WrapProof::from_prover(&proved.proof).to_o1js_program_base64_for(1)?.into();
         std::fs::write(out.join(format!("rust_toy_{method}_proof.json")), serde_json::to_vec(&json)?)?;
+    }
+
+    // The same two methods wholly in Rust: `fixture-gen/prove-toy.mjs`'s calls are `plain(3)` and
+    // `recurse(49, proof)`, with the blinding value of the call data (its counter's) at 2 and 4.
+    let program = ToyProgram::load(fixture)?;
+    let toy_inputs = |x: u64, blinding: u64| ToyInputs::from_json(&inputs, Fp::from(x), Fp::from(blinding));
+    for (method, proved) in [
+        ("plain", program.prove_plain(&toy_inputs(3, 2)?)?),
+        ("recurse", program.prove_recurse(&toy_inputs(49, 4)?, &previous[0])?),
+    ] {
+        let mut json: serde_json::Value = serde_json::from_slice(&fixture(&format!("toy_{method}_proof.json")))?;
+        json["proof"] = proved.proof.to_o1js_program_base64_for(1)?.into();
+        std::fs::write(out.join(format!("rust_witness_toy_{method}_proof.json")), serde_json::to_vec(&json)?)?;
     }
     Ok(())
 }

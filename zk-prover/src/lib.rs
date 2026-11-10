@@ -15,10 +15,12 @@
 //! [`wrap::PreviousProof`]s.
 //!
 //! [`land_program::LandProgram`] puts these together: `land`'s arguments in, a proof for its
-//! transaction out.
+//! transaction out. [`toy_program::ToyProgram`] does the same for the toy zkApp, whose method `recurse`
+//! verifies a previous proof: [`witness::previous_proof`] is the step-side mirror of that.
 
 pub mod land_program;
 pub mod pins;
+pub mod toy_program;
 pub mod verify;
 pub mod witness;
 pub mod wrap;
@@ -28,8 +30,9 @@ use std::str::FromStr;
 use ledger::proofs::{
     constants::ProofConstants,
     provers::{decode_constraints_data, decode_gates_file},
+    step::extract_recursion_challenges,
     toon1561::prove_step as kimchi_prove_step,
-    transaction::{make_prover_index, ProofError, Prover},
+    transaction::{compute_witness, make_prover_index, ProofError, Prover},
     witness::Witness,
 };
 use mina_curves::pasta::Fp;
@@ -181,4 +184,48 @@ pub fn prove_step<C: ProofConstants>(
     witness: &StepWitness,
 ) -> anyhow::Result<StepProof<Fp>> {
     kimchi_prove_step::<C>(&circuit.prover, &witness.0, false)
+}
+
+/// Prove a step circuit whose method verified `previous` proofs (at most 2): like [`prove_step`], but
+/// the step proof carries the accumulators of the previous proofs, as the wrap circuit expects.
+///
+/// Derived from `create_proof` in `crates/ledger/src/proofs/transaction.rs` of
+/// `toon-protocol/mina-rust` at the rev of [`pins`], which is private there.
+pub fn prove_step_verifying<C: ProofConstants>(
+    circuit: &StepCircuit,
+    witness: &StepWitness,
+    previous: &[&verify::WrapProof],
+) -> anyhow::Result<StepProof<Fp>> {
+    use kimchi::groupmap::GroupMap as _;
+    use ledger::proofs::field::FieldWitness;
+    use poly_commitment::commitment::CommitmentCurve;
+    type EFrSponge = mina_poseidon::sponge::DefaultFrSponge<
+        Fp,
+        mina_poseidon::constants::PlonkSpongeConstantsKimchi,
+        { ledger::proofs::FULL_ROUNDS },
+    >;
+
+    let prev_challenges = match previous {
+        [] => vec![],
+        [a] => extract_recursion_challenges(&[a.repr()])?,
+        [a, b] => extract_recursion_challenges(&[a.repr(), b.repr()])?,
+        _ => anyhow::bail!("a step proof verifies at most 2 proofs"),
+    };
+    let computed_witness = compute_witness::<C, Fp>(&circuit.prover, &witness.0);
+    let prover_index = &circuit.prover.index;
+    let public_input = computed_witness[0][..prover_index.cs.public].to_vec();
+
+    let mut rng = rand::rngs::OsRng;
+    let group_map = <<Fp as FieldWitness>::OtherCurve as CommitmentCurve>::Map::setup();
+    let proof = kimchi::proof::ProverProof::create_recursive::<<Fp as FieldWitness>::FqSponge, EFrSponge, _>(
+        &group_map,
+        computed_witness,
+        &[],
+        prover_index,
+        prev_challenges,
+        None,
+        &mut rng,
+    )
+    .map_err(|e| anyhow::anyhow!("create_recursive: {e}"))?;
+    Ok(StepProof { proof, public_input })
 }

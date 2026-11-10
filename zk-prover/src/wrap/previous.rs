@@ -43,6 +43,7 @@ use crate::verify::WrapProof;
 
 /// A proof the step proof verified: a Pickles proof as o1js writes it, the verification key of the
 /// program that made it, and its public input.
+#[derive(Clone, Copy)]
 pub struct PreviousProof<'a> {
     pub proof: &'a WrapProof,
     pub verification_key: &'a VerificationKey,
@@ -134,7 +135,7 @@ pub(super) fn unfinalized_of_fields(f: &[Fp]) -> anyhow::Result<Unfinalized> {
 }
 
 /// `make_padded_proof_from_p2p`: the proof as kimchi reads it, with two accumulators.
-fn kimchi_proof(t: &PicklesProofProofsVerified2ReprStableV2) -> anyhow::Result<ProverProof<Fq>> {
+pub(crate) fn kimchi_proof(t: &PicklesProofProofsVerified2ReprStableV2) -> anyhow::Result<ProverProof<Fq>> {
     let PicklesProofProofsVerified2ReprStableV2 { statement, prev_evals: _, proof } = t;
     let of_coord = |(a, b): &(BigInt, BigInt)| -> anyhow::Result<_> {
         Ok(Pallas::of_coordinates(a.to_field()?, b.to_field()?))
