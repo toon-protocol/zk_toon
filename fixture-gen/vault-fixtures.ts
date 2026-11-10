@@ -3,7 +3,8 @@
 // processes (see its comment for why): `compile`, `main` and `recursive`.
 //   vault-fixtures.ts compile <cache dir> <out dir>      compile with an empty cache: every circuit is dumped
 //   vault-fixtures.ts main <cache dir> <out dir>         prove the nine vault methods
-//   vault-fixtures.ts recursive <cache dir> <out dir>    prove the real action-stack chunks, then `reduce` from them
+//   vault-fixtures.ts recursive <cache dir> <out dir>    prove the real action-stack chunks (`chunks_calls.json`: each call's
+//                                                        previous proof and proof), then `reduce` from them
 // Each writes `<out dir>/manifest.json`: for each case, the ranges of o1js's step proofs and witnesses it made.
 import fs from 'node:fs';
 import { AccountUpdate, Cache, Field, Mina, UInt64, Unconstrained } from 'o1js';
@@ -156,7 +157,18 @@ async function recursive() {
   for (let i = 0; i < lists; i++) await h.deposit(SMALL);
   batchReducer.setContractInstance(h.vault);
   // `provableBatches` proves the chunks last first: the last from the 2^15 dummy, then the one before from it.
+  // Each `proveChunk` call, with the proof it verified and the proof it made (the next call's previous proof).
+  const chunkCalls: { previous: unknown; proof: unknown }[] = [];
+  const program = batchReducer.program;
+  const proveChunk = program.proveChunk;
+  program.proveChunk = async (...args: Parameters<typeof proveChunk>) => {
+    const result = await proveChunk(...args);
+    chunkCalls.push({ previous: args[1].toJSON(), proof: result.proof.toJSON() });
+    return result;
+  };
   const batches = await capture('chunks', () => proved(provableBatches));
+  program.proveChunk = proveChunk;
+  fs.writeFileSync(`${out}/chunks_calls.json`, JSON.stringify(chunkCalls));
   let index = 0;
   for (const { batch, proof } of batches) {
     const t = now();

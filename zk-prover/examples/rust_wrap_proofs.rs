@@ -7,7 +7,8 @@
 //! `maxProofsVerified` of 1, and as `rust_witness_toy_<method>_proof.json` proved from the Rust step
 //! witness too, `recurse` with the proof of `toy-inner` it verifies. The real vault's ten cases (`vault_*`,
 //! `fixture-gen/vault-fixtures.ts`) likewise, as `rust_vault_<case>_proof.json`, and only those when run
-//! with `--vault`. `fixture-gen/regenerate.sh --write` runs it, and `--vault` runs it with `--vault`.
+//! with `--vault`, which also writes the action-stack program's `proveChunk` cases (`chunk_dummy`, `chunk_chained`) as
+//! `rust_chunk_<case>_proof.json`. `fixture-gen/regenerate.sh --write` runs it, and `--vault` runs it with `--vault`.
 
 use std::{io::Read, str::FromStr};
 
@@ -20,9 +21,9 @@ use zk_prover::{
     toy_program::ToyProgram,
     witness::{land::LandInputs, toy::ToyInputs},
     wrap::{deferred::step_features, union_features, wrap, PreviousProof, WrapCircuit, WrapParams},
-    StepCircuit, StepLand, StepSetup, StepToyPlain, StepToyRecurse, StepVaultDefeat, StepVaultDeposit,
+    StepChunk, StepCircuit, StepLand, StepSetup, StepToyPlain, StepToyRecurse, StepVaultDefeat, StepVaultDeposit,
     StepVaultEscape, StepVaultFinalize, StepVaultMutualClose, StepVaultRaise, StepVaultReduce, StepVaultSetup,
-    StepVaultSweepExpired, WrapLandSetup, WrapToy, WrapVault,
+    StepVaultSweepExpired, WrapChunk, WrapLandSetup, WrapToy, WrapVault,
 };
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -167,27 +168,7 @@ fn vault(out: &std::path::Path) -> anyhow::Result<()> {
     let keys: serde_json::Value = serde_json::from_slice(&fixture("vault_keys.json"))?;
 
     for (case, branch) in VAULT_CASES {
-        let previous_json = std::path::Path::new(&format!("{}/fixtures/{case}_previous.json.gz", env!("CARGO_MANIFEST_DIR")))
-            .exists()
-            .then(|| serde_json::from_slice::<serde_json::Value>(&fixture(&format!("{case}_previous.json"))))
-            .transpose()?;
-        let previous = match &previous_json {
-            None => None,
-            Some(f) => {
-                let strs = |v: &serde_json::Value| -> Vec<String> {
-                    v.as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect()
-                };
-                let mut public = Vec::new();
-                for v in [&f["publicInput"], &f["publicOutput"]] {
-                    public.extend(zk_prover::verify::fields(&strs(v).iter().map(String::as_str).collect::<Vec<_>>())?);
-                }
-                Some((
-                    WrapProof::from_o1js_base64(f["proof"].as_str().unwrap())?,
-                    load_vk(keys[f["key"].as_str().unwrap()]["data"].as_str().unwrap())?,
-                    public,
-                ))
-            }
-        };
+        let previous = previous_of(case, &keys)?;
         let previous_proofs: Vec<PreviousProof> = previous
             .iter()
             .map(|(proof, vk, public)| PreviousProof { proof, verification_key: vk, public_input: public })
@@ -208,6 +189,68 @@ fn vault(out: &std::path::Path) -> anyhow::Result<()> {
         let json = serde_json::json!({
             "publicInputFields": public,
             "publicOutputFields": Vec::<String>::new(),
+            "maxProofsVerified": 1,
+            "proof": WrapProof::from_prover(&proved.proof).to_o1js_program_base64_for(1)?,
+        });
+        std::fs::write(out.join(format!("rust_{case}_proof.json")), serde_json::to_vec(&json)?)?;
+    }
+    chunks(out, &keys)
+}
+
+/// The proof a case's method verified, with its program's key and its public input, from `<case>_previous.json`;
+/// `None` for a method that verifies none.
+fn previous_of(case: &str, keys: &serde_json::Value) -> anyhow::Result<Option<(WrapProof, ledger::VerificationKey, Vec<Fp>)>> {
+    let path = format!("{}/fixtures/{case}_previous.json.gz", env!("CARGO_MANIFEST_DIR"));
+    if !std::path::Path::new(&path).exists() {
+        return Ok(None);
+    }
+    let f: serde_json::Value = serde_json::from_slice(&fixture(&format!("{case}_previous.json")))?;
+    let strs = |v: &serde_json::Value| -> Vec<String> {
+        v.as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect()
+    };
+    let mut public = Vec::new();
+    for v in [&f["publicInput"], &f["publicOutput"]] {
+        public.extend(zk_prover::verify::fields(&strs(v).iter().map(String::as_str).collect::<Vec<_>>())?);
+    }
+    Ok(Some((
+        WrapProof::from_o1js_base64(f["proof"].as_str().unwrap())?,
+        load_vk(keys[f["key"].as_str().unwrap()]["data"].as_str().unwrap())?,
+        public,
+    )))
+}
+
+/// The action-stack program's `proveChunk`, from the dummy and from the real chunk before it: as o1js's
+/// `verify` reads them, in the shape of the `JsonProof` o1js made (`chunk_<case>_proof.json`).
+fn chunks(out: &std::path::Path, keys: &serde_json::Value) -> anyhow::Result<()> {
+    let circuit = StepCircuit::load::<StepChunk>(
+        &fixture("chunk_gates.json"),
+        &fixture("chunk_internal_vars.bin"),
+        &fixture("chunk_rows_rev.bin"),
+    )?;
+    let wrap_circuit = WrapCircuit::load::<WrapChunk>(
+        &fixture("chunk_wrap_gates.json"),
+        &fixture("chunk_wrap_internal_vars.bin"),
+        &fixture("chunk_wrap_rows_rev.bin"),
+    )?;
+    let features = step_features(circuit.index());
+    for case in ["chunk_dummy", "chunk_chained"] {
+        let (proof, vk, public) = previous_of(case, keys)?.ok_or_else(|| anyhow::anyhow!("{case} has no previous proof"))?;
+        let proved = wrap::<WrapChunk>(
+            WrapParams {
+                max_proofs_verified: 1,
+                step_circuits: &[&circuit],
+                branch: 0,
+                features: features.clone(),
+                step_proof: &case_step_proof(case),
+                previous_proofs: &[PreviousProof { proof: &proof, verification_key: &vk, public_input: &public }],
+                previous_max_proofs_verified: &[1],
+            },
+            &wrap_circuit,
+        )?;
+        let o1js: serde_json::Value = serde_json::from_slice(&fixture(&format!("{case}_proof.json")))?;
+        let json = serde_json::json!({
+            "publicInputFields": o1js["publicInput"],
+            "publicOutputFields": o1js["publicOutput"],
             "maxProofsVerified": 1,
             "proof": WrapProof::from_prover(&proved.proof).to_o1js_program_base64_for(1)?,
         });

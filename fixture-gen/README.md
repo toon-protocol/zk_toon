@@ -93,12 +93,15 @@ made it, checks that every circuit is among `compile`'s and that no two vault me
   `<case>_wrap_witness.json` (o1js's wrap witness, reduced to its `external` values). The cases are the nine methods
   (`vault_<method>`), `vault_reduce_recursive` (`reduce` from the real chunk, the same circuit as `vault_reduce`),
   `chunk_dummy` and `chunk_chained` (`proveChunk` from the dummy and from the real previous chunk, one circuit, `chunk`).
+- For `chunk_dummy` and `chunk_chained`, `<case>_previous.json` (the proof `proveChunk` verified: the 2^15 dummy, then the
+  first chunk, under the `vaultReducer` key) and `<case>_proof.json` (the proof it made, whose public input and output
+  `o1js/src/rust-wrap.test.ts` verifies the Rust wrap under).
 - For each vault case, `<case>_zkapp_public.json` (the zkApp public input o1js proved the call under, which the wrap
   proof is verified against), and, for a method that verifies a proof (`reduce`, `mutualClose`, `escape`, `defeat`,
   `raise`), `<case>_previous.json`: that proof, with the `key` of its program in `vault_keys.json`. The first `reduce`
   verifies a dummy action-stack proof.
-- `rust_vault_<case>_proof.json`: the Rust wrap proof of each vault case (`zk-prover`'s `rust_wrap_proofs` example, which
-  `--vault` runs after collecting), which `o1js/src/rust-wrap.test.ts` verifies under the vault's key.
+- `rust_vault_<case>_proof.json`, `rust_chunk_<case>_proof.json`: the Rust wrap proof of each vault case and of the two chunks (`zk-prover`'s `rust_wrap_proofs` example, which
+  `--vault` runs after collecting), which `o1js/src/rust-wrap.test.ts` verifies under the vault's key (the chunks' under the reducer's).
 - `vault_keys.json`: the verification keys (`data` and `hash`) of the vault, its reducer (`vaultReducer`) and the programs
   the vault verifies (`request`, `withdrawal`). `zk-prover/src/pins.rs` pins the vault's and the reducer's hashes.
 
