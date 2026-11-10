@@ -56,7 +56,8 @@ pub(super) struct Previous {
     pub sg: InnerCurve<Fq>,
     pub old_bulletproof_challenges: Vec<[Fq; 15]>,
     pub evals: AllEvals<Fq>,
-    /// The proof's own accumulator (its opening's `sg`), which the wrap proof takes on in turn.
+    /// The proof's own accumulator (its opening's `sg`), which the wrap proof takes on in turn; for a
+    /// proof the step did not verify (a dummy), `prepare` replaces it with [`compute_sg`] of the step's challenges.
     pub wrap_sg: GroupAffine<Fp>,
     /// `maxProofsVerified` of the program that made the proof, and the index of its wrap domain among
     /// the possible ones (they run with `maxProofsVerified`).
@@ -290,7 +291,15 @@ pub(super) fn expand(prev: &PreviousProof) -> anyhow::Result<Previous> {
         app_state: &PublicInput(prev.public_input),
         dlog_plonk_index: &vk.wrap_index,
         challenge_polynomial_commitments: step_challenge_polynomial_commitments.clone(),
-        old_bulletproof_challenges: step_old_bulletproof_challenges.clone(),
+        // `Reduced_messages_for_next_proof_over_same_field.Step.prepare` expands them (`compute_challenges`).
+        old_bulletproof_challenges: statement
+            .messages_for_next_step_proof
+            .old_bulletproof_challenges
+            .iter()
+            .map(|challenges| {
+                challenges.0.clone().map(|c| ScalarChallenge::limbs_to_field::<Fp>(&c.prechallenge.inner.0.map(|l| l.as_u64())))
+            })
+            .collect(),
     }
     .hash();
     let public_input = PreparedStatement {
@@ -336,4 +345,16 @@ pub(super) fn expand(prev: &PreviousProof) -> anyhow::Result<Previous> {
 /// The expanded form of a 128-bit prechallenge of the wrap field.
 pub(super) fn expand_prechallenge(prechallenge: &[u64; 2]) -> Fq {
     ScalarChallenge::limbs_to_field::<Fq>(prechallenge)
+}
+
+/// `Ipa.Wrap.compute_sg`: the accumulator of a previous proof the step did not verify (a dummy,
+/// `should_finalize = false`). Pickles takes the non-hiding commitment to the challenge polynomial of
+/// the bulletproof challenges the step derived (`expand_proof` in `step.ml`), not the proof's own `sg`.
+pub(super) fn compute_sg(prechallenges: &[[u64; 2]]) -> GroupAffine<Fp> {
+    use ark_poly::{univariate::DensePolynomial, DenseUVPolynomial};
+    use poly_commitment::{commitment::b_poly_coefficients, SRS};
+
+    let challenges: Vec<Fq> = prechallenges.iter().map(expand_prechallenge).collect();
+    let polynomial = DensePolynomial::from_coefficients_vec(b_poly_coefficients(&challenges));
+    ledger::verifier::get_srs::<Fq>().commit_non_hiding(&polynomial, 1).chunks[0]
 }

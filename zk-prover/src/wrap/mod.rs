@@ -51,11 +51,11 @@ use deferred::{deferred_values, step_features, DeferredValuesParams};
 use key::StepKey;
 use main_circuit::{wrap_main, PreviousSlot, ProgramFlags, WrapMainParams};
 pub use previous::PreviousProof;
-use previous::{expand, expand_prechallenge, unfinalized_of_fields, UNFINALIZED_FIELDS};
+use previous::{compute_sg, expand, expand_prechallenge, unfinalized_of_fields, UNFINALIZED_FIELDS};
 
 /// Pickles' maximum number of previous proofs: the wrap circuit pads its accumulators to this many. The
-/// fixtures exercise programs of 0 and 1 (`tests/wrap.rs`, `tests/wrap_recursive.rs`); 2 goes through the
-/// same code, with a second slot.
+/// fixtures exercise programs of 0 and 1 (`tests/wrap.rs`, `tests/wrap_recursive.rs`, `tests/wrap_vault.rs`); 2
+/// goes through the same code, with a second slot.
 pub const MAX_PROOFS_VERIFIED: usize = 2;
 
 /// The public input size of a wrap circuit.
@@ -281,12 +281,21 @@ fn prepare(params: WrapParams) -> anyhow::Result<Prepared> {
     let public_messages_for_next_wrap_proof = &public[n * UNFINALIZED_FIELDS + 1..];
 
     // What the step proof carries of its previous proofs.
-    let previous = previous_proofs.iter().map(expand).collect::<anyhow::Result<Vec<_>>>()?;
+    let mut previous = previous_proofs.iter().map(expand).collect::<anyhow::Result<Vec<_>>>()?;
     anyhow::ensure!(
         step_proof.proof.prev_challenges.len() == width,
         "the step proof has {} accumulators, but method {branch} verifies {width} proofs",
         step_proof.proof.prev_challenges.len()
     );
+    // A previous proof the step did not verify (a dummy) is accumulated as the challenge polynomial of the
+    // challenges the step derived, not as the proof's own `sg`.
+    let padding = n - width;
+    for (j, prev) in previous.iter_mut().enumerate() {
+        let unfinalized = &unfinalized_proofs[padding + j];
+        if !unfinalized.should_finalize {
+            prev.wrap_sg = compute_sg(&unfinalized.deferred_values.bulletproof_challenges);
+        }
+    }
     let prev_challenges_of_step_proof = step_proof
         .proof
         .prev_challenges
@@ -299,7 +308,6 @@ fn prepare(params: WrapParams) -> anyhow::Result<Prepared> {
 
     // Dummies in front, then the previous proofs.
     let mut slots = Vec::with_capacity(n);
-    let padding = n - width;
     for (i, unfinalized) in unfinalized_proofs.iter().enumerate() {
         let local_max = previous_max_proofs_verified[i];
         if i < padding {
