@@ -99,6 +99,25 @@ vault_step! {
     StepVaultReduce: 56124, 1;
 }
 
+/// Shape of the step circuit of the action-stack program's `proveChunk` (`chunk_*`), which verifies one
+/// proof (the previous chunk, or a dummy). `AUX_LEN` is 0: the step proofs are o1js's.
+pub struct StepChunk;
+impl ProofConstants for StepChunk {
+    const PRIMARY_LEN: usize = 34;
+    const AUX_LEN: usize = 0;
+    const PREVIOUS_CHALLENGES: usize = 1;
+    const ROWS: usize = 20173;
+}
+
+/// Shape of the wrap circuit of the action-stack program (`chunk_wrap_*`).
+pub struct WrapChunk;
+impl ProofConstants for WrapChunk {
+    const PRIMARY_LEN: usize = 40;
+    const AUX_LEN: usize = 134431;
+    const PREVIOUS_CHALLENGES: usize = 2;
+    const ROWS: usize = 10252;
+}
+
 /// Shape of the vault's wrap circuit (`vault_wrap_*`), shared by its methods.
 pub struct WrapVault;
 impl ProofConstants for WrapVault {

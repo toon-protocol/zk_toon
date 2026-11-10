@@ -87,6 +87,17 @@ for (const proc of ['main', 'recursive']) {
         gz(`${prefix}_previous.json`, JSON.stringify({ ...previous, key: PREVIOUS[c.name] }));
       } else if (fs.existsSync(`${dir}/${c.name}_previous.json`)) die(`${c.name} verifies no proof`);
     }
+    // The chunks: each `proveChunk` call's proof is `<prefix>_proof.json` (its public input and output, which o1js's
+    // `verify` reads), and the proof it verified `<prefix>_previous.json`, under the reducer's key.
+    if (c.name === 'chunks') {
+      const calls = JSON.parse(fs.readFileSync(`${dir}/chunks_calls.json`, 'utf8'));
+      if (calls.length !== names.length) die(`chunks: ${calls.length} proveChunk calls, expected ${names.length}`);
+      if (JSON.stringify(calls[1].previous) !== JSON.stringify(calls[0].proof)) die('chunks: the second call did not verify the first call\'s proof');
+      names.forEach(([prefix], i) => {
+        gz(`${prefix}_previous.json`, JSON.stringify({ ...calls[i].previous, key: 'vaultReducer' }));
+        gz(`${prefix}_proof.json`, JSON.stringify(calls[i].proof));
+      });
+    }
     names.forEach(([prefix, stepName], i) => {
       // Each proof is a step witness, o1js's step proof, then the wrap witness for it.
       const stepFile = find(dir, `w${pad(c.witnesses[0] + 2 * i)}_`);
