@@ -89,15 +89,15 @@ impl From<LandWitness> for crate::StepWitness {
     }
 }
 
-/// The method name `land` as `Encoding.stringToFields` makes it: bytes, then the stop byte `1`.
-fn string_to_field(s: &str) -> Fp {
+/// A method name (`land`, say) as `Encoding.stringToFields` makes it: bytes, then the stop byte `1`.
+pub(super) fn string_to_field(s: &str) -> Fp {
     assert!(s.len() < 31);
     let mut bytes = s.as_bytes().to_vec();
     bytes.push(1);
     Fp::from_le_bytes_mod_order(&bytes)
 }
 
-fn public_key(address: &str) -> anyhow::Result<(Fp, bool)> {
+pub(super) fn public_key(address: &str) -> anyhow::Result<(Fp, bool)> {
     let pk = CompressedPubKey::from_address(address).map_err(|e| anyhow::anyhow!("{e:?}"))?;
     Ok((pk.x, pk.is_odd))
 }
@@ -191,9 +191,9 @@ fn method_and_wrapper(cs: &mut Cs, inputs: &LandInputs) -> anyhow::Result<Fp> {
     let body = Body {
         public_key_x: zkapp.x.clone(),
         public_key_is_odd: zkapp.is_odd.to_field(),
-        app_state0: cumulative.clone(), // landed.set(cumulative)
+        app_state0: Some(cumulative.clone()), // landed.set(cumulative)
         call_data,
-        state_preconditions: [landed.clone(), payer.x.clone(), payer.is_odd.to_field()],
+        state_preconditions: Some([landed.clone(), payer.x.clone(), payer.is_odd.to_field()]),
         verification_key_hash,
     };
     let (fields, packed) = body.input();

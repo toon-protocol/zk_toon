@@ -29,13 +29,17 @@ const jsonProof = (f: Saved, over: Partial<JsonProof> = {}): JsonProof => ({
 
 describe('the Rust wrap proof under the program verification key', () => {
   // `rust_witness_land`: `land` wholly in Rust, the step witness too (#36). `toy_plain` and `toy_recurse`:
-  // the methods of the toy zkApp, whose program verifies at most one proof.
+  // the methods of the toy zkApp, whose program verifies at most one proof. `witness_toy_plain` and
+  // `witness_toy_recurse`: the same wholly in Rust, `recurse` verifying a proof of `toy-inner` from the
+  // step witness on (#89).
   for (const [name, key] of [
     ['land', vk],
     ['setup', vk],
     ['witness_land', vk],
     ['toy_plain', toyVk],
     ['toy_recurse', toyVk],
+    ['witness_toy_plain', toyVk],
+    ['witness_toy_recurse', toyVk],
     ...VAULT_CASES.map((c) => [`vault_${c}`, vaultVk]),
   ]) {
     it(`${name}: o1js verifies it, and refuses a changed proof or public input`, async () => {

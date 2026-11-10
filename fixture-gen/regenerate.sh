@@ -73,6 +73,13 @@ if [ "$1" = "--write" ] || [ "$1" = "--toy-only" ]; then
     node -e 'const w=JSON.parse(require("fs").readFileSync(process.argv[1]));console.log(JSON.stringify({public_input_size:w.public_input_size,external:w.external}))' \
       "$toy/${pair#*:}.json" | gzip -9nc > "$fixtures/toy_${pair%%:*}_wrap_witness.json.gz"
   done
+  # o1js's step witnesses, with the call site of each variable (`toy_<method>_step_map.txt`, from `step-map.mjs`).
+  for pair in plain:w003_cs006 recurse:w005_cs007; do
+    node -e 'const w=JSON.parse(require("fs").readFileSync(process.argv[1]));console.log(JSON.stringify({public_input_size:w.public_input_size,external:w.external}))' \
+      "$toy/${pair#*:}.json" | gzip -9nc > "$fixtures/toy_${pair%%:*}_step_witness.json.gz"
+    node step-map.mjs "$toy" "${pair#*:}" "toy_${pair%%:*}_step_map"
+    gzip -9nc "$toy/toy_${pair%%:*}_step_map.txt" > "$fixtures/toy_${pair%%:*}_step_map.txt.gz"
+  done
   gzip -9nc "$toy/stepproof002.b64" > "$fixtures/toy_plain_stepproof.b64.gz"
   gzip -9nc "$toy/stepproof003.b64" > "$fixtures/toy_recurse_stepproof.b64.gz"
   # A step proof's public input is not in its dump, but o1js's step witness starts with it.
@@ -85,7 +92,7 @@ if [ "$1" = "--write" ] || [ "$1" = "--toy-only" ]; then
   done
 fi
 if [ "$1" = "--toy-only" ]; then
-  rust_proofs toy_plain toy_recurse
+  rust_proofs toy_plain toy_recurse witness_toy_plain witness_toy_recurse
   cargo run --quiet -p zk-prover --example vk_hashes
   exit 0
 fi
@@ -105,5 +112,5 @@ for pair in 001:w002_cs005 002:w004_cs005; do
   node -e 'const w=JSON.parse(require("fs").readFileSync(process.argv[1]));console.log(JSON.stringify([w.external[12]]))' \
     "$out/${pair#*:}.json" | gzip -9nc > "$fixtures/stepproof${pair%%:*}_public.json.gz"
 done
-rust_proofs land setup witness_land toy_plain toy_recurse
+rust_proofs land setup witness_land toy_plain toy_recurse witness_toy_plain witness_toy_recurse
 cargo run --quiet -p zk-prover --example vk_hashes

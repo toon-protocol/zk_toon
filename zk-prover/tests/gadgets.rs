@@ -306,9 +306,9 @@ fn account_update_hash() {
     let body = Body {
         public_key_x: var(&cs, 89),
         public_key_is_odd: var(&cs, 90),
-        app_state0: var(&cs, 93),
+        app_state0: Some(var(&cs, 93)),
         call_data: var(&cs, 5005),
-        state_preconditions: [var(&cs, 146), var(&cs, 143), var(&cs, 144)],
+        state_preconditions: Some([var(&cs, 146), var(&cs, 143), var(&cs, 144)]),
         verification_key_hash: var(&cs, 5008),
     };
     let (fields, packed) = body.input();

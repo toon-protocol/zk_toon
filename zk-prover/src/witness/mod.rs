@@ -12,6 +12,10 @@
 //! - [`gadgets`] mirrors the o1js gadgets, each named after the o1js function it mirrors.
 //! - [`land`] is the `Land` zkApp's `land` method, the SmartContract wrapper around it and the
 //!   Pickles step circuit around that.
+//! - [`step_verifier`] and [`previous_proof`] are the part of the Pickles step circuit that verifies a
+//!   previous proof (the step-side verifier, hashing and the accumulators it carries forward), for
+//!   any method that does: [`previous_proof::step_main_tail`] is that part of the step circuit.
+//!   [`toy`] is the toy zkApp's `recurse`, which verifies a proof of a ZkProgram, and `plain`.
 //!
 //! No constraint is built here: kimchi checks the constraints against the committed circuit
 //! (`check_step`). Gates that o1js adds contribute to the witness only through the variables they
@@ -26,6 +30,10 @@ pub mod gadgets;
 pub mod account_update;
 pub mod land;
 pub mod pickles;
+pub mod constant_term;
+pub mod previous_proof;
+pub mod step_verifier;
+pub mod toy;
 
 /// The expression tree of an o1js `FieldVar` (`lib/provable/core/fieldvar.js`).
 #[derive(Debug)]
