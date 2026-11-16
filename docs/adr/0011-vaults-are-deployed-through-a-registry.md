@@ -75,15 +75,11 @@ account holds nothing, and only `setDelegate` needs a signature.
 - **A wallet must update its pin before a fork** (to the new registry and code hash, which each fork publishes).
 - A registry's deployer could list entries before locking it. The deployment record covers that.
 - A URI isn't judged: a pass doesn't show it is real or watched.
-- **The registry's proof checks the key's hash, not its data** (#81). `{ data: <rogue>, hash: <published> }` on a new
-  account is accepted by `LocalBlockchain` and by a single-node lightnet. On a fresh lightnet the account then runs
-  the rogue contract: its proofs are accepted and the published contract's are refused. After an honest vault had
-  registered on the same chain, the reverse held. Mina's binary form recomputes a key's hash from its data, so peers
-  that get the command by gossip should refuse it, but that hasn't run on devnet (`o1js/lightnet/README.md`). So the
-  registry lists such a vault, and **the vault check compares the key's data with the published key's, as well as its
-  hash, for the vault and for the registry** (`keyData`, `registry.keyData`), and the sighting does the same for the
-  registry. This settles #81's reopening of the decision that the check stays hash-only: it doesn't. A wallet pins
-  each published key whole, not its hash. The registry's circuit is unchanged, since a circuit sees only the hash.
+- **The registry's proof checks the key's hash, not its data** (#81), since a circuit sees only the hash, and a key's
+  hash alone doesn't settle which code an account runs. So **the vault check compares the key's data with the
+  published key's, as well as its hash, for the vault and for the registry** (`keyData`, `registry.keyData`), and the
+  sighting does the same for the registry. This settles #81's reopening of the decision that the check stays
+  hash-only: it doesn't. A wallet pins each published key whole, not its hash. The registry's circuit is unchanged.
 - Registration is permissionless and costs only the transaction, so an operator can add entries cheaply and a long
   list reads slowly.
 

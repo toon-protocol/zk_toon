@@ -31,8 +31,8 @@ it, under a random key that is never written down (ADR 0011). It writes the depl
 `o1js/registry-deployments.json`. `npm run registry -- sighting` reproduces the record, and `npm run registry -- check
 <address>` runs the vault check against the recorded registry.
 
-**Status, 2026-11-08: deployed and recorded.** On a lightnet the rogue key pair registered and the account ran the
-rogue contract (`o1js/lightnet/README.md`), so the vault check compares the key's data as well as its hash (ADR 0011).
+**Status, 2026-11-08: deployed and recorded.** The vault check compares the key's data as well as its hash
+(ADR 0011).
 The registry is at `B62qmwYhD1JEfgBRfritFF8eu2wjfcjs4dgUiWDDXZzNaUR2mGUbPbV`, deployed by
 `5Judj8kFBkcP1b14Jqsp5r6dGUd59Hfbiey2NEAd42Srw7FdHMPm` at height 585105, slot 934255, under a discarded key. The
 archive marked that block canonical about 290 blocks later, and `deploy` then reproduced the sighting and wrote the
