@@ -63,8 +63,8 @@ The notice is a promise made off chain. The vault doesn't enforce it.
 
 ## The upgrade key
 
-It should be held as a threshold key: threshold Schnorr over Pallas, since Mina has no native multisig.
-Tooling for it, and the page at the URI, aren't built here.
+It is held as a 2-of-3 threshold key (ADR 0012, "The upgrade key is a 2-of-3 FROST key"). The page at
+the URI isn't built here.
 
 ## What a payer is guaranteed
 
@@ -72,7 +72,7 @@ While the protocol version stays the same, nobody can change the verification ke
 timing, the state, the nonce, the URI or the balance except through the vault's own methods, and no owner action stops or
 delays an escape. The upgrade key's only reach is delegation. Across a hard fork, the guarantee is the
 fork notice: a payer who watches the URI can leave before the stop slot. A payer who doesn't watch it
-trusts the key holders.
+trusts the share holders.
 
 All of this depends on the account really having these permissions and a state `init` wrote, which the vault code
 hash doesn't show. A deployer can write anything under the upgrade key's signature before locking the account. So these
@@ -82,6 +82,6 @@ didn't deploy (ADR 0008, "A client checks a vault before trusting it", and ADR 0
 ## Rejected
 
 - **Destroying the key.** The first incompatible fork would freeze every deposit for good.
-- **A key with no notice.** Payers would have to trust the key holders across every fork.
+- **A key with no notice.** Payers would have to trust the share holders across every fork.
 
 Behaviour after a fork isn't tested: LocalBlockchain can't raise the transaction version.
