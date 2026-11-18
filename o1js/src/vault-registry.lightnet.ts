@@ -1,7 +1,5 @@
-// The vault registry on a node (#81): a real-length zkApp URI, and the rogue key pair, a key whose data is the
-// attacker's own under the published vault code hash. LocalBlockchain accepts that pair on a new account (ADR 0011).
-// So does the lightnet's daemon, and the account is not stuck: see lightnet/README.md. The vault check refuses it by
-// the key's data, which is why the check compares the data and not only the hash.
+// The vault registry on a node (#81): a real-length zkApp URI, and the rogue key pair, a key whose data is another
+// contract's under the published vault code hash. The vault check refuses it by the key's data (ADR 0011).
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   AccountUpdate, Mina, PrivateKey, PublicKey, Signature, SmartContract, Types, UInt64, VerificationKey, declareMethods, fetchAccount,
@@ -114,8 +112,7 @@ describe('the vault registry on a proofs-on lightnet', () => {
     await poke.prove();
     const pokeRefused = await submit(poke, []);
     console.log('rogue poke (rogue proof):', pokeRefused ?? 'applied');
-    // Not stuck: one of the two contracts controls the account. On a fresh chain it was the rogue one; after an honest
-    // vault had registered, the published one (lightnet/README.md). Which, depends on the node, not on the chain's rules.
+    // Exactly one of the two contracts' proofs is accepted. Run on a fresh chain (lightnet/README.md).
     expect([setupRefused === undefined, pokeRefused === undefined].filter(Boolean)).toHaveLength(1);
     expect(setupRefused ?? pokeRefused).toContain('Invalid_proof');
   });

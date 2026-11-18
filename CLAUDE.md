@@ -12,6 +12,15 @@ Uses the five default labels: `needs-triage`, `needs-info`, `ready-for-agent`, `
 
 Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
+## Held back: the verification-key finding (#81)
+
+The Mina team asked us not to publish more detail about the #81 lightnet result (how a node
+treats a key whose data and hash disagree) until they have checked it. Until this section is
+removed, add nothing about it to anything public: docs, ADRs, code comments, test names, log
+lines, issues, PR bodies, review summaries or commit messages. Where it has to be mentioned,
+say only that the vault check compares a key's data as well as its hash (ADR 0011). Don't
+add tests or scripts that exercise it on a node. This applies to factory runs too.
+
 ## The AFK factory
 
 `ready-for-agent` is the factory's queue (`docs/agents/triage-labels.md`). When an issue
