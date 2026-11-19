@@ -99,12 +99,17 @@ export class PendingEscape extends Struct({
   /**
    * The concession a raise from `evidence` claiming `claimed` lifts this escape to: `min(claimed, b,
    * balance)` (ADR 0004), where `b` is the evidence's tier. A subsidised proof's `b` counts as zero, so it
-   * never raises (ADR 0001). The request circuit bounds the tier to 64 bits.
+   * never raises (ADR 0001). The request circuit bounds the tier to 64 bits. A result that would leave a
+   * payout above zero and below the account creation fee concedes the whole `amount` instead, so a pending
+   * escape's payout is zero or at least the fee (ADR 0013).
    */
   raisedConcession(evidence: RequestPublic, claimed: UInt64): UInt64 {
     const tier = Provable.if(evidence.subsidised, UInt64, UInt64.zero, UInt64.Unsafe.fromField(evidence.tier));
     const min = (a: UInt64, b: UInt64) => Provable.if(a.lessThan(b), UInt64, a, b);
-    return min(min(claimed, tier), this.amount);
+    const raised = min(min(claimed, tier), this.amount);
+    const left = this.amount.sub(raised);
+    const stranded = left.greaterThan(UInt64.zero).and(left.lessThan(UInt64.from(policy.ACCOUNT_CREATION_FEE)));
+    return Provable.if(stranded, UInt64, this.amount, raised);
   }
 }
 
@@ -228,8 +233,8 @@ function requireSlotBetween(contract: SmartContract, lower: UInt64, upper: UInt6
 const LAST_SLOT = UInt64.from(UInt32.MAXINT().toBigint());
 
 /**
- * Precondition on a payee: its account exists, so a payout to it opens no account and cannot fail for want
- * of the fee. A failing reduce would stall every action queued behind it (ADR 0002).
+ * Precondition on the treasury: its account exists. Other payees' accounts need not (ADR 0013): a payout
+ * opens a destination's account and pays the creation fee out of itself.
  */
 function requireAccountExists(address: PublicKey) {
   AccountUpdate.create(address).account.isNew.requireEquals(Bool(false));
@@ -461,8 +466,9 @@ export class Vault extends SmartContract {
 
     const action = VaultAction.mutualClose(pub);
     requireSlotBetween(this, action.time, action.time.add(UInt64.from(CLOSE_WINDOW_SLOTS)));
-    // A payout to an account that does not exist would fail the reduce, and stall every action queued behind it.
-    requireAccountExists(pub.destination);
+    // The reduce pays `amount`, less the creation fee if that opens the destination's account (ADR 0013).
+    // Dispatch can't tell a new destination from an existing one, so every close must cover the fee.
+    action.amount.greaterThanOrEqual(UInt64.from(policy.ACCOUNT_CREATION_FEE)).assertTrue('payout below the account creation fee');
 
     nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
     nullifiers.assertNotIncluded(pub.nullifier, 'nullifier spent');
@@ -486,8 +492,9 @@ export class Vault extends SmartContract {
 
     const action = VaultAction.escape(pub);
     requireSlotBetween(this, action.time, action.validUntil);
-    // Finalizing pays the destination, so it must exist, as for a close.
-    requireAccountExists(pub.destination);
+    // Finalizing pays `amount − conceded`, which must cover the creation fee, as for a close (ADR 0013).
+    action.amount.sub(action.conceded).greaterThanOrEqual(UInt64.from(policy.ACCOUNT_CREATION_FEE))
+      .assertTrue('payout below the account creation fee');
 
     nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
     nullifiers.assertNotIncluded(pub.nullifier, 'nullifier spent');
@@ -709,13 +716,15 @@ export class Vault extends SmartContract {
     this.sweptTotal.set(swept);
   }
 
-  /** A circuit sends a fixed number of updates, so a skipped or zero payout is a zero send to the vault itself. */
+  /** A circuit sends a fixed number of updates, so a skipped or zero payout is a zero send to the vault itself. Every payout may open its destination's account. */
   private payIf(condition: Bool, to: PublicKey, amount: UInt64) {
     const pay = condition.and(amount.equals(UInt64.zero).not());
-    this.send({
+    const receiver = this.send({
       to: Provable.if(pay, PublicKey, to, this.address),
       amount: Provable.if(pay, UInt64, amount, UInt64.zero),
     });
+    // A payout to a new account opens it and the chain takes the creation fee out of the payout (ADR 0013).
+    receiver.body.implicitAccountCreationFee = Bool(true);
   }
 }
 

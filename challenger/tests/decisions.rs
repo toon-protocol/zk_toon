@@ -259,3 +259,15 @@ fn the_chain_time_is_read_again_after_a_submission_waited() {
     assert_eq!(chain.submissions(), vec![([5; 32], Action::Defeat)]);
     assert!(reports.contains(&Report::Alarm { escape: [7; 32], reason: AlarmReason::DeadlineTooClose { remaining: 4 } }));
 }
+
+#[test]
+fn a_raise_that_strands_less_than_the_creation_fee_concedes_the_whole_balance() {
+    const MINA: u64 = 1_000_000_000;
+    let raise = |tier, charge, balance| {
+        decide_with(&escape(2, balance), FakeEvidence::default().with(ev(ID, tier, charge, false, true)), 0)
+    };
+    // 10 MINA balance, 9.5 MINA claimed: 0.5 MINA would be left, under the 1 MINA fee.
+    assert_eq!(raise(10 * MINA, 9 * MINA + MINA / 2, 10 * MINA), Decision::Raise { to: 10 * MINA });
+    // Exactly the fee left: unchanged.
+    assert_eq!(raise(10 * MINA, 9 * MINA, 10 * MINA), Decision::Raise { to: 9 * MINA });
+}

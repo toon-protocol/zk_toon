@@ -205,9 +205,9 @@ _Avoid_: Expiry pointer, watermark
 
 **Treasury**:
 The zk edge operator's address, which receives what a closed or expired note's balance leaves of its
-deposit. Like a close's or an escape's destination, its account must already exist: setup, a close
-and an escape refuse a missing one, because a payout to it would fail the reduce, and a failed
-reduce blocks every action queued behind it (ADR 0002).
+deposit. Its account must already exist: setup refuses a missing one, because a payout to it would
+fail the reduce, and a failed reduce blocks every action queued behind it (ADR 0002). A withdrawal's
+destination needs no account: its payout opens one, less the account creation fee (ADR 0013).
 _Avoid_: Subsidy budget, fee address
 
 ### Building transactions

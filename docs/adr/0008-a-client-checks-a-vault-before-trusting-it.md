@@ -30,7 +30,7 @@ A pass means:
 2. Every permission equals ADR 0006's table, and the account has no vesting schedule, which could lock deposits.
 3. `depositSizes`, `noteLifetime` and `challengeWindow` equal policy.
 4. `setup` has run and the treasury's account exists. A reduce paying a treasury with no account would fail, and
-   stall every action behind it.
+   stall every action behind it. A withdrawal's destination needs no account (ADR 0013).
 5. The whole action stream, replayed from the empty tree as the reduce applies it, gives every value on the account
    that depends on it: `noteRoot`, `nextLeafIndex`, `nullifierRoot`, `pendingEscapesRoot`, `sweepCursor`, and the
    expired, claimed and swept totals. Every root in `rootRing` was once the note root, and the newest is the current
@@ -41,11 +41,12 @@ A pass means:
    with every note it walks past its expiry and the close window after it.
 7. The balance covers all deposits, pending ones included, less what reduced actions paid.
 8. A reduce can process every action. Each account update holds one action, each action has only the fields its kind
-   sets, its amounts are in order, and everyone an action names as a payee has an account.
+   sets, its amounts are in order, and a close or escape pays at least the account creation fee. A payee needs no account, since
+   its payout opens one (ADR 0013).
    The reduce's circuit is the same for every kind, so a forged action that breaks one of these fails the reduce
    whatever it claims to be, and every action behind it is stuck, including a victim's deposit. `vault-check.test.ts`
    sees such reduces fail, except over-long updates: o1js's `prepareBatches` ran out of memory on one, so that test
-   only asserts the refusal. No nullifier is 0 either, since it's a hash; that one didn't fail a reduce. A passing check reads the node once per payee in the stream.
+   only asserts the refusal. No nullifier is 0 either, since it's a hash; that one didn't fail a reduce.
 
 Claims are judged only at the end because a stale escape can legitimately push them over: it spends other nullifiers
 than a close of the same note. So a vault refuses while a stale escape stands and passes again once it's defeated.

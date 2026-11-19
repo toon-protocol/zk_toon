@@ -151,6 +151,22 @@ describe('raising an escape', () => {
     expect(balanceOf(h.treasury)).toBe(t + SMALL - (balance - charge));
   });
 
+  it('concedes the whole balance when the raise would leave a payout below the account creation fee (ADR 0013)', async () => {
+    const { note, proof, balance } = await recordedEscape(h, { balance: 3n * MINA / 2n });
+    const evidence = await h.requestProof(note, { balance, tier: TOP_TIER });
+    // 1 MINA claimed (the top tier) would leave 0.5 MINA, under the 1 MINA fee: the record concedes all 1.5 MINA.
+    await h.raise(proof.publicInput.nullifier, evidence, MINA);
+    await h.reduce();
+    const record = h.mirror.pendingEscape(proof.publicInput.nullifier)!;
+    expect(record.conceded.toBigInt()).toBe(balance);
+    expect(h.vault.pendingEscapesRoot.get().toBigInt()).toBe(h.mirror.escapes.root.toBigInt());
+
+    const [a, t] = [balanceOf(alice), balanceOf(h.treasury)];
+    await finalizeAfterWindow(h, proof);
+    expect(balanceOf(alice)).toBe(a);
+    expect(balanceOf(h.treasury)).toBe(t + SMALL);
+  });
+
   it('caps the concession at the tier b when more is claimed', async () => {
     const { note, proof, balance } = await recordedEscape(h, { step: 0 });
     const evidence = await h.requestProof(note, { step: 0, tier: TOP_TIER });
