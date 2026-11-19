@@ -3,7 +3,7 @@
 What each share holder does. ADR 0012 covers what the upgrade key is, and ADR 0013 covers why it is run this way.
 The record of who holds each vault's key shares, with its check log, is `docs/upgrade-key-record.md`.
 
-The `zk-toon-upgrade-key` CLI named here isn't built yet (it needs #104 and #105). These steps say what it must
+The `zk-toon-upgrade-key` CLI named here isn't built yet (#125, which needs #104 and #105). These steps say what it must
 let a holder do.
 
 ## Setting up as a holder

@@ -80,7 +80,7 @@ The procedures are in `docs/upgrade-key-holders.md`, and the holders' record in 
 
 ## Not yet done
 
-- The CLI isn't built. It needs #104 and #105.
+- The CLI isn't built (#125). It needs #104 and #105.
 - Registration needs the vault's key to sign the vault's first account update (ADR 0011). That signature doesn't go
-  through the threshold signer yet: #123 covers only delegation and the key install.
+  through the threshold signer yet (#126): #123 covers only delegation and the key install.
 - The independent holder hasn't been agreed, and no ceremony has been run, so the holders' record names no vault yet.
