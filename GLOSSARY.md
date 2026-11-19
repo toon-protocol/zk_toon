@@ -30,6 +30,17 @@ A party holding one key share: the operator, the TOON team, or an independent ho
 Mina team, since the Mina team ships the forks.
 _Avoid_: Key holder, signer (unqualified), custodian
 
+**Re-share**:
+Giving the share holders new key shares of the same upgrade key: a refresh of all three, or replacing a
+holder. A share from before a re-share doesn't combine with one from after, but two old shares still sign
+together, so every old share is destroyed afterwards (ADR 0013).
+_Avoid_: Key rotation (the key itself never changes), reshuffle
+
+**Pre-fork check**:
+Each pair of share holders threshold-signs a check value, which shows that every key share still works.
+It runs at least 42 days before a fork's stop slot and every 6 months (ADR 0013).
+_Avoid_: Liveness check, key ceremony
+
 **Fork notice**:
 The operator's promise, made off chain at the vault's zkApp URI at least 14 days before a fork's stop
 slot, to publish the post-fork verification key with its source tag and a reproducible build. The vault

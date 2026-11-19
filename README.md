@@ -133,6 +133,7 @@ this repo.
 | [The transaction builder](docs/tx-builder.md) | Running the o1js process, its JSON protocol, and every operation and failure |
 | [The challenger's Mina adapter](docs/challenger-mina.md) | Reading escapes and deadlines, submitting defeats and raises, and running `zk-toon-challenger` |
 | [Published keys and the proofs-on set](docs/verification-keys.md) | Building the verification keys and the vault code hash, and the tests that prove for real |
+| [The upgrade key's share holders](docs/upgrade-key-holders.md) | The ceremony, backups, signing, the pre-fork check, re-sharing and replacing a holder, and the holders' record |
 | [The devnet smoke test](docs/devnet-smoke.md) | Deploying a vault and the vault registry to Mina devnet, and reproducing the sighting |
 | [Lightnet tests](o1js/lightnet/README.md) | The tests that need a chain that checks proofs, on a local Docker lightnet |
 | [fixture-gen](fixture-gen/README.md) | Regenerating the prover's fixtures from o1js |
