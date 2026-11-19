@@ -1,5 +1,5 @@
-// What a zkApp's payout does to an account that doesn't exist yet. The vault refuses such a destination today
-// (`requireAccountExists`, ADR 0002); this pins the chain behaviour a payout that opens the account would rely on.
+// What a zkApp's payout does to an account that doesn't exist yet: the chain behaviour the vault's payouts rely on
+// to open a destination's account (ADR 0013).
 // o1js leaves `implicitAccountCreationFee` off on a send's receiver, so a plain send to a new account is refused
 // unless the transaction pays the fee elsewhere. With the flag on, the fee comes out of the payout: only when the
 // account is new, and a payout below the fee is refused. A payout can also require its receiver to be new, or not.
@@ -7,12 +7,12 @@
 // not checked.
 import { describe, expect, it } from 'vitest';
 import { AccountUpdate, Bool, Mina, PrivateKey, PublicKey, SmartContract, UInt64, declareMethods } from 'o1js';
+import { ACCOUNT_CREATION_FEE as CREATION_FEE } from './policy.js';
 
 const MINA = 1_000_000_000n;
-const CREATION_FEE = MINA;
 
 class Payer extends SmartContract {
-  /** Sends `amount` to `to`, as the vault's reduce does today (`payIf`). */
+  /** Sends `amount` to `to`, as o1js's `send` does by default. */
   async payPlain(to: PublicKey, amount: UInt64) {
     this.send({ to, amount });
   }

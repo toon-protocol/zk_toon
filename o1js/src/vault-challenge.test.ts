@@ -161,10 +161,16 @@ describe('raising an escape', () => {
     expect(record.conceded.toBigInt()).toBe(balance);
     expect(h.vault.pendingEscapesRoot.get().toBigInt()).toBe(h.mirror.escapes.root.toBigInt());
 
-    const [a, t] = [balanceOf(alice), balanceOf(h.treasury)];
-    await finalizeAfterWindow(h, proof);
+    // A deposit reduced alongside the finalize still applies.
+    const [a, t, leaves] = [balanceOf(alice), balanceOf(h.treasury), h.vault.nextLeafIndex.get().toBigInt()];
+    advance(record.deadline.toBigInt() - now());
+    await h.finalize(proof.publicInput.nullifier);
+    await h.deposit(SMALL);
+    await h.reduce();
     expect(balanceOf(alice)).toBe(a);
     expect(balanceOf(h.treasury)).toBe(t + SMALL);
+    expect(h.vault.nextLeafIndex.get().toBigInt()).toBe(leaves + 1n);
+    expect(h.vault.noteRoot.get().toBigInt()).toBe(h.mirror.tree.root.toBigInt());
   });
 
   it('caps the concession at the tier b when more is claimed', async () => {

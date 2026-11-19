@@ -41,8 +41,8 @@ A pass means:
    with every note it walks past its expiry and the close window after it.
 7. The balance covers all deposits, pending ones included, less what reduced actions paid.
 8. A reduce can process every action. Each account update holds one action, each action has only the fields its kind
-   sets, its amounts are in order, and a close or escape pays at least the account creation fee. A payee needs no account, since
-   its payout opens one (ADR 0013).
+   sets, its amounts are in order, and a close or escape pays at least the account creation fee. A payee needs no
+   account, since its payout opens one (ADR 0013).
    The reduce's circuit is the same for every kind, so a forged action that breaks one of these fails the reduce
    whatever it claims to be, and every action behind it is stuck, including a victim's deposit. `vault-check.test.ts`
    sees such reduces fail, except over-long updates: o1js's `prepareBatches` ran out of memory on one, so that test

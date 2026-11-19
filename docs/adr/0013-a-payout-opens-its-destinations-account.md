@@ -6,7 +6,7 @@ status: accepted
 
 ADR 0002 required a withdrawal's destination to exist, because a payout to a missing account would fail
 the batched reduce and stall every action behind it. That forced a payer withdrawing to a fresh address
-to fund it first, which links the two addresses. This ADR supersedes that consequence of ADR 0002 and
+to fund it first, which links the two addresses (#106). This ADR supersedes that consequence of ADR 0002 and
 amends the raise of ADR 0004.
 
 ## Decision

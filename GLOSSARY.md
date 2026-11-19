@@ -160,7 +160,8 @@ _Avoid_: Forced exit, unilateral close, emergency withdrawal
 
 **Concession**:
 What an escape gives up of its balance to the treasury: named by the payer, at most the balance,
-and liftable by a raise to at most one allowance's tier.
+and liftable by a raise to at most one allowance's tier, or to the whole balance where less would
+leave a payout under the account creation fee (ADR 0013).
 _Avoid_: Penalty, fee, Δ (in prose)
 
 **Challenge window**:
@@ -178,8 +179,9 @@ _Avoid_: Cancel (unqualified), slash, veto
 **Raise**:
 Lifting an escape's concession, within its challenge window, to `min(claimed, b, balance)` with a
 request proof of tier `b` at its current nullifier, where `claimed` is the allowance's recorded charge
-or `b` if it never closed. Refused unless it increases the concession, and never from a subsidised
-proof.
+or `b` if it never closed. If that would leave a payout above zero but under the account creation
+fee, the concession is the whole balance instead (ADR 0013). Refused unless it increases the
+concession, and never from a subsidised proof.
 _Avoid_: Penalty, top-up, dispute
 
 **Challenge**:
