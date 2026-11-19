@@ -135,6 +135,7 @@ an allowance the subsidy was meant to pay.
 | **Later hops** | No (unchanged) | No (unchanged) | Only what they already see |
 | **Termination and app** | No. The app gets no `X-TOON-Payer`, even on a one-hop path. | Yes | Only through content or timing |
 | **Chain observer** | Deposits and withdrawals, not traffic | No | No |
+| **Challenger** | No | No | No. It holds the evidence file: each allowance's time, tier and subsidised flag, never its packets (ADR 0014). |
 
 **What still leaks:**
 
