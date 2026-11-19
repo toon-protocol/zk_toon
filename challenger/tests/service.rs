@@ -7,8 +7,11 @@ const ID: Nullifier = [1; 32];
 const NEXT: Nullifier = [2; 32];
 const CFG: Config = Config { min_lead: 5 };
 
+/// A balance far above the account creation fee, so a raise strands nothing (ADR 0013).
+const BIG: u64 = 1_000_000_000;
+
 fn escape() -> Escape {
-    Escape { id: ID, next_nullifier: NEXT, conceded: 0, balance: 100, deadline: 1_000 }
+    Escape { id: ID, next_nullifier: NEXT, conceded: 0, balance: 100 * BIG, deadline: 1_000 }
 }
 
 fn ev(nullifier: Nullifier, charge: u64, verifies: bool) -> Evidence {

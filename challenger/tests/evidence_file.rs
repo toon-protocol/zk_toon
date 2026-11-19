@@ -16,6 +16,10 @@ fn nullifier(n: u64) -> Nullifier {
     zk_evidence::field_to_bytes(Field::from(n))
 }
 
+
+/// A balance far above the account creation fee, so a raise strands nothing (ADR 0013).
+const BIG: u64 = 1_000_000_000;
+
 fn escape(conceded: u64, balance: u64) -> Escape {
     Escape { id: nullifier(ID), next_nullifier: nullifier(NEXT), conceded, balance, deadline: 100_000 }
 }
@@ -81,31 +85,31 @@ fn decide_over(file: &TempFile, verifies: bool, e: &Escape) -> Decision {
 #[test]
 fn evidence_at_the_next_nullifier_defeats() {
     let f = TempFile::new("defeat", &[grant(NEXT, 10, false, b"a")]);
-    assert_eq!(decide_over(&f, true, &escape(0, 100)), Decision::Defeat);
-    assert_eq!(decide_over(&f, false, &escape(0, 100)), Decision::Alarm(AlarmReason::EvidenceInvalid));
+    assert_eq!(decide_over(&f, true, &escape(0, 100 * BIG)), Decision::Defeat);
+    assert_eq!(decide_over(&f, false, &escape(0, 100 * BIG)), Decision::Alarm(AlarmReason::EvidenceInvalid));
 }
 
 #[test]
 fn a_close_record_raises_to_the_charge_capped_at_tier_and_balance() {
     let f = TempFile::new("charge", &[grant(ID, 10, false, b"a"), close(ID, 7, b"a")]);
-    assert_eq!(decide_over(&f, true, &escape(2, 100)), Decision::Raise { to: 7 });
+    assert_eq!(decide_over(&f, true, &escape(2, 100 * BIG)), Decision::Raise { to: 7 });
     assert_eq!(decide_over(&f, true, &escape(2, 4)), Decision::Raise { to: 4 });
-    assert_eq!(decide_over(&f, true, &escape(7, 100)), Decision::NoOp);
+    assert_eq!(decide_over(&f, true, &escape(7, 100 * BIG)), Decision::NoOp);
 }
 
 #[test]
 fn a_grant_with_no_close_record_raises_to_the_tier() {
     let f = TempFile::new("no-close", &[grant(ID, 10, false, b"a")]);
-    assert_eq!(decide_over(&f, true, &escape(2, 100)), Decision::Raise { to: 10 });
+    assert_eq!(decide_over(&f, true, &escape(2, 100 * BIG)), Decision::Raise { to: 10 });
     assert_eq!(decide_over(&f, true, &escape(2, 6)), Decision::Raise { to: 6 });
 }
 
 #[test]
 fn subsidised_evidence_never_raises() {
     let f = TempFile::new("subsidised", &[grant(ID, 10, true, b"a")]);
-    assert_eq!(decide_over(&f, true, &escape(0, 100)), Decision::NoOp);
+    assert_eq!(decide_over(&f, true, &escape(0, 100 * BIG)), Decision::NoOp);
     let f = TempFile::new("subsidised-closed", &[grant(ID, 10, true, b"a"), close(ID, 10, b"a")]);
-    assert_eq!(decide_over(&f, true, &escape(0, 100)), Decision::NoOp);
+    assert_eq!(decide_over(&f, true, &escape(0, 100 * BIG)), Decision::NoOp);
 }
 
 #[test]
@@ -120,11 +124,11 @@ fn records_that_do_not_make_sense_give_evidence_invalid() {
     ];
     for (name, records) in cases {
         let f = TempFile::new(name, &records);
-        assert_eq!(decide_over(&f, true, &escape(0, 100)), invalid, "{name}");
+        assert_eq!(decide_over(&f, true, &escape(0, 100 * BIG)), invalid, "{name}");
     }
     // An orphan at the next nullifier raises the alarm too, rather than defeating.
     let f = TempFile::new("orphan-next", &[close(NEXT, 3, b"a")]);
-    assert_eq!(decide_over(&f, true, &escape(0, 100)), invalid);
+    assert_eq!(decide_over(&f, true, &escape(0, 100 * BIG)), invalid);
 }
 
 #[test]
@@ -148,7 +152,7 @@ fn a_record_that_does_not_decode_does_not_hide_the_rest_of_the_file() {
     bytes.extend(frame(&no_public_input.encode().unwrap()));
     std::fs::write(&f.0, bytes).unwrap();
     f.append(&close(ID, 6, b"a"));
-    assert_eq!(decide_over(&f, true, &escape(2, 100)), Decision::Raise { to: 6 });
+    assert_eq!(decide_over(&f, true, &escape(2, 100 * BIG)), Decision::Raise { to: 6 });
 }
 
 #[test]
@@ -156,7 +160,7 @@ fn records_appended_after_the_port_opened_are_seen() {
     let f = TempFile::new("append", &[grant(ID, 10, false, b"a")]);
     let calls = Rc::new(Cell::new(0));
     let port = FileEvidence::new(&f.0, Verifier(true, calls.clone()));
-    let e = escape(2, 100);
+    let e = escape(2, 100 * BIG);
     assert_eq!(decide(&e, &port, 0, &CFG).unwrap(), Decision::Raise { to: 10 });
     f.append(&close(ID, 6, b"a"));
     assert_eq!(decide(&e, &port, 0, &CFG).unwrap(), Decision::Raise { to: 6 });
@@ -173,7 +177,7 @@ fn a_torn_tail_is_ignored_until_it_is_completed() {
     let mut file = std::fs::OpenOptions::new().append(true).open(&f.0).unwrap();
     file.write_all(&whole[..whole.len() - 3]).unwrap();
     let port = FileEvidence::new(&f.0, Verifier(true, Rc::default()));
-    let e = escape(2, 100);
+    let e = escape(2, 100 * BIG);
     assert_eq!(decide(&e, &port, 0, &CFG).unwrap(), Decision::Raise { to: 10 });
     file.write_all(&whole[whole.len() - 3..]).unwrap();
     assert_eq!(decide(&e, &port, 0, &CFG).unwrap(), Decision::Raise { to: 6 });

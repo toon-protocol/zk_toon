@@ -10,7 +10,7 @@ fn open_escape() -> Escape {
     id[31] = 0;
     let mut next = [4u8; 32];
     next[31] = 0;
-    Escape { id, next_nullifier: next, conceded: 5, balance: 50, deadline: 1_000_000 }
+    Escape { id, next_nullifier: next, conceded: 5, balance: 50 * 1_000_000_000, deadline: 1_000_000 }
 }
 
 #[test]
