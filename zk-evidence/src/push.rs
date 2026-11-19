@@ -10,7 +10,7 @@
 //! # Checkpoint
 //!
 //! The vault (a compressed public key), a length (the file's length in bytes, header included) and
-//! the running hash of every record within that length. The state key signs five field elements:
+//! the running hash of every record within that length. The state key signs six field elements:
 //!
 //! ```text
 //! [evidenceCheckpointTag, vault.x, vault.isOdd, length, hash.hi, hash.lo]
@@ -32,8 +32,8 @@ use zk_note::balance::Scalar;
 use zk_note::state::{sign_fields, verify_fields};
 use zk_note::{tag_to_field, tags, Field};
 
-use crate::file::{scan_records, FileError};
-use crate::record::{evidence_hash, field_from_bytes, field_to_bytes, DecodeError};
+use crate::file::{scan, scan_records, write_header, FileError};
+use crate::record::{evidence_hash, field_from_bytes, field_to_bytes, DecodeError, Record};
 
 /// The running hash of a file with no records.
 pub const EMPTY_RUNNING_HASH: [u8; 32] = [0; 32];
@@ -102,7 +102,7 @@ pub enum PushDecodeError {
 
 impl Push {
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.bytes.len() + 80);
+        let mut out = Vec::with_capacity(self.bytes.len() + 76);
         out.extend_from_slice(&self.offset.to_le_bytes());
         out.extend_from_slice(&(self.bytes.len() as u32).to_le_bytes());
         out.extend_from_slice(&self.bytes);
@@ -155,12 +155,12 @@ pub struct FileCopy {
 impl FileCopy {
     /// The copy of a file that holds only its header.
     pub fn empty() -> Self {
-        FileCopy { length: crate::file::write_header().len() as u64, running_hash: EMPTY_RUNNING_HASH }
+        FileCopy { length: write_header().len() as u64, running_hash: EMPTY_RUNNING_HASH }
     }
 
     /// The copy of whole file bytes. A torn tail is not part of a copy: it is refused.
     pub fn of_file(file: &[u8]) -> Result<Self, PushRefusal> {
-        let scan = crate::file::scan(file).map_err(PushRefusal::BadCopy)?;
+        let scan = scan(file).map_err(PushRefusal::BadCopy)?;
         if scan.torn_tail {
             return Err(PushRefusal::BadCopy(FileError::Corrupt { offset: scan.valid_len }));
         }
@@ -206,7 +206,7 @@ pub fn check_push(
         return Err(PushRefusal::NotWholeRecords);
     }
     for r in &scan.records {
-        crate::record::Record::decode(r.payload).map_err(PushRefusal::BadRecord)?;
+        Record::decode(r.payload).map_err(PushRefusal::BadRecord)?;
     }
     let extended = FileCopy {
         length: copy.length + push.bytes.len() as u64,

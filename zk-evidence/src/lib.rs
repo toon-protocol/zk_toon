@@ -5,7 +5,6 @@
 //! A file is a header (`TOONZKEV`, then a `u16` LE format version) and records. Each record is
 //! `u32 LE payload length ‖ payload ‖ CRC32C(payload)`. A payload starts with a kind byte: `1` for
 //! a grant record, `2` for a close record.
-
 //!
 //! The running hash, the signed checkpoint and the push that carry those bytes to a challenger on
 //! another host are in [`push`], with their byte layouts (ADR 0014).

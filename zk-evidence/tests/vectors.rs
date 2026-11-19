@@ -153,7 +153,15 @@ fn evidence_push_vectors(whole: &[u8], torn: &[u8]) -> Value {
 
     let push_a = signed_push(&after_header, first_two, &vault, &state);
     let push_b = signed_push(&after_two, last, &vault, &state);
-    let push_json = |p: &Push, copy: &FileCopy| json!({ "copy": copy_json(copy), "pushHex": hex::encode(p.encode()) });
+    let push_json = |p: &Push, copy: &FileCopy| {
+        json!({
+            "copy": copy_json(copy),
+            "offset": p.offset.to_string(),
+            "bytesHex": hex::encode(&p.bytes),
+            "sig": sig_json(&p.signature),
+            "pushHex": hex::encode(p.encode()),
+        })
+    };
 
     let wrong_offset = Push { offset: after_two.length + 1, ..push_b.clone() };
     let torn_bytes = &torn[second_at..];
@@ -447,8 +455,6 @@ fn the_running_hash_matches_and_extends() {
 fn a_checkpoint_verifies_only_for_what_it_names() {
     let v = load(VECTORS);
     let c = &v["evidencePush"]["checkpoint"];
-    let state = key_from(&c["stateKey"]);
-    assert_eq!(state.x, key_from(&c["stateKey"]).x);
     let state_pub = mina_signer::PubKey::from_address(c["stateKey"]["address"].as_str().unwrap()).unwrap();
     let cp = Checkpoint {
         vault: key_from(&c["vault"]),
@@ -477,14 +483,19 @@ fn a_checkpoint_verifies_only_for_what_it_names() {
 
 #[test]
 fn a_checkpoint_is_not_a_state_message_or_a_clearance() {
+    use zk_note::balance::commit;
     use zk_note::clearance::{sign_clearance, ClearanceMessage};
+    use zk_note::state::{sign_state, StateMessage};
     let state = keypair(1001);
     let vault = keypair(2001).public.into_compressed();
     let cp = Checkpoint { vault: vault.clone(), length: 10, running_hash: [7; 32] };
     // A clearance with the same field values in its slots: the tags differ, so the signatures do.
     let clearance = ClearanceMessage::new(&vault, Field::from(10u64), &vault);
     assert!(!cp.verify(NETWORK, &state.public, &sign_clearance(&state, &clearance)));
-    // A state message over the checkpoint's leading fields.
+    // A state message for the same vault, signed with the same key.
+    let state_msg = StateMessage::new(&vault, commit(Scalar::from(10u64), Scalar::from(7u64)), Field::from(10u64));
+    assert!(!cp.verify(NETWORK, &state.public, &sign_state(&state, &state_msg)));
+    // The checkpoint's fields with the tag dropped: the tag alone keeps them apart.
     let fields = cp.to_fields();
     let as_state = zk_note::state::sign_fields(NETWORK, &state, fields[1..].to_vec());
     assert!(!cp.verify(NETWORK, &state.public, &as_state));
@@ -497,6 +508,9 @@ fn a_push_round_trips_and_refuses_truncated_and_trailing_input() {
     for p in v["evidencePush"]["pushes"].as_array().unwrap() {
         let bytes = hx(&p["pushHex"]);
         let push = Push::decode(&bytes).unwrap();
+        assert_eq!(push.offset.to_string(), p["offset"].as_str().unwrap());
+        assert_eq!(push.bytes, hx(&p["bytesHex"]));
+        assert_eq!(push.signature, sig_from(&p["sig"]));
         assert_eq!(push.encode(), bytes);
         for cut in 0..bytes.len() {
             assert_eq!(Push::decode(&bytes[..cut]), Err(PushDecodeError::Truncated), "cut {cut}");
@@ -545,5 +559,8 @@ fn a_bad_push_is_refused_for_the_reason_named() {
     }
     let names: Vec<&str> = refused.iter().map(|p| p["refusal"].as_str().unwrap()).collect();
     assert_eq!(names, ["wrongOffset", "notWholeRecords", "badSig", "badSig"]);
-    println!("vector cases run: {}", refused.len());
+    let pushes = v["evidencePush"]["pushes"].as_array().unwrap().len();
+    let hashes = 1 + v["evidencePush"]["runningHashes"]["afterEachRecord"].as_array().unwrap().len();
+    // The running hashes, the checkpoint, the pushes and the refused pushes.
+    println!("vector cases run: {}", hashes + 1 + pushes + refused.len());
 }
