@@ -11,7 +11,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { Experimental, Mina, PrivateKey, PublicKey, UInt64 } from 'o1js';
 import { minaKeyFromMnemonic } from './devnet.js';
-import { buildKeys } from './keys.js';
+import { buildKeys, currentKeys } from './keys.js';
 import { REGISTRY_DEPLOYMENTS_PATH, type RegistryDeployment, readDeployments } from './registry-deployments.js';
 import { archivedCommand, deployCommandPath, readSighting, sightingProblems } from './registry-sighting.js';
 import { chainReader, checkVault } from './vault-check.js';
@@ -134,7 +134,7 @@ if (command === 'deploy') {
     process.exit(problems.length === 0 ? 0 : 1);
   }
   const verdict = await checkVault(PublicKey.fromBase58(rest[0]!), {
-    key: keys.vault.verificationKey, registryKey: keys.registry.verificationKey,
+    key: currentKeys(keys).vault.verificationKey, registryKey: keys.registry.verificationKey,
     registry: PublicKey.fromBase58(record.registry), reader: chainReader({ localChain: false }),
   });
   console.log(JSON.stringify(verdict, null, 2));

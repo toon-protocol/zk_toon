@@ -12,7 +12,7 @@ proofs for the wallet and the challenger.
 From `o1js/`, after `npm ci`:
 
 ```
-node --import tsx src/tx-builder-main.ts --mina <graphql url> --archive <archive url> [--proofs=on|off]
+node --import tsx src/tx-builder-main.ts --mina <graphql url> --archive <archive url> [--proofs=on|off] [--keys <verification-keys.json>]
 node --import tsx src/tx-builder-main.ts --local [--proofs=on|off]
 ```
 
@@ -21,6 +21,7 @@ node --import tsx src/tx-builder-main.ts --local [--proofs=on|off]
 | `--mina`, `--archive` | The Mina GraphQL endpoint the vault and fee payer accounts are read from, and the archive endpoint the vault's actions are read from. |
 | `--local` | Host an o1js LocalBlockchain in the process and answer the `local.*` operations. The local chain doesn't check proofs, so its transaction proofs are dummies. |
 | `--proofs` | `on` (the default) makes real request and withdrawal proofs, and real transaction proofs when the chain checks them. `off` makes dummy proofs, but the circuits and the vault's methods still check every constraint. |
+| `--keys` | The file `npm run keys` writes (`docs/verification-keys.md`). With it, the builder finds each vault's generation by its code hash (ADR 0015), uses that generation's values, and refuses a vault whose code hash is in none, naming it. Without it every vault is taken to be the current generation's. |
 
 In Rust, `zk_toon_tx_builder::node_command(o1js_dir, &[flags])` returns this command and
 `TxBuilder::spawn(cmd)` starts it. `TxBuilder::set_timeout(Some(d))` bounds how long a request may

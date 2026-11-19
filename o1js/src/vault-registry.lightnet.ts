@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   AccountUpdate, Mina, PrivateKey, PublicKey, Signature, SmartContract, Types, UInt64, VerificationKey, declareMethods, fetchAccount,
 } from 'o1js';
-import { type Keys, buildKeys } from './keys.js';
+import { type Keys, buildKeys, currentKeys } from './keys.js';
 import { MINA, connectLightnet, lightnetLanding } from './lightnet.js';
 import { Vault, setupFields } from './vault.js';
 import { chainReader, checkVault } from './vault-check.js';
@@ -97,7 +97,7 @@ describe('the vault registry on a proofs-on lightnet', () => {
     expect(stored?.verificationKey).toBe(rogue.data);
     // Refused by its key's data, whatever else the archive has caught up with.
     const verdict = await checkVault(vault, {
-      key: keys.vault.verificationKey, registryKey: keys.registry.verificationKey, registry: registry.address,
+      key: currentKeys(keys).vault.verificationKey, registryKey: keys.registry.verificationKey, registry: registry.address,
       reader: chainReader({ localChain: false }),
     });
     console.log('rogue vault check:', JSON.stringify(verdict));

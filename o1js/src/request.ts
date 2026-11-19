@@ -4,7 +4,7 @@ import { Bool, Field, Group, PublicKey, Scalar, Signature, Struct, ZkProgram } f
 import { rerandomise } from './balance.js';
 import { NoteWitness } from './note-tree.js';
 import { U64_BITS, checkNoteState } from './note-state.js';
-import { MIN_SUBSIDY_AGE_SLOTS, SUBSIDY_PERIOD_SLOTS, TIERS, subsidyPeriod } from './policy.js';
+import { CURRENT_GENERATION, type Generation, TIERS, generationKey, subsidyPeriod } from './policy.js';
 import { authTag, periodNullifier } from './primitives.js';
 
 /**
@@ -50,8 +50,8 @@ export class RequestPrivate extends Struct({
 }) {}
 
 /** The checks shared by the request proof's methods. `pub.tier` is the tier `b` the balance must cover. */
-function checkRequest(pub: RequestPublic, priv: RequestPrivate) {
-  const stateCommitment = checkNoteState(pub, priv);
+function checkRequest(pub: RequestPublic, priv: RequestPrivate, gen: Generation) {
+  const stateCommitment = checkNoteState(pub, priv, gen);
 
   // The balance covers `b`.
   pub.tier.toBits(U64_BITS);
@@ -68,11 +68,11 @@ function checkRequest(pub: RequestPublic, priv: RequestPrivate) {
 }
 
 /** The unsubsidised request: no allowance is claimed, so the subsidy fields are zero. */
-export function checkUnsubsidised(pub: RequestPublic, priv: RequestPrivate) {
+export function checkUnsubsidised(pub: RequestPublic, priv: RequestPrivate, gen: Generation = CURRENT_GENERATION) {
   pub.subsidised.assertFalse();
   pub.period.assertEquals(0);
   pub.periodNullifier.assertEquals(0);
-  checkRequest(pub, priv);
+  checkRequest(pub, priv, gen);
 }
 
 /**
@@ -88,24 +88,24 @@ export function checkUnsubsidised(pub: RequestPublic, priv: RequestPrivate) {
  * nullifier. The vault itself never needs to: a subsidised proof never raises, and a defeat does not
  * depend on the period.
  */
-export function checkSubsidised(pub: RequestPublic, priv: RequestPrivate, vaultCreation: Field) {
+export function checkSubsidised(pub: RequestPublic, priv: RequestPrivate, vaultCreation: Field, gen: Generation = CURRENT_GENERATION) {
   pub.subsidised.assertTrue();
   pub.tier.assertEquals(Field(TIERS[0]));
 
   // Old enough: requestTime - depositTime >= 6,720 slots (7 days). checkRequest bounds requestTime and depositTime.
-  pub.requestTime.sub(priv.depositTime).sub(Field(MIN_SUBSIDY_AGE_SLOTS)).toBits(U64_BITS);
+  pub.requestTime.sub(priv.depositTime).sub(Field(gen.minSubsidyAgeSlots)).toBits(U64_BITS);
 
   // The period: period * week <= requestTime - vaultCreation < (period + 1) * week. Each side is
   // bounded to 64 bits, so a request before the creation time, or another period, wraps and fails.
   vaultCreation.toBits(U64_BITS);
   pub.period.toBits(U64_BITS);
   const elapsed = pub.requestTime.sub(vaultCreation);
-  const weekStart = pub.period.mul(Field(SUBSIDY_PERIOD_SLOTS));
+  const weekStart = pub.period.mul(Field(gen.subsidyPeriodSlots));
   elapsed.sub(weekStart).toBits(U64_BITS);
-  weekStart.add(Field(SUBSIDY_PERIOD_SLOTS - 1n)).sub(elapsed).toBits(U64_BITS);
+  weekStart.add(Field(gen.subsidyPeriodSlots - 1n)).sub(elapsed).toBits(U64_BITS);
 
   periodNullifier(priv.secret, priv.index, pub.period).assertEquals(pub.periodNullifier);
-  checkRequest(pub, priv);
+  checkRequest(pub, priv, gen);
 }
 
 /**
@@ -116,29 +116,46 @@ export function checkSubsidised(pub: RequestPublic, priv: RequestPrivate, vaultC
  * vault's `creationTime`, before it trusts a subsidised proof's per-period nullifier. Mirrors
  * `RequestPublic::check_subsidy_period` in zk-note.
  */
-export function subsidyPeriodHolds(pub: RequestPublic, vaultCreation: bigint): boolean {
+export function subsidyPeriodHolds(pub: RequestPublic, vaultCreation: bigint, gen: Generation = CURRENT_GENERATION): boolean {
   if (!pub.subsidised.toBoolean()) return pub.period.toBigInt() === 0n && pub.periodNullifier.toBigInt() === 0n;
-  const period = subsidyPeriod(vaultCreation, pub.requestTime.toBigInt());
+  const period = subsidyPeriod(vaultCreation, pub.requestTime.toBigInt(), gen);
   return period !== undefined && pub.period.toBigInt() === period;
 }
 
-export const RequestProgram = ZkProgram({
-  name: 'zk-toon-request',
-  publicInput: RequestPublic,
-  methods: {
-    unsubsidised: {
-      privateInputs: [RequestPrivate],
-      async method(pub: RequestPublic, priv: RequestPrivate) {
-        checkUnsubsidised(pub, priv);
+function buildRequest(gen: Generation) {
+  const program = ZkProgram({
+    name: gen.id === CURRENT_GENERATION.id ? 'zk-toon-request' : `zk-toon-request-${gen.id}`,
+    publicInput: RequestPublic,
+    methods: {
+      unsubsidised: {
+        privateInputs: [RequestPrivate],
+        async method(pub: RequestPublic, priv: RequestPrivate) {
+          checkUnsubsidised(pub, priv, gen);
+        },
+      },
+      subsidised: {
+        privateInputs: [RequestPrivate, Field],
+        async method(pub: RequestPublic, priv: RequestPrivate, vaultCreation: Field) {
+          checkSubsidised(pub, priv, vaultCreation, gen);
+        },
       },
     },
-    subsidised: {
-      privateInputs: [RequestPrivate, Field],
-      async method(pub: RequestPublic, priv: RequestPrivate, vaultCreation: Field) {
-        checkSubsidised(pub, priv, vaultCreation);
-      },
-    },
-  },
-});
+  });
+  class Proof extends ZkProgram.Proof(program) {}
+  return { program, Proof };
+}
 
-export class RequestProof extends ZkProgram.Proof(RequestProgram) {}
+const requestBuilds = new Map<string, ReturnType<typeof buildRequest>>();
+/**
+ * The request program and proof class of vault generation `gen`, built once: the circuit compiles that generation's note
+ * lifetime and subsidy counts in. The current generation's keeps the name `zk-toon-request`; another's is suffixed with its id.
+ */
+export function requestBuild(gen: Generation) {
+  const key = generationKey(gen);
+  if (!requestBuilds.has(key)) requestBuilds.set(key, buildRequest(gen));
+  return requestBuilds.get(key)!;
+}
+
+export const RequestProgram = requestBuild(CURRENT_GENERATION).program;
+export const RequestProof = requestBuild(CURRENT_GENERATION).Proof;
+export type RequestProof = InstanceType<typeof RequestProof>;

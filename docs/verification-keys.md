@@ -1,6 +1,6 @@
 # Published keys and the proofs-on set
 
-Each gate run publishes the circuits' verification keys and the vault's code hash, so a zk edge's
+Each gate run publishes the circuits' verification keys and the vault's code hash, for every live vault generation, so a zk edge's
 greeting pins (toon-protocol/connector#1511) can be checked against what was deployed. It also runs a
 named set of tests with real proofs.
 
@@ -14,26 +14,48 @@ npm run keys -- --no-cache <out.json>   # compile everything afresh
 ```
 
 The gate builds the file twice, once with the cache and once with `--no-cache`. It fails unless the
-two files are byte for byte identical, then uploads the first as the `verification-keys` artifact of
+two files are byte for byte identical, every generation's keys included, then uploads the first as the `verification-keys` artifact of
 the CI run. Nothing is committed: the keys change with every circuit or vault change, and the file is
 rebuilt from the commit.
 
 The shape is `Keys` in `o1js/src/keys.ts`. Each `verificationKey` is o1js's JSON form: `data` in base64,
-and `hash`, a field in decimal.
+and `hash`, a field in decimal. The file carries the keys of every live **vault generation** (ADR 0015), by id,
+and names the current one. The registry is built for the current generation's vault only.
 
 ```json
 {
   "o1js": "3.1.0",
-  "circuits": {
-    "request":      { "name": "zk-toon-request", "methods": ["subsidised", "unsubsidised"], "verificationKey": { "data": "…", "hash": "…" } },
-    "withdrawal":   { "name": "…", "methods": ["…"], "verificationKey": { "data": "…", "hash": "…" } },
-    "vaultReducer": { "name": "…", "verificationKey": { "data": "…", "hash": "…" } }
+  "current": "mesa",
+  "generations": {
+    "mesa": {
+      "circuits": {
+        "request":      { "name": "zk-toon-request", "methods": ["subsidised", "unsubsidised"], "verificationKey": { "data": "…", "hash": "…" } },
+        "withdrawal":   { "name": "…", "methods": ["…"], "verificationKey": { "data": "…", "hash": "…" } },
+        "vaultReducer": { "name": "…", "verificationKey": { "data": "…", "hash": "…" } }
+      },
+      "vault": { "codeHash": "…", "methods": ["…"], "verificationKey": { "data": "…", "hash": "…" } }
+    }
   },
-  "vault": { "codeHash": "…", "methods": ["…"], "verificationKey": { "data": "…", "hash": "…" } },
   "registry": { "codeHash": "…", "methods": ["register"], "verificationKey": { "data": "…", "hash": "…" } }
 }
 ```
 
+- **A vault generation is the vaults built with one set of values.** The policy (`GENERATIONS` in `o1js/src/policy.ts`,
+  mirrored in `zk-note/src/policy.rs`) holds a table of them: each has an id, a slot length and the slot counts that
+  slot length gives, rounded up (ADR 0007). Today's values are the only row. `test-vectors/zk-note.json` carries the
+  table, and both languages' tests fail if they disagree on any value. The current generation is the one new vaults
+  are deployed with and the registry fixes (`CURRENT_GENERATION_ID`).
+- **One build compiles every generation.** The vault, the request and withdrawal circuits and the batch reducer are
+  built for a generation by `vaultBuild(generation)`, each with that generation's constants. The current generation's
+  build is the `Vault`, `RequestProgram` and `WithdrawalProgram` the rest of the code uses, so its keys and code hash
+  are the ones a build without a table would give. Another generation's programs are named with its id
+  (`zk-toon-request-<id>`). Adding a generation is a fork's job (`docs/hard-fork.md`); `keys-generations.test.ts`
+  adds a throwaway one to check that its vault's code hash differs and the current one's keys do not change.
+- **A vault's generation is found by its code hash.** `generationOfCodeHash` (TypeScript) and
+  `policy::generation_of_code_hash` (Rust) take a code hash and the published code hashes by generation id, and refuse
+  a code hash in none of them, with a message naming it. The transaction builder does this when given `--keys <this file>`.
+- **The vault check compares with the current generation only.** A vault from an earlier generation is refused anyway,
+  since the current registry doesn't list it (ADR 0011).
 - **The vault's code hash is the hash of its verification key.** A zkApp account holds no code, only
   a verification key, so that key's hash is what names a deployed vault's code. `keys.test.ts` deploys
   a vault and checks that its account carries the published hash.

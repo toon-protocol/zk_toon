@@ -3,7 +3,7 @@
 import { Bool, Field, Group, PublicKey, Scalar, Signature } from 'o1js';
 import { commit } from './balance.js';
 import { NoteWitness } from './note-tree.js';
-import { expiryOfField } from './policy.js';
+import { type Generation, expiryOfField } from './policy.js';
 import { commitSecret, genesisAnchor, leaf, nextAnchor, nullifier } from './primitives.js';
 import { verifyState } from './state.js';
 
@@ -41,12 +41,13 @@ export interface NoteStateWitness {
 /**
  * The note is in the tree at `root`, not expired at `requestTime`, its state is the genesis state or
  * one signed by `vault` at the derived anchor, and `nullifier` is that state's nullifier. The balance
- * is bounded to 64 bits. Returns the state's balance commitment.
+ * is bounded to 64 bits. Returns the state's balance commitment. `gen` is the vault generation whose note lifetime the expiry follows
+ * (default: the current one).
  */
-export function checkNoteState(pub: NoteStatePublic, w: NoteStateWitness): Group {
+export function checkNoteState(pub: NoteStatePublic, w: NoteStateWitness, gen?: Generation): Group {
   // Membership: the leaf is in the tree at `root`, at its own index, and its expiry follows from its deposit time.
   const commitment = commitSecret(w.secret);
-  w.expiry.assertEquals(expiryOfField(w.depositTime));
+  w.expiry.assertEquals(expiryOfField(w.depositTime, gen));
   w.depositTime.toBits(U64_BITS);
   w.expiry.toBits(U64_BITS);
   w.path.calculateRoot(leaf(w.index, commitment, w.size, w.depositTime, w.expiry)).assertEquals(pub.root);

@@ -1,5 +1,5 @@
 // `npm run keys -- [--no-cache] <out.json>`: compiles the circuits and the vault and writes their
-// verification keys, their hashes and the vault's code hash (`Keys` in keys.ts). `--no-cache` compiles
+// verification keys, their hashes and the vault's code hash, for every live vault generation (`Keys` in keys.ts). `--no-cache` compiles
 // without o1js's key cache. The gate builds it twice, the second time with `--no-cache`, checks that the
 // files are identical, and uploads the first.
 import { writeFileSync } from 'node:fs';
@@ -15,9 +15,12 @@ if (!out || rest.length > 0) {
 }
 const keys = await buildKeys(noCache ? { cache: Cache.None } : {});
 writeFileSync(out, `${JSON.stringify(keys, null, 2)}\n`);
-console.log(`vault code hash: ${keys.vault.codeHash}`);
+console.log(`current generation: ${keys.current}`);
+for (const [id, g] of Object.entries(keys.generations)) {
+  console.log(`generation ${id}: vault code hash ${g.vault.codeHash}`);
+  for (const [name, c] of Object.entries(g.circuits)) console.log(`  ${name} verification key hash: ${c.verificationKey.hash}`);
+}
 console.log(`registry code hash: ${keys.registry.codeHash}`);
-for (const [name, c] of Object.entries(keys.circuits)) console.log(`${name} verification key hash: ${c.verificationKey.hash}`);
 console.log(`wrote ${out}`);
 // o1js keeps worker threads alive after compiling.
 process.exit(0);
