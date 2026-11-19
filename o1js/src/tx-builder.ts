@@ -356,6 +356,7 @@ export async function createBuilder(options: BuilderOptions) {
     const updates = ((zkappCommand.accountUpdates ?? []) as any[]).filter((u) => u.body?.authorizationKind?.isSigned);
     if (updates.length !== 1) throw bad('zkappCommand: expected exactly one account update to be signed');
     if (updates[0].body.useFullCommitment !== true) throw bad('zkappCommand: the signed update does not use the full commitment');
+    if (updates[0].body.incrementNonce !== false) throw bad('zkappCommand: the signed update increments its nonce');
     const own = new Client({ network: net }).signFields([fullCommitment(zkappCommand, net)], payer.toBase58()).signature;
     zkappCommand.feePayer.authorization = own;
     updates[0].authorization = { proof: null, signature: upgrade.toBase58() };
@@ -504,8 +505,8 @@ export async function createBuilder(options: BuilderOptions) {
       return { vault: vault.address.toBase58() };
     },
     /** A vault at the address of `privateKey` (a test key), deployed through a registry as ADR 0011 has it. */
-    async 'local.deployRegisteredVault'(p) {
-      const key = PrivateKey.fromBase58(String(p.privateKey));
+    async 'local.deployRegisteredVault'(p, secrets) {
+      const key = privateKey(p.privateKey, 'privateKey', secrets);
       const [deployer] = local!.testAccounts;
       registry ??= await deployRegistry(deployer);
       const vault = await registerVault(registry, deployer, { vaultKey: key });
@@ -513,8 +514,8 @@ export async function createBuilder(options: BuilderOptions) {
       return { vault: vault.address.toBase58() };
     },
     /** A stand-in account at the address of `privateKey` (a test key) whose `setVerificationKey` is `signature`. */
-    async 'local.deployStandIn'(p) {
-      const key = PrivateKey.fromBase58(String(p.privateKey));
+    async 'local.deployStandIn'(p, secrets) {
+      const key = privateKey(p.privateKey, 'privateKey', secrets);
       const [deployer] = local!.testAccounts;
       const tx = await Mina.transaction(deployer, async () => {
         AccountUpdate.fundNewAccount(deployer);

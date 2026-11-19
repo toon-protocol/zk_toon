@@ -186,7 +186,7 @@ transaction that lands first moves the nonce and voids it.
 `prepareDelegation` and `prepareKeyInstall` answer `{"zkappCommand": {…}, "fullCommitment": "<field>"}`.
 `attachDelegation` and `attachKeyInstall` answer `{"zkappCommand": {…}}`, ready for `sendZkapp`. Attach is
 `badInput` unless the command's fee payer is the key given and exactly one account update wants a signature, with
-the full commitment. It doesn't check the upgrade key's signature: a node refuses a wrong one (another key, another
+the full commitment and no nonce increment. It doesn't check the upgrade key's signature: a node refuses a wrong one (another key, another
 commitment, the other network), and `local.submit` answers `rejected`.
 
 | op | params | what it does |
@@ -201,7 +201,7 @@ here is for an account whose permission is `signature`. In Rust: `TxBuilder::pre
 `Prepared` transaction, the signature and the fee payer.
 
 `o1js/src/upgrade-key.lightnet.ts` does both on the proofs-on lightnet, signing with
-`cargo run -p upgrade-key --features test-utils --example threshold_sign` (`npm run test:lightnet`; the gate
+`cargo run --release -p upgrade-key --features test-utils --example threshold_sign` (`npm run test:lightnet`; the gate
 doesn't run it).
 
 ### Local chain operations (`--local` only)
