@@ -38,6 +38,10 @@ pub type SigningNonces = frost_bluepallas::round1::SigningNonces<PallasMessage>;
 pub type SigningCommitments = frost_bluepallas::round1::SigningCommitments<PallasMessage>;
 pub type SigningPackage = frost_bluepallas::SigningPackage<PallasMessage>;
 pub type SignatureShare = frost_bluepallas::round2::SignatureShare<PallasMessage>;
+/// What a repair helper sends each helper, itself included. Secret.
+pub type Delta = frost_bluepallas::frost::keys::repairable::Delta<frost_bluepallas::BluePallas<PallasMessage>>;
+/// What a repair helper sends the new holder. Secret.
+pub type Sigma = frost_bluepallas::frost::keys::repairable::Sigma<frost_bluepallas::BluePallas<PallasMessage>>;
 
 /// What the upgrade key signs: a transaction's full commitment under a network ID.
 ///
@@ -149,7 +153,8 @@ pub mod refresh {
     }
 
     /// Part 3: the holder's new key share and the new public key package, given its current ones. The upgrade key's
-    /// public key is checked to be unchanged. The old share is not touched: destroy it.
+    /// public key is checked to be unchanged; if it changed, this fails with `Error::MalformedVerifyingKey`. The old
+    /// share is not touched: destroy it.
     pub fn part3(
         secret: &round2::SecretPackage<PallasMessage>,
         round1_received: &BTreeMap<Identifier, round1::Package<PallasMessage>>,
@@ -179,7 +184,6 @@ pub mod refresh {
 pub mod repair {
     use super::*;
     use frost_bluepallas::frost::keys::repairable as core;
-    pub use core::{Delta, Sigma};
 
     /// A helper's step 1: one delta for each helper, itself included. Send each to its holder, over a confidential and
     /// authenticated channel. `helpers` are the identifiers of every helper, at least [`MIN_SIGNERS`] of them.
@@ -188,24 +192,25 @@ pub mod repair {
         key: &KeyPackage,
         rng: &mut R,
         repaired: Identifier,
-    ) -> Result<BTreeMap<Identifier, Delta<frost_bluepallas::BluePallas<PallasMessage>>>, Error> {
+    ) -> Result<BTreeMap<Identifier, Delta>, Error> {
         core::repair_share_part1(helpers, key, rng, repaired)
     }
 
     /// A helper's step 2: its sigma from the deltas it received from every helper, itself included. Send it to the
     /// new holder.
-    pub fn part2(deltas: &[Delta<frost_bluepallas::BluePallas<PallasMessage>>]) -> Sigma<frost_bluepallas::BluePallas<PallasMessage>> {
+    pub fn part2(deltas: &[Delta]) -> Sigma {
         core::repair_share_part2(deltas)
     }
 
     /// The new holder's last step: the key share at `repaired`, from every helper's sigma and the public key package
-    /// (which any helper can send).
-    pub fn part3(
-        sigmas: &[Sigma<frost_bluepallas::BluePallas<PallasMessage>>],
-        repaired: Identifier,
-        public: &PublicKeyPackage,
-    ) -> Result<KeyPackage, Error> {
-        core::repair_share_part3(sigmas, repaired, public)
+    /// (which any helper can send). The share is checked against the package's verifying share at `repaired`, so a
+    /// wrong or missing sigma fails here with `Error::InvalidSecretShare` rather than at the next signing.
+    pub fn part3(sigmas: &[Sigma], repaired: Identifier, public: &PublicKeyPackage) -> Result<KeyPackage, Error> {
+        let key = core::repair_share_part3(sigmas, repaired, public)?;
+        if public.verifying_shares().get(&repaired) != Some(key.verifying_share()) {
+            return Err(Error::InvalidSecretShare { culprit: None });
+        }
+        Ok(key)
     }
 }
 

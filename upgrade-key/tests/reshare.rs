@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 
 use common::*;
 use mina_signer::NetworkId;
+use rand_chacha::ChaCha20Rng;
 use upgrade_key::*;
-
 
 type Keys = BTreeMap<Identifier, KeyPackage>;
 
@@ -15,7 +15,7 @@ fn run_refresh(
     old: &Keys,
     old_public: &PublicKeyPackage,
     numbers: &[u16],
-    rng: &mut rand_chacha::ChaCha20Rng,
+    rng: &mut ChaCha20Rng,
 ) -> (Keys, PublicKeyPackage) {
     let ids: Vec<Identifier> = numbers.iter().map(|n| holder(*n).unwrap()).collect();
 
@@ -54,24 +54,29 @@ fn run_refresh(
     (keys, public.unwrap())
 }
 
+/// The helpers' steps of a repair of the share at `repaired`: every helper's sigma for the new holder.
+fn repair_sigmas(keys: &Keys, helpers: &[u16], repaired: u16, rng: &mut ChaCha20Rng) -> Result<Vec<Sigma>, Error> {
+    let helper_ids: Vec<Identifier> = helpers.iter().map(|n| holder(*n).unwrap()).collect();
+    let repaired = holder(repaired).unwrap();
+    let mut inbox: BTreeMap<Identifier, Vec<Delta>> = BTreeMap::new();
+    for id in &helper_ids {
+        for (to, delta) in repair::part1(&helper_ids, &keys[id], rng, repaired)? {
+            inbox.entry(to).or_default().push(delta);
+        }
+    }
+    Ok(helper_ids.iter().map(|id| repair::part2(&inbox[id])).collect())
+}
+
 /// The two remaining holders repair the share at `repaired` for the new holder.
 fn run_repair(
     keys: &Keys,
     public: &PublicKeyPackage,
     helpers: &[u16],
     repaired: u16,
-    rng: &mut rand_chacha::ChaCha20Rng,
+    rng: &mut ChaCha20Rng,
 ) -> Result<KeyPackage, Error> {
-    let helper_ids: Vec<Identifier> = helpers.iter().map(|n| holder(*n).unwrap()).collect();
-    let repaired = holder(repaired).unwrap();
-    let mut inbox: BTreeMap<Identifier, Vec<repair::Delta<_>>> = BTreeMap::new();
-    for id in &helper_ids {
-        for (to, delta) in repair::part1(&helper_ids, &keys[id], rng, repaired)? {
-            inbox.entry(to).or_default().push(delta);
-        }
-    }
-    let sigmas: Vec<_> = helper_ids.iter().map(|id| repair::part2(&inbox[id])).collect();
-    repair::part3(&sigmas, repaired, public)
+    let sigmas = repair_sigmas(keys, helpers, repaired, rng)?;
+    repair::part3(&sigmas, holder(repaired).unwrap(), public)
 }
 
 fn assert_every_pair_signs(keys: &Keys, public: &PublicKeyPackage, upgrade_key: &mina_signer::PubKey, seed: u64) {
@@ -85,9 +90,8 @@ fn assert_every_pair_signs(keys: &Keys, public: &PublicKeyPackage, upgrade_key: 
     }
 }
 
-/// Signing with `signers`' shares from `keys` but checking against `public`: whether the aggregate is refused, and who
-/// it names.
-fn refused(keys: &Keys, public: &PublicKeyPackage, signers: &[u16], rng: &mut rand_chacha::ChaCha20Rng) -> Vec<Identifier> {
+/// Signing with `signers`' shares from `keys` but checking against `public`: the signers the refused aggregate names.
+fn culprits(keys: &Keys, public: &PublicKeyPackage, signers: &[u16], rng: &mut ChaCha20Rng) -> Vec<Identifier> {
     let message = Message::new(commitment(99), NetworkId::TESTNET);
     let (nonces, package) = commit(keys, signers, &message, rng);
     let shares = sign_shares(keys, nonces, &package);
@@ -126,8 +130,8 @@ fn an_old_share_with_a_new_share_is_refused_at_aggregation() {
         let mixed = mix((&keys, old), (&new_keys, new));
         let old_id = holder(old).unwrap();
         // Against the new public package the old share is the culprit; against the old one, the new share.
-        assert_eq!(refused(&mixed, &new_public, &[old, new], &mut rng), vec![old_id]);
-        assert_eq!(refused(&mixed, &public, &[old, new], &mut rng), vec![holder(new).unwrap()]);
+        assert_eq!(culprits(&mixed, &new_public, &[old, new], &mut rng), vec![old_id]);
+        assert_eq!(culprits(&mixed, &public, &[old, new], &mut rng), vec![holder(new).unwrap()]);
     }
 }
 
@@ -158,6 +162,19 @@ fn a_repair_rebuilds_the_share_and_needs_two_helpers() {
 }
 
 #[test]
+fn a_repair_with_a_wrong_sigma_fails() {
+    let mut rng = rng(20);
+    let (keys, public) = run_dkg(&mut rng);
+    let leaving = holder(3).unwrap();
+
+    // Two honest runs of the same repair: each run's sigmas sum to the share, but one sigma from each does not.
+    let first = repair_sigmas(&keys, &[1, 2], 3, &mut rng).unwrap();
+    let second = repair_sigmas(&keys, &[1, 2], 3, &mut rng).unwrap();
+    assert!(repair::part3(&[first[0].clone(), second[1].clone()], leaving, &public).is_err());
+    assert!(repair::part3(&first[..1], leaving, &public).is_err(), "one sigma is not the share");
+}
+
+#[test]
 fn replacing_a_holder_keeps_the_key_and_retires_the_leaving_share() {
     let mut rng = rng(16);
     let (keys, public) = run_dkg(&mut rng);
@@ -165,8 +182,8 @@ fn replacing_a_holder_keeps_the_key_and_retires_the_leaving_share() {
 
     // The new holder takes the leaving holder's identifier, 3, and joins the refresh with the repaired share.
     let repaired = run_repair(&keys, &public, &[1, 2], 3, &mut rng).unwrap();
-    let before_refresh: Keys =
-        BTreeMap::from([(holder(1).unwrap(), keys[&holder(1).unwrap()].clone()), (holder(2).unwrap(), keys[&holder(2).unwrap()].clone()), (holder(3).unwrap(), repaired)]);
+    let mut before_refresh = keys.clone();
+    before_refresh.insert(holder(3).unwrap(), repaired);
     let (new_keys, new_public) = run_refresh(&before_refresh, &public, &[1, 2, 3], &mut rng);
 
     assert_eq!(public_key(&new_public).unwrap(), upgrade_key);
@@ -174,11 +191,8 @@ fn replacing_a_holder_keeps_the_key_and_retires_the_leaving_share() {
 
     // The leaving holder's share, the same one the new holder started from, combines with neither remaining holder.
     for remaining in [1, 2] {
-        let mixed = BTreeMap::from([
-            (holder(remaining).unwrap(), new_keys[&holder(remaining).unwrap()].clone()),
-            (holder(3).unwrap(), keys[&holder(3).unwrap()].clone()),
-        ]);
-        assert_eq!(refused(&mixed, &new_public, &[remaining, 3], &mut rng), vec![holder(3).unwrap()]);
+        let mixed = mix((&new_keys, remaining), (&keys, 3));
+        assert_eq!(culprits(&mixed, &new_public, &[remaining, 3], &mut rng), vec![holder(3).unwrap()]);
     }
 }
 
@@ -195,6 +209,6 @@ fn two_refreshes_in_a_row_do_not_mix() {
 
     for (a, b) in [(1, 2), (2, 1), (3, 1)] {
         let mixed = mix((&first, a), (&second, b));
-        assert_eq!(refused(&mixed, &second_public, &[a, b], &mut rng), vec![holder(a).unwrap()]);
+        assert_eq!(culprits(&mixed, &second_public, &[a, b], &mut rng), vec![holder(a).unwrap()]);
     }
 }
