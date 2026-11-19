@@ -1,14 +1,10 @@
 mod common;
 
-use std::collections::BTreeMap;
-
 use ark_ec::CurveGroup;
 use ark_ff::{BigInteger, PrimeField};
 use common::*;
 use mina_signer::NetworkId;
 use upgrade_key::*;
-
-const SUBSETS: [[u16; 2]; 3] = [[1, 2], [1, 3], [2, 3]];
 
 #[test]
 fn every_two_of_three_signs_under_each_network() {
@@ -140,5 +136,4 @@ fn aggregate_refuses_a_message_the_signers_did_not_sign() {
     let shares = sign_shares(&keys, nonces, &package);
     assert!(aggregate(&package, &Message::new(commitment(10), NetworkId::TESTNET), &shares, &public).is_err());
     assert!(aggregate(&package, &Message::new(commitment(9), NetworkId::MAINNET), &shares, &public).is_err());
-    let _: BTreeMap<Identifier, SignatureShare> = shares;
 }

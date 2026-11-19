@@ -116,6 +116,7 @@ end, and the [glossary](GLOSSARY.md) defines every term.
 | [`zk-evidence`](zk-evidence/) | The evidence file's byte format: records, framing, header and evidence hash. No file I/O |
 | [`zk-prover`](zk-prover/) | A Kimchi step prover for o1js circuits, on the pinned mina-rust fork |
 | [`tx-builder`](tx-builder/) | The Rust client of the o1js transaction builder: proved vault transactions and request proofs |
+| [`upgrade-key`](upgrade-key/) | The upgrade key's 2-of-3 FROST signer, checked against the pinned `mina-signer` |
 | [`challenger`](challenger/) | The challenger's decision core and its ports |
 | [`challenger-mina`](challenger-mina/) | The challenger's Mina adapter, and the `zk-toon-challenger` service |
 | [`fixture-gen/`](fixture-gen/) | The code that produced `zk-prover/fixtures/` |

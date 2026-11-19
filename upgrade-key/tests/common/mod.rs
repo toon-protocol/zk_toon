@@ -8,6 +8,9 @@ use upgrade_key::*;
 
 pub const NETWORKS: [NetworkId; 2] = [NetworkId::TESTNET, NetworkId::MAINNET];
 
+/// Every two of the three holders.
+pub const SUBSETS: [[u16; 2]; 3] = [[1, 2], [1, 3], [2, 3]];
+
 pub fn rng(seed: u64) -> ChaCha20Rng {
     ChaCha20Rng::seed_from_u64(seed)
 }

@@ -21,7 +21,7 @@ fn cases() -> Vec<Case> {
     let fields = vec![1, 2, 3];
     // `sign_fields_test`: a base58 key, signing under testnet and under mainnet.
     let base58 = || SecKey::from_base58("EKFXH5yESt7nsD1TJy5WNb4agVczkvzPRVexKQ8qYdNqauQRA8Ef").unwrap();
-    vec![
+    let mut cases = vec![
         Case { name: "sign_fields_test testnet", secret: base58(), fields: fields.clone(), network: NetworkId::TESTNET },
         Case { name: "sign_fields_test mainnet", secret: base58(), fields: fields.clone(), network: NetworkId::MAINNET },
         // `test_base_field_modulus_minus_one_works`: the secret is -1, above the base field's modulus.
@@ -38,7 +38,20 @@ fn cases() -> Vec<Case> {
             fields,
             network: NetworkId::TESTNET,
         },
-    ]
+    ];
+    // The `test_{mainnet,testnet}_compatibility_*` cases check the nonce derivation; here their key and fields are signed.
+    let compatibility: [(&'static str, ScalarField, Vec<u64>); 4] = [
+        ("empty input", ScalarField::from(12345u64), vec![]),
+        ("single field", ScalarField::from(98765u64), vec![42]),
+        ("multiple fields", ScalarField::from(12345u64), vec![1, 2, 3, 4, 5]),
+        ("corner case", -ScalarField::one(), vec![1000]),
+    ];
+    for network in NETWORKS {
+        for (name, secret, fields) in &compatibility {
+            cases.push(Case { name: *name, secret: SecKey::new(*secret), fields: fields.clone(), network: network.clone() });
+        }
+    }
+    cases
 }
 
 #[test]
@@ -53,7 +66,7 @@ fn threshold_signatures_verify_under_the_vectors_network() {
             case.fields.iter().map(|f| BaseField::from(*f)).collect(),
             case.network.clone(),
         );
-        for signers in [[1, 2], [1, 3], [2, 3]] {
+        for signers in SUBSETS {
             let signature = threshold_sign(&shares, &public, &signers, &message, &mut rng);
             let mut context = mina_signer::create_kimchi::<Fields>(case.network.clone());
             assert!(

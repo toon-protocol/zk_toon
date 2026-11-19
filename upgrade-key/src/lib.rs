@@ -21,8 +21,9 @@ use mina_tx::NetworkId as FrostNetworkId;
 use rand_core::{CryptoRng, RngCore};
 use serde_json::{json, Value};
 
-/// How many share holders there are, and how many of them must sign.
+/// How many share holders there are.
 pub const MAX_SIGNERS: u16 = 3;
+/// How many of them must sign.
 pub const MIN_SIGNERS: u16 = 2;
 
 pub type Error = frost_bluepallas::Error<PallasMessage>;
@@ -58,10 +59,6 @@ impl Message {
     #[cfg(feature = "test-utils")]
     pub fn from_fields(fields: Vec<BaseField>, network: NetworkId) -> Self {
         Self { fields, network }
-    }
-
-    pub fn network(&self) -> &NetworkId {
-        &self.network
     }
 
     /// The bytes the signers sign, which carry the network ID with them.
@@ -152,9 +149,9 @@ pub fn holder(number: u16) -> Result<Identifier, Error> {
 }
 
 /// The upgrade key's public key. Its address is `B62…`.
-pub fn public_key(package: &PublicKeyPackage) -> Result<PubKey, String> {
-    let key = translate_pk(package.verifying_key()).map_err(|e| e.to_string())?;
-    PubKey::from_address(&key.into_address()).map_err(|e| e.to_string())
+pub fn public_key(package: &PublicKeyPackage) -> Result<PubKey, Error> {
+    let key = translate_pk(package.verifying_key()).map_err(|_| Error::MalformedVerifyingKey)?;
+    PubKey::from_address(&key.into_address()).map_err(|_| Error::MalformedVerifyingKey)
 }
 
 /// Round 1: a signer makes its nonces and commitments. Send the commitments to the other signer and keep the nonces.
@@ -205,7 +202,7 @@ pub fn aggregate(
     let signature = frost_bluepallas::aggregate(package, shares, public)?;
     let signature = translate_sig(&signature).map_err(|_| Error::InvalidSignature)?;
     let signature = Signature::new(from_frost_field(signature.rx), from_frost_scalar(signature.s));
-    let key = public_key(public).map_err(|_| Error::MalformedVerifyingKey)?;
+    let key = public_key(public)?;
     if !verify(&signature, &key, message) {
         return Err(Error::InvalidSignature);
     }
