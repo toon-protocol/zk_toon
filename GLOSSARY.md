@@ -134,9 +134,14 @@ _Avoid_: Δ (in prose), usage, spend
 ### Evidence
 
 **Evidence file**:
-The zk edge's append-only record of every allowance it granted and how each one closed, which the
-challenger reads.
+The zk edge's append-only record of every allowance it granted and how each one closed, of which
+each challenger holds a copy.
 _Avoid_: Proof log, journal (that's the connector's own record)
+
+**Evidence copy**:
+A challenger's copy of the evidence file: byte for byte a prefix of the zk edge's file, so one length
+says how far behind it is.
+_Avoid_: Replica, mirror, evidence store
 
 **Grant record**:
 An entry in the evidence file for one granted allowance: its request proof and the allowance's
@@ -193,6 +198,11 @@ request proof of tier `b` at its current nullifier, where `claimed` is the allow
 or `b` if it never closed. Refused unless it increases the concession, and never from a subsidised
 proof.
 _Avoid_: Penalty, top-up, dispute
+
+**Challenger**:
+A service that watches the vault and challenges escapes from its evidence copy, on the zk edge
+operator's behalf. The operator may run it or name a third party to.
+_Avoid_: Watchtower (for ours), verifier, monitor
 
 **Challenge**:
 A defeat or a raise: a challenger's answer to an escape within its challenge window, carrying a
