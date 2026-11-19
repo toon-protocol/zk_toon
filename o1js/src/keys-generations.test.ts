@@ -44,6 +44,12 @@ describe('the generation table', () => {
     expect(() => generationById('nope')).toThrow("no vault generation 'nope'");
   });
 
+  it('refuses a code hash published for a generation the table lacks, naming the hash', () => {
+    const published = { [CURRENT_GENERATION_ID]: { vault: { codeHash: '1' } }, gone: { vault: { codeHash: '2' } } };
+    expect(generationOfCodeHash('1', published)).toBe(CURRENT_GENERATION);
+    expect(() => generationOfCodeHash('2', published)).toThrow('vault code hash 2 is in no vault generation');
+  });
+
   it('rounds a generation\'s slot counts up as ADR 0007 does', () => {
     expect(shorter).toMatchObject({ slotsPerDay: 1_920n, requestMaxAgeSlots: 14n, requestMaxLeadSlots: 2n });
   });

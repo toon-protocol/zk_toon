@@ -55,7 +55,7 @@ export function generationById(id: string, table: readonly Generation[] = GENERA
 }
 export const CURRENT_GENERATION: Generation = generationById(CURRENT_GENERATION_ID);
 
-/** A key for building once per set of values: two generations with the same values are the same build. */
+/** A key for building each generation once: its id, which names its programs, and every value it compiles in. */
 export const generationKey = (g: Generation) => Object.values(g).join(':');
 
 /**
@@ -66,8 +66,9 @@ export function generationOfCodeHash(
   codeHash: string, published: Readonly<Record<string, { vault: { codeHash: string } }>>, table: readonly Generation[] = GENERATIONS,
 ): Generation {
   const id = Object.keys(published).find((k) => published[k].vault.codeHash === codeHash);
-  if (id === undefined) throw Error(`vault code hash ${codeHash} is in no vault generation`);
-  return generationById(id, table);
+  const found = id === undefined ? undefined : table.find((g) => g.id === id);
+  if (!found) throw Error(`vault code hash ${codeHash} is in no vault generation`);
+  return found;
 }
 
 const CURRENT = CURRENT_GENERATION;

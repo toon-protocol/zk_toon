@@ -45,9 +45,24 @@ pub const fn generation_of(id: &'static str, slot_seconds: u64) -> Generation {
 pub const GENERATIONS: [Generation; 1] = [generation_of("mesa", 90)];
 /// The id of the generation new vaults are deployed with and the registry fixes.
 pub const CURRENT_GENERATION_ID: &str = "mesa";
-/// The current generation: the first row, which `current_generation_is_in_the_table` checks is named by
-/// [`CURRENT_GENERATION_ID`].
-pub const CURRENT_GENERATION: Generation = GENERATIONS[0];
+/// The current generation: the row named by [`CURRENT_GENERATION_ID`]. The build fails if there is none.
+pub const CURRENT_GENERATION: Generation = {
+    let mut i = 0;
+    loop {
+        assert!(i < GENERATIONS.len(), "CURRENT_GENERATION_ID names no generation");
+        let (id, want) = (GENERATIONS[i].id.as_bytes(), CURRENT_GENERATION_ID.as_bytes());
+        let mut same = id.len() == want.len();
+        let mut j = 0;
+        while same && j < id.len() {
+            same = id[j] == want[j];
+            j += 1;
+        }
+        if same {
+            break GENERATIONS[i];
+        }
+        i += 1;
+    }
+};
 
 /// The generation with `id`, if the table has one.
 pub fn generation(id: &str) -> Option<&'static Generation> {
