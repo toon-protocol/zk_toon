@@ -4,7 +4,7 @@
 #   ./regenerate.sh <dir>          only dump o1js's raw output to <dir> (the toy's to <dir>/toy)
 #   ./regenerate.sh --toy-only     rewrite only the toy fixtures (`toy_*`), which `toy.mjs` makes
 #   ./regenerate.sh --vault        rewrite only the real vault's and action-stack program's (`vault_*`, `chunk_*`);
-#                                  takes about half an hour
+#                                  takes about half an hour. STEP_WITNESS_DIR=<dir> also dumps every full step witness there
 set -euo pipefail
 cd "$(dirname "$0")"
 # `npm ci` runs patch-package, which applies patches/o1js+3.1.0.patch (the SPIKE_DUMP dump).
@@ -30,12 +30,14 @@ if [ "${1:?--write, --toy-only, --vault or an output dir}" = "--vault" ]; then
   # with no cache or after proving every circuit in one process. So one process compiles with an empty cache,
   # which dumps every circuit and writes the keys to it, and each proving process compiles from that cache, where
   # the keys load lazily. `main` proves the nine methods, `recursive` the real action-stack chunks and then
-  # `reduce` from them. Light dump mode leaves out the witness columns and the call-site trace.
+  # `reduce` from them. Light dump mode leaves out the witness columns; SPIKE_DUMP_TRACE keeps the call-site trace,
+  # which the step maps are made from.
   for mode in compile main recursive; do
     mkdir -p "$work/$mode"
-    SPIKE_DUMP="$work/$mode" SPIKE_DUMP_LIGHT=1 \
+    SPIKE_DUMP="$work/$mode" SPIKE_DUMP_LIGHT=1 SPIKE_DUMP_TRACE=1 \
       ../o1js/node_modules/.bin/tsx --tsconfig ../o1js/tsconfig.json --import ./vault-register.mjs vault-fixtures.ts "$mode" "$work/cache" "$work/$mode"
   done
+  [ -z "${STEP_WITNESS_DIR:-}" ] || mkdir -p "$STEP_WITNESS_DIR"
   node vault-collect.mjs "$work" "$fixtures"
   # The Rust wrap proofs of the vault's cases and of the action-stack chunks, which o1js verifies under the vault's and
   # the reducer's key (o1js/src/rust-wrap.test.ts).

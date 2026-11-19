@@ -74,37 +74,37 @@ impl ProofConstants for StepToyRecurse {
 
 /// Shapes of the step circuits of the real vault (`vault_<method>_*`, `fixture-gen/vault-fixtures.ts`), for
 /// [`StepCircuit::load`], which reads `ROWS` and `PREVIOUS_CHALLENGES`. Each has the 34 public inputs of a
-/// program of `maxProofsVerified` 1. `AUX_LEN` is 0: no step witness is built for them (the step proofs
-/// are o1js's), so nothing reads it.
+/// program of `maxProofsVerified` 1. `AUX_LEN` is the number of auxiliary values of o1js's step witness
+/// (`vault_<method>_step_witness.json`): no step witness is built in Rust for them yet.
 macro_rules! vault_step {
-    ($($name:ident: $rows:expr, $verifies:expr;)*) => {$(
+    ($($name:ident: $rows:expr, $aux:expr, $verifies:expr;)*) => {$(
         pub struct $name;
         impl ProofConstants for $name {
             const PRIMARY_LEN: usize = 34;
-            const AUX_LEN: usize = 0;
+            const AUX_LEN: usize = $aux;
             const PREVIOUS_CHALLENGES: usize = $verifies;
             const ROWS: usize = $rows;
         }
     )*};
 }
 vault_step! {
-    StepVaultSetup: 2096, 0;
-    StepVaultDeposit: 2461, 0;
-    StepVaultMutualClose: 13028, 1;
-    StepVaultEscape: 13170, 1;
-    StepVaultFinalize: 2335, 0;
-    StepVaultDefeat: 12591, 1;
-    StepVaultRaise: 12666, 1;
-    StepVaultSweepExpired: 7169, 0;
-    StepVaultReduce: 56124, 1;
+    StepVaultSetup: 2096, 26783, 0;
+    StepVaultDeposit: 2461, 31799, 0;
+    StepVaultMutualClose: 13028, 170194, 1;
+    StepVaultEscape: 13170, 171551, 1;
+    StepVaultFinalize: 2335, 28470, 0;
+    StepVaultDefeat: 12591, 163742, 1;
+    StepVaultRaise: 12666, 164621, 1;
+    StepVaultSweepExpired: 7169, 82211, 0;
+    StepVaultReduce: 56124, 685295, 1;
 }
 
 /// Shape of the step circuit of the action-stack program's `proveChunk` (`chunk_*`), which verifies one
-/// proof (the previous chunk, or a dummy). `AUX_LEN` is 0: the step proofs are o1js's.
+/// proof (the previous chunk, or a dummy). `AUX_LEN` is that of o1js's step witness, the same for both cases.
 pub struct StepChunk;
 impl ProofConstants for StepChunk {
     const PRIMARY_LEN: usize = 34;
-    const AUX_LEN: usize = 0;
+    const AUX_LEN: usize = 245891;
     const PREVIOUS_CHALLENGES: usize = 1;
     const ROWS: usize = 20173;
 }

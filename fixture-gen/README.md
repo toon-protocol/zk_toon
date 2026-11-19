@@ -71,7 +71,7 @@ the step proofs, the wrap witnesses and `*_proof.json` are not (o1js's proofs ar
 
 `./regenerate.sh --vault` (about half an hour; leave the other fixtures as they are) proves every method of the real `Vault`
 (`../o1js/src/vault.ts`) on a `LocalBlockchain`, with the dump patch on in its light mode (`SPIKE_DUMP_LIGHT=1`, which leaves
-out the witness columns and the call-site trace), and writes the fixtures for `zk-prover`'s wrap of them. The vault is
+out the witness columns; `SPIKE_DUMP_TRACE=1` keeps the call-site trace, which the step maps are made from), and writes the fixtures for `zk-prover`'s wrap of them. The vault is
 deployed under its own key, not through the registry, whose circuit no fixture needs. o1js's wasm prover hangs on `reduce`
 (about 56k rows, 2^16) when every prover key is held in memory, so the run is three processes, all `vault-fixtures.ts`,
 which `../o1js`'s `tsx` runs with `vault-register.mjs` pointing the vault sources' `import 'o1js'` at this package's patched copy:
@@ -100,16 +100,45 @@ made it, checks that every circuit is among `compile`'s and that no two vault me
   proof is verified against), and, for a method that verifies a proof (`reduce`, `mutualClose`, `escape`, `defeat`,
   `raise`), `<case>_previous.json`: that proof, with the `key` of its program in `vault_keys.json`. The first `reduce`
   verifies a dummy action-stack proof.
+- For each case, what a Rust builder of its step witness starts from, as the toy's `toy_<method>_step_witness.json`,
+  `toy_<method>_step_map.txt` and `toy_inputs.json` are:
+  - `<case>_step_witness.json`: o1js's step witness (`public_input_size` and `external`, the public input then the auxiliary
+    values), which `zk-prover`'s `StepWitness::from_o1js_json` reads; its auxiliary values are the `AUX_LEN` of the case's
+    step shape in `zk-prover/src/lib.rs`. A method that verifies a proof holds it, so a witness, the `_previous.json`, the step
+    proof and the wrap witness of a case are of one run. `zk-prover/tests/step_vault.rs` proves each case's step circuit
+    from it.
+  - `<case>_step_map.txt`: the o1js call site of each variable (`step-map.mjs`, the toy's format). The vault's frames are
+    TypeScript, so the sites are `.ts` lines of the o1js sources and of `../o1js/src`.
+  - `<case>_inputs.json`: what the circuit witnesses and does not compute, recorded when the method is called:
+    `method`, the vault's `vault` address, the `slot` of the call, the `sender` (the account that pays and signs), the
+    `tokenId` (MINA's, 1), the `args` as the method takes them (field elements and integers as decimal strings, keys as
+    base58; a proof as its public input and output, the proof itself being `<case>_previous.json`; an `IndexedMerkleMap` as
+    its `root`, `length` and `sortedLeaves`, in key order; an `Unconstrained` as its contents, e.g. the `NoteWitness`es of
+    `reduce`, the `SweptNote`s of `sweepExpired`), the vault account's `state` as the method reads it (its 32 `appState`
+    fields, `actionState`, `provedState`, `balance`, `nonce`, `verificationKeyHash`), and the `blinding` of the call's
+    `callData`. o1js draws that blinding with `Fp.random`, twice for a call (building the transaction, proving it), and the
+    second is the one in the step witness; `vault-fixtures.ts` replaces `Fp.random` by a counter, as `prove-local.mjs` does,
+    so a rerun draws the same values. Nothing else in a method is random. The `chunk_*` files hold the arguments of
+    `proveChunk`: the input, the previous proof's public input and output, `isRecursive` and the `witnesses` (null for an
+    empty slot).
+  - A step witness over 50 MB gzipped is committed as `<case>_step_witness_blocks.json` instead: the sha256 of each block of 1024
+    values (each value's decimal string followed by a newline). None is, so far (the largest, `reduce`'s, is 21 MB);
+    `STEP_WITNESS_DIR=<dir> ./regenerate.sh --vault` also writes every full step witness to `<dir>`.
 - `rust_vault_<case>_proof.json`, `rust_chunk_dummy_proof.json`, `rust_chunk_chained_proof.json`: the Rust wrap proof of
   each vault case and of the two chunks (`zk-prover`'s `rust_wrap_proofs` example, which `--vault` runs after collecting),
   which `o1js/src/rust-wrap.test.ts` verifies under the vault's key (the chunks' under the reducer's).
 - `vault_keys.json`: the verification keys (`data` and `hash`) of the vault, its reducer (`vaultReducer`) and the programs
   the vault verifies (`request`, `withdrawal`). `zk-prover/src/pins.rs` pins the vault's and the reducer's hashes.
 
-The circuits and keys are byte-identical on a rerun; the step proofs and wrap witnesses are not.
+The circuits and keys are byte-identical on a rerun; the step proofs and wrap witnesses are not, and the step witness of
+a method that verifies a proof holds that proof, so each case's step witness, step proof, `_previous.json` and wrap witness
+come from one run.
 
 The new fixtures are 73 gzipped files, 56.5 MB committed: each wrap witness is about 4 MB (118,000 field elements, which
-`xz` shrinks by only about 14%), 11 of them make 43 MB, and the circuits are the rest.
+`xz` shrinks by only about 14%), 11 of them make 43 MB, and the circuits are the rest. The step witnesses, step maps
+and inputs add 36 files, 81.4 MB: the two `reduce` witnesses (685,329 values) are 21 and 23 MB each, the two chunks' 4 and
+8 MB, the methods that verify a proof 5 MB each, the rest 1 to 3 MB. A full `--vault` run took 40 minutes (`compile` 6, `main` 8,
+`recursive` 20, the rest the Rust wrap proofs).
 
 `trace-land.mjs` is a development tool for `zk-prover/src/witness`: it proves `land` as `prove-local.mjs`
 does and logs the calls into o1js's OCaml side (Poseidon, `scaleFastUnpack`, `truncateToBits16`) and the

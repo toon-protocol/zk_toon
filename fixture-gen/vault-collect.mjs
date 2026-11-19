@@ -1,16 +1,23 @@
 // Turns the dumps of `vault-fixtures.ts` (the `compile`, `main` and `recursive` directories under <work>) into
 // the committed fixtures: for each case, the step circuit, the wrap circuit, o1js's step proof with its public
 // input and the wrap witness (reduced to what the Rust tests read), the zkApp public input of the call and, for a
-// method that verifies a proof, that proof (`_previous.json`, with the name of its program's key); and the verification keys.
+// method that verifies a proof, that proof (`_previous.json`, with the name of its program's key); o1js's step witness
+// (`_step_witness.json`), a map of the o1js call site of each of its variables (`_step_map.txt`) and the inputs a Rust
+// builder of it needs (`_inputs.json`); and the verification keys.
+// A step witness whose gzip is over `MAX_GZ` is committed as the hashes of its blocks of `BLOCK` values instead
+// (`_step_witness_blocks.json`). With STEP_WITNESS_DIR set, every full step witness is also written there.
 // Usage: node vault-collect.mjs <work dir> <fixtures dir>
 import fs from 'node:fs';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
+import { stepMap } from './step-map.mjs';
 
 const [work, fixtures] = process.argv.slice(2);
 const die = (m) => { console.error(`vault-collect: ${m}`); process.exit(1); };
 const pad = (n) => String(n).padStart(3, '0');
 const CIRCUIT_FILES = ['gates.json', 'internal_vars.bin', 'rows_rev.bin'];
+const MAX_GZ = Number(process.env.MAX_STEP_WITNESS_GZ ?? 50 * 1024 * 1024);
+const BLOCK = 1024;
 const gz = (file, data) => fs.writeFileSync(`${fixtures}/${file}.gz`, zlib.gzipSync(data, { level: 9, mtime: 0 }));
 
 // A circuit's identity is its content, so the same circuit dumped by two processes is one circuit.
@@ -68,6 +75,26 @@ const PREVIOUS = {
   reduce: 'vaultReducer', reduceRecursive: 'vaultReducer', mutualClose: 'withdrawal', escape: 'withdrawal',
   defeat: 'request', raise: 'request',
 };
+/** The step witness as the toy's (`{ public_input_size, external }`), or its block hashes if too large. */
+const stepWitness = (prefix, step) => {
+  const witness = JSON.stringify({ public_input_size: step.public_input_size, external: step.external });
+  if (process.env.STEP_WITNESS_DIR) fs.writeFileSync(`${process.env.STEP_WITNESS_DIR}/${prefix}_step_witness.json`, witness);
+  const packed = zlib.gzipSync(witness, { level: 9, mtime: 0 });
+  // Only one of the two forms stays.
+  fs.rmSync(`${fixtures}/${prefix}_step_witness.json.gz`, { force: true });
+  fs.rmSync(`${fixtures}/${prefix}_step_witness_blocks.json.gz`, { force: true });
+  if (packed.length <= MAX_GZ) {
+    fs.writeFileSync(`${fixtures}/${prefix}_step_witness.json.gz`, packed);
+    return;
+  }
+  // The hash of block k is the sha256 of its values' decimal strings, each followed by a newline.
+  const sha256 = [];
+  for (let i = 0; i < step.external.length; i += BLOCK) {
+    sha256.push(crypto.createHash('sha256').update(step.external.slice(i, i + BLOCK).map((v) => `${v}\n`).join('')).digest('hex'));
+  }
+  gz(`${prefix}_step_witness_blocks.json`, JSON.stringify({ public_input_size: step.public_input_size, length: step.external.length, block: BLOCK, sha256 }));
+  console.log(`${prefix}: the step witness is ${packed.length} bytes gzipped, over the limit: committed its block hashes`);
+};
 const seen = new Set();
 for (const proc of ['main', 'recursive']) {
   const dir = `${work}/${proc}`;
@@ -89,8 +116,9 @@ for (const proc of ['main', 'recursive']) {
     }
     // The chunks: each `proveChunk` call's proof is `<prefix>_proof.json` (its public input and output, which o1js's
     // `verify` reads), and the proof it verified `<prefix>_previous.json`, under the reducer's key.
+    let calls;
     if (c.name === 'chunks') {
-      const calls = JSON.parse(fs.readFileSync(`${dir}/chunks_calls.json`, 'utf8'));
+      calls = JSON.parse(fs.readFileSync(`${dir}/chunks_calls.json`, 'utf8'));
       if (calls.length !== names.length) die(`chunks: ${calls.length} proveChunk calls, expected ${names.length}`);
       if (JSON.stringify(calls[1].previous) !== JSON.stringify(calls[0].proof)) die('chunks: the second call did not verify the first call\'s proof');
       names.forEach(([prefix], i) => {
@@ -111,6 +139,15 @@ for (const proc of ['main', 'recursive']) {
       // A step proof's public input is not in its dump, but o1js's step witness starts with it.
       gz(`${prefix}_stepproof_public.json`, JSON.stringify(step.external.slice(0, step.public_input_size)));
       gz(`${prefix}_wrap_witness.json`, JSON.stringify({ public_input_size: wrap.public_input_size, external: wrap.external }));
+      // The step witness: its values (the public input first), the o1js call site of each variable, and the inputs.
+      const inputs = c.name === 'chunks' ? calls[i].inputs : JSON.parse(fs.readFileSync(`${dir}/${c.name}_inputs.json`, 'utf8'));
+      // The blinding of the call's `callData` is witnessed, and o1js's trace says where.
+      if (inputs.blinding !== undefined && !step.external.slice(step.public_input_size).includes(inputs.blinding)) {
+        die(`${prefix}: the step witness does not hold the blinding ${inputs.blinding}`);
+      }
+      gz(`${prefix}_inputs.json`, JSON.stringify(inputs));
+      gz(`${prefix}_step_map.txt`, stepMap(step));
+      stepWitness(prefix, step);
     });
   }
 }
