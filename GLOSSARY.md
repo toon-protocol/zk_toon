@@ -38,7 +38,8 @@ _Avoid_: Key rotation (the key itself never changes), reshuffle
 
 **Pre-fork check**:
 Each pair of share holders threshold-signs a check value, which shows that every key share still works.
-It runs at least 42 days before a fork's stop slot and every 6 months (ADR 0013).
+It runs at least 42 days before a fork's stop slot, after the ceremony and every re-share, and every 6
+months (ADR 0013).
 _Avoid_: Liveness check, key ceremony
 
 **Fork notice**:
