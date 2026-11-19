@@ -56,6 +56,9 @@ verification key, so a fork that changes slot length changes them with the key. 
 lead is only the zk edge's off-chain check. The challenge window is state that `init` writes in the signed
 deploy, so the key doesn't fix it: see `docs/devnet-smoke.md` and #75.
 
+What a fork does with these counts is ADR 0015: a vault from before the fork keeps them, and the vault after it is
+built with the fork's slot length.
+
 The zk edge's freshness check takes slots. How the zk edge gets its current slot is
 toon-protocol/connector#1511.
 
