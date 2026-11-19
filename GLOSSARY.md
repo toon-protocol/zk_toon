@@ -16,8 +16,19 @@ _Avoid_: Pool, mixer, contract (unqualified)
 
 **Upgrade key**:
 The vault account's own key. It signs for the vault account, but its permissions let it only delegate
-the vault's balance, and after a hard fork replace the vault's verification key (ADR 0006).
+the vault's balance, and after a hard fork replace the vault's verification key (ADR 0006). It is
+held as three key shares, any two of which can sign for it.
 _Avoid_: Vault key, owner key, admin key
+
+**Key share**:
+One of the three parts of the upgrade key. Any two key shares together can sign for the upgrade key;
+one alone can't, and nobody ever holds the whole key.
+_Avoid_: Shard, partial key, key fragment
+
+**Share holder**:
+A party holding one key share: the operator, the TOON team, or an independent holder who is not the
+Mina team, since the Mina team ships the forks.
+_Avoid_: Key holder, signer (unqualified), custodian
 
 **Fork notice**:
 The operator's promise, made off chain at the vault's zkApp URI at least 14 days before a fork's stop
