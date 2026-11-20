@@ -220,3 +220,37 @@ fn policy_constants_match() {
     assert_eq!(sizes, policy::DEPOSIT_SIZES);
     assert_eq!(policy::ACCOUNT_CREATION_FEE, u(&p["accountCreationFee"]));
 }
+
+#[test]
+fn generation_tables_agree() {
+    let v = vectors();
+    let p = &v["policy"];
+    assert_eq!(policy::CURRENT_GENERATION_ID, p["currentGeneration"].as_str().unwrap());
+    let rows = p["generations"].as_array().unwrap();
+    assert_eq!(rows.len(), policy::GENERATIONS.len(), "the tables hold different numbers of generations");
+    for (g, e) in policy::GENERATIONS.iter().zip(rows) {
+        assert_eq!(g.id, e["id"].as_str().unwrap());
+        assert_eq!(g.slot_seconds, u(&e["slotSeconds"]), "{} slotSeconds", g.id);
+        assert_eq!(g.slots_per_day, u(&e["slotsPerDay"]), "{} slotsPerDay", g.id);
+        assert_eq!(g.note_lifetime_slots, u(&e["noteLifetimeSlots"]), "{} noteLifetimeSlots", g.id);
+        assert_eq!(g.min_subsidy_age_slots, u(&e["minSubsidyAgeSlots"]), "{} minSubsidyAgeSlots", g.id);
+        assert_eq!(g.subsidy_period_slots, u(&e["subsidyPeriodSlots"]), "{} subsidyPeriodSlots", g.id);
+        assert_eq!(g.challenge_window_slots, u(&e["challengeWindowSlots"]), "{} challengeWindowSlots", g.id);
+        assert_eq!(g.request_max_age_slots, u(&e["requestMaxAgeSlots"]), "{} requestMaxAgeSlots", g.id);
+        assert_eq!(g.request_max_lead_slots, u(&e["requestMaxLeadSlots"]), "{} requestMaxLeadSlots", g.id);
+    }
+}
+
+#[test]
+fn current_generation_is_in_the_table() {
+    assert_eq!(policy::generation(policy::CURRENT_GENERATION_ID), Some(&policy::CURRENT_GENERATION));
+    assert_eq!(policy::generation("nope"), None);
+}
+
+#[test]
+fn a_code_hash_finds_its_generation_and_an_unknown_one_is_refused() {
+    let published = [("mesa", "111")];
+    assert_eq!(policy::generation_of_code_hash("111", &published), Ok(&policy::CURRENT_GENERATION));
+    let err = policy::generation_of_code_hash("222", &published).unwrap_err();
+    assert!(err.to_string().contains("222"), "{err}");
+}

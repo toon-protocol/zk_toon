@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { Mina, PrivateKey, Signature, VerificationKey, verify } from 'o1js';
-import { buildKeys } from './keys.js';
+import { buildKeys, currentKeys } from './keys.js';
 import { PROOFS_ON } from './proofs-on.js';
 import { RequestProgram } from './request.js';
 import { defaultSample, buildSample } from './request-sample.js';
@@ -16,9 +16,11 @@ const o1jsVersion = JSON.parse(readFileSync(new URL('../package.json', import.me
 describe('the published keys', () => {
   it(PROOFS_ON.vault, async () => {
     const keys = await buildKeys();
+    const cur = currentKeys(keys);
+    expect(Object.keys(keys.generations)).toEqual(['mesa']);
     expect(keys.o1js).toBe(o1jsVersion);
-    expect(Object.keys(keys.circuits).sort()).toEqual(['request', 'vaultReducer', 'withdrawal']);
-    expect(keys.circuits.request.methods?.sort()).toEqual(['subsidised', 'unsubsidised']);
+    expect(Object.keys(cur.circuits).sort()).toEqual(['request', 'vaultReducer', 'withdrawal']);
+    expect(cur.circuits.request.methods?.sort()).toEqual(['subsidised', 'unsubsidised']);
 
     // A vault deployed from this build carries the published code hash as its verification key.
     const Local = await Mina.LocalBlockchain({ proofsEnabled: false });
@@ -31,8 +33,8 @@ describe('the published keys', () => {
     const vaultKey = PrivateKey.random();
     const vault = await registerVault(registry, payer, { vaultKey });
     const onChain = Mina.getAccount(vault.address).zkapp!.verificationKey!;
-    expect(onChain.hash.toString()).toBe(keys.vault.codeHash);
-    expect(onChain.data).toBe(keys.vault.verificationKey.data);
+    expect(onChain.hash.toString()).toBe(cur.vault.codeHash);
+    expect(onChain.data).toBe(cur.vault.verificationKey.data);
 
     // The vault check (ADR 0008) passes that vault under the published code hash, and no other.
     const stateKey = PrivateKey.random().toPublicKey();
@@ -43,12 +45,12 @@ describe('the published keys', () => {
     await setup.prove();
     await setup.sign([payer.key]).send();
     const reader = chainReader({ localChain: true });
-    expect(await checkVault(vault.address, { key: keys.vault.verificationKey, registryKey: keys.registry.verificationKey, registry: registry.address, reader })).toEqual({ pass: true, dispatched: 0, reduced: 0 });
-    expect((await checkVault(vault.address, { key: keys.circuits.request.verificationKey, registryKey: keys.registry.verificationKey, registry: registry.address, reader })).pass).toBe(false);
+    expect(await checkVault(vault.address, { key: cur.vault.verificationKey, registryKey: keys.registry.verificationKey, registry: registry.address, reader })).toEqual({ pass: true, dispatched: 0, reduced: 0 });
+    expect((await checkVault(vault.address, { key: cur.circuits.request.verificationKey, registryKey: keys.registry.verificationKey, registry: registry.address, reader })).pass).toBe(false);
 
     // A real request proof verifies against the published request key, read back from its JSON.
-    const published = new VerificationKey(VerificationKey.fromJSON(keys.circuits.request.verificationKey));
-    expect(published.hash.toString()).toBe(keys.circuits.request.verificationKey.hash);
+    const published = new VerificationKey(VerificationKey.fromJSON(cur.circuits.request.verificationKey));
+    expect(published.hash.toString()).toBe(cur.circuits.request.verificationKey.hash);
     const s = buildSample(defaultSample());
     const { proof } = await RequestProgram.unsubsidised(s.pub, s.priv);
     expect(await verify(proof, published)).toBe(true);

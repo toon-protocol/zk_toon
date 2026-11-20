@@ -53,7 +53,21 @@
       "100000000000",
       "1000000000000"
     ],
-    "accountCreationFee": "1000000000"
+    "accountCreationFee": "1000000000",
+    "currentGeneration": "mesa",
+    "generations": [
+      {
+        "id": "mesa",
+        "slotSeconds": "90",
+        "slotsPerDay": "960",
+        "noteLifetimeSlots": "172800",
+        "minSubsidyAgeSlots": "6720",
+        "subsidyPeriodSlots": "6720",
+        "challengeWindowSlots": "1920",
+        "requestMaxAgeSlots": "7",
+        "requestMaxLeadSlots": "1"
+      }
+    ]
   },
   "poseidon": [
     {

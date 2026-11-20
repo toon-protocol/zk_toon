@@ -10,7 +10,7 @@ import { AccountUpdate, Field, Mina, PrivateKey, PublicKey, Scalar, Signature, U
 import { commit } from './balance.js';
 import { signClearance } from './clearance.js';
 import { type Clock, buildNotice, deployWithWindow, minaKeyFromMnemonic, refuseWindowMismatch, runKey, runSecret, sendPlan, targetSlot, windowOfRun } from './devnet.js';
-import { buildKeys } from './keys.js';
+import { buildKeys, currentKeys } from './keys.js';
 import { readDeployments } from './registry-deployments.js';
 import { CHALLENGE_WINDOW_SLOTS, DEPOSIT_SIZES, SLOT_SECONDS, TIERS } from './policy.js';
 import { commitSecret, genesisAnchor, nullifier } from './primitives.js';
@@ -306,16 +306,16 @@ const expectGrowth = (name: string, before: { destination: string; treasury: str
 log(`run ${run}: vault ${vaultAddress.toBase58()}, funder balance ${await balance(funder)}`);
 const keys = await buildKeys();
 // What the run deployed is what it records: a later build of other code can't drive this vault.
-if (journal.facts.vaultCodeHash !== undefined && journal.facts.vaultCodeHash !== keys.vault.codeHash) {
-  throw Error(`this build's vault code hash ${keys.vault.codeHash} is not the deployed ${journal.facts.vaultCodeHash}`);
+if (journal.facts.vaultCodeHash !== undefined && journal.facts.vaultCodeHash !== currentKeys(keys).vault.codeHash) {
+  throw Error(`this build's vault code hash ${currentKeys(keys).vault.codeHash} is not the deployed ${journal.facts.vaultCodeHash}`);
 }
 journal.facts.o1js = keys.o1js;
-journal.facts.vaultCodeHash = keys.vault.codeHash;
+journal.facts.vaultCodeHash = currentKeys(keys).vault.codeHash;
 journal.facts.registryCodeHash = keys.registry.codeHash;
-journal.facts.requestKeyHash = keys.circuits.request.verificationKey.hash;
-journal.facts.withdrawalKeyHash = keys.circuits.withdrawal.verificationKey.hash;
-journal.facts.reducerKeyHash = keys.circuits.vaultReducer.verificationKey.hash;
-journal.build = { notice: buildNotice(challengeWindow, keys.vault.codeHash), challengeWindowSlots: challengeWindow.toString() };
+journal.facts.requestKeyHash = currentKeys(keys).circuits.request.verificationKey.hash;
+journal.facts.withdrawalKeyHash = currentKeys(keys).circuits.withdrawal.verificationKey.hash;
+journal.facts.reducerKeyHash = currentKeys(keys).circuits.vaultReducer.verificationKey.hash;
+journal.build = { notice: buildNotice(challengeWindow, currentKeys(keys).vault.codeHash), challengeWindowSlots: challengeWindow.toString() };
 log(journal.build.notice);
 saveJournal();
 
@@ -340,7 +340,7 @@ const registryRecord = () => {
 /** The registry this network's deployment record names, with its account fetched. */
 async function pinnedRegistry() {
   const record = registryRecord();
-  const Registry = await registryClass(Field(keys.vault.codeHash));
+  const Registry = await registryClass(Field(currentKeys(keys).vault.codeHash));
   const registry = new Registry(PublicKey.fromBase58(record.registry));
   await fetchAccount({ publicKey: registry.address });
   if (Mina.getAccount(registry.address).zkapp?.verificationKey?.hash.toString() !== keys.registry.codeHash) {
@@ -398,7 +398,7 @@ const vaultCheck = (name: string) => step(name, async () => {
   // The archive must hold every action, the registry's entry included, before the check can hash them up.
   for (let tries = 0; ; tries++) {
     const verdict = await checkVault(vaultAddress, {
-      key: keys.vault.verificationKey, registryKey: keys.registry.verificationKey,
+      key: currentKeys(keys).vault.verificationKey, registryKey: keys.registry.verificationKey,
       registry: PublicKey.fromBase58(registryRecord().registry), reader: chainReader({ localChain: false }),
     });
     journal.facts[name] = { slot: (await wallSlot()).toString(), verdict };

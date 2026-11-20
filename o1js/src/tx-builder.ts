@@ -11,8 +11,8 @@ import Client from 'mina-signer';
 import { commit, rerandomise } from './balance.js';
 import { authTag, commitSecret, genesisAnchor, nextAnchor, nullifier } from './primitives.js';
 import { RequestPrivate, RequestProgram, RequestProof, RequestPublic, subsidyPeriodHolds } from './request.js';
-import { expiryOf } from './policy.js';
-import { PendingEscape, PendingEscapes, VAULT_URI, Vault, batchReducer, setupFields } from './vault.js';
+import { CURRENT_GENERATION, type Generation, expiryOf, generationOfCodeHash } from './policy.js';
+import { PendingEscape, PendingEscapes, VAULT_URI, Vault, batchReducer, setupFields, vaultBuild } from './vault.js';
 import { VaultKeeper, chainSlot, escapeEvents, pendingEscapesView, vaultView } from './vault-view.js';
 import { type Registry, deployRegistry, registerVault } from './vault-registry.js';
 import type { VaultMirror } from './vault-mirror.js';
@@ -35,6 +35,11 @@ export interface BuilderOptions {
   /** Mina GraphQL and archive endpoints, when not local. */
   mina?: string;
   archive?: string;
+  /**
+   * The published keys' `generations`. With them, a remote vault's generation is found by its code hash and the builder uses
+   * that generation's values, and refuses a vault whose code hash is in none. Without them every vault is the current generation's.
+   */
+  generations?: Record<string, { vault: { codeHash: string } }>;
 }
 
 type Params = Record<string, unknown>;
@@ -197,27 +202,44 @@ export async function createBuilder(options: BuilderOptions) {
   }
   const keeper = new VaultKeeper();
   let reducerCompiled = false;
-  WithdrawalProgram.setProofsEnabled(options.proofs);
-  RequestProgram.setProofsEnabled(options.proofs);
-  let requestVk: Awaited<ReturnType<typeof RequestProgram.compile>>['verificationKey'] | undefined;
-  let withdrawalCompiled = false;
-  let vaultCompiled = false;
+  /** What one vault generation's proving needs: its programs and vault, and what of them is compiled. */
+  const generations = new Map<string, ReturnType<typeof vaultBuild> & {
+    requestVk?: Awaited<ReturnType<ReturnType<typeof vaultBuild>['RequestProgram']['compile']>>['verificationKey'];
+    withdrawalCompiled: boolean;
+    vaultCompiled: boolean;
+  }>();
+  const generationOfVault = new WeakMap<object, Generation>();
+  function forGeneration(gen: Generation) {
+    let g = generations.get(gen.id);
+    if (!g) {
+      g = { ...vaultBuild(gen), withdrawalCompiled: false, vaultCompiled: false };
+      g.WithdrawalProgram.setProofsEnabled(options.proofs);
+      g.RequestProgram.setProofsEnabled(options.proofs);
+      generations.set(gen.id, g);
+    }
+    return g;
+  }
+  forGeneration(CURRENT_GENERATION);
+  /** The generation `vault` was loaded with. */
+  const generationFor = (vault: object) => generationOfVault.get(vault) ?? CURRENT_GENERATION;
   let registry: Registry | undefined;
 
   /** Compiles what proving needs, once: a request or withdrawal proof, and a vault transaction when the chain checks proofs. */
-  async function compile(o: { request?: boolean; withdrawal?: boolean; vault?: boolean }) {
-    if (o.request && options.proofs && !requestVk) requestVk = (await RequestProgram.compile()).verificationKey;
-    if (o.withdrawal && options.proofs && !withdrawalCompiled) {
-      await WithdrawalProgram.compile();
-      withdrawalCompiled = true;
+  async function compile(gen: Generation, o: { request?: boolean; withdrawal?: boolean; vault?: boolean }) {
+    const g = forGeneration(gen);
+    if (o.request && options.proofs && !g.requestVk) g.requestVk = (await g.RequestProgram.compile()).verificationKey;
+    if (o.withdrawal && options.proofs && !g.withdrawalCompiled) {
+      await g.WithdrawalProgram.compile();
+      g.withdrawalCompiled = true;
     }
-    if (o.vault && Mina.getProofsEnabled() && !vaultCompiled) {
-      await batchReducer.compile();
-      if (!withdrawalCompiled) await WithdrawalProgram.compile();
+    if (o.vault && Mina.getProofsEnabled() && !g.vaultCompiled) {
+      await g.batchReducer.compile();
+      if (!g.withdrawalCompiled) await g.WithdrawalProgram.compile();
       // The vault's defeat and raise verify request proofs.
-      if (!requestVk) requestVk = (await RequestProgram.compile()).verificationKey;
-      await Vault.compile();
-      vaultCompiled = withdrawalCompiled = reducerCompiled = true;
+      if (!g.requestVk) g.requestVk = (await g.RequestProgram.compile()).verificationKey;
+      await g.Vault.compile();
+      g.vaultCompiled = g.withdrawalCompiled = true;
+      if (gen.id === CURRENT_GENERATION.id) reducerCompiled = true;
     }
   }
 
@@ -230,11 +252,26 @@ export async function createBuilder(options: BuilderOptions) {
     }
   }
 
-  /** The vault at `address`, with its accounts fetched when the chain is remote. */
+  /**
+   * The vault at `address`, with its accounts fetched when the chain is remote, as its generation's class: the generation
+   * is found by the vault's code hash, and a hash in none is refused.
+   */
   async function loadVault(address: unknown, others: PublicKey[] = []) {
-    const vault = new Vault(publicKey(address, 'vault'));
-    await fetchAccounts([vault.address, ...others]);
-    batchReducer.setContractInstance(vault);
+    const at = publicKey(address, 'vault');
+    await fetchAccounts([at, ...others]);
+    let gen = CURRENT_GENERATION;
+    if (options.generations) {
+      const codeHash = Mina.getAccount(at).zkapp?.verificationKey?.hash.toString() ?? 'none';
+      try {
+        gen = generationOfCodeHash(codeHash, options.generations);
+      } catch (e) {
+        throw bad(`vault: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    const g = forGeneration(gen);
+    const vault = new g.Vault(at);
+    generationOfVault.set(vault, gen);
+    g.batchReducer.setContractInstance(vault);
     return vault;
   }
 
@@ -268,14 +305,14 @@ export async function createBuilder(options: BuilderOptions) {
     const at = field(p.escape, 'escape');
     let evidence: RequestProof;
     try {
-      evidence = await RequestProof.fromJSON(obj(p.evidence, 'evidence') as never);
+      evidence = await forGeneration(generationFor(vault)).RequestProof.fromJSON(obj(p.evidence, 'evidence') as never);
     } catch {
       throw bad('evidence: not a request proof');
     }
     const { escapes, records } = await pendingEscapes(vault);
     const escape = records.get(at.toBigInt());
     if (!escape) throw bad('escape: the vault holds no pending escape at this nullifier');
-    const zkappCommand = await transaction(payer, () => call(vault, escape, evidence, escapes.clone()));
+    const zkappCommand = await transaction(vault, payer, () => call(vault, escape, evidence, escapes.clone()));
     return { zkappCommand, hash: await Mina.Transaction.hash(zkappCommand) };
   }
 
@@ -295,22 +332,23 @@ export async function createBuilder(options: BuilderOptions) {
       validUntil: Field(escape?.validUntil ?? 0n), requestTime: Field(requestTime), conceded: Field(escape?.conceded ?? 0n),
     });
     const priv = new WithdrawalPrivate({
-      secret: n.secret, index: Field(index), depositTime: Field(n.depositTime), expiry: Field(expiryOf(n.depositTime)),
+      secret: n.secret, index: Field(index), depositTime: Field(n.depositTime), expiry: Field(expiryOf(n.depositTime, generationFor(vault))),
       path: mirror.tree.witness(index), blinding: s.blinding, anchor: s.anchor, isGenesis: s.isGenesis,
       signature: s.signature, prevNullifier: s.prevNullifier, prevAnchor: s.prevAnchor,
     });
+    const { WithdrawalProgram } = forGeneration(generationFor(vault));
     const method = kind === WithdrawalKind.escape ? WithdrawalProgram.escape : WithdrawalProgram.mutualClose;
     const proof = await proving(async () => {
-      await compile({ withdrawal: true });
+      await compile(generationFor(vault), { withdrawal: true });
       return (await method(pub, priv)).proof;
     });
     return { proof, mirror, publicInputFields: fieldStrings(WithdrawalPublic.toFields(pub)) };
   }
 
   /** A signed, proved transaction from `feePayer`, as Mina GraphQL's `sendZkapp` takes it. */
-  async function transaction(payer: ReturnType<typeof feePayer>, body: () => Promise<void>) {
+  async function transaction(vault: object, payer: ReturnType<typeof feePayer>, body: () => Promise<void>) {
     const tx = await proving(async () => {
-      await compile({ vault: true });
+      await compile(generationFor(vault), { vault: true });
       const tx = await Mina.transaction({ sender: payer.sender, fee: payer.fee }, body);
       await tx.prove();
       return tx;
@@ -370,7 +408,7 @@ export async function createBuilder(options: BuilderOptions) {
       const commitment = field(p.commitment, 'commitment');
       const size = UInt64.from(u64(p.size, 'size'));
       const depositTime = UInt64.from(u64(p.depositTime, 'depositTime'));
-      const zkappCommand = await transaction(payer, async () => {
+      const zkappCommand = await transaction(vault, payer, async () => {
         await vault.deposit(commitment, size, depositTime);
       });
       return { zkappCommand };
@@ -380,7 +418,7 @@ export async function createBuilder(options: BuilderOptions) {
       const vault = await loadVault(p.vault, [payer.sender]);
       const clearance = signature(p.clearance, 'clearance');
       const { proof, mirror, publicInputFields } = await withdrawal(WithdrawalKind.mutualClose, p, vault, secrets);
-      const zkappCommand = await transaction(payer, async () => {
+      const zkappCommand = await transaction(vault, payer, async () => {
         await vault.mutualClose(proof, clearance, mirror.nullifiers.clone());
       });
       return { zkappCommand, publicInputFields };
@@ -390,7 +428,7 @@ export async function createBuilder(options: BuilderOptions) {
       const vault = await loadVault(p.vault, [payer.sender]);
       const escape = { conceded: u64(p.conceded, 'conceded'), validUntil: u64(p.validUntil, 'validUntil') };
       const { proof, mirror, publicInputFields } = await withdrawal(WithdrawalKind.escape, p, vault, secrets, escape);
-      const zkappCommand = await transaction(payer, async () => {
+      const zkappCommand = await transaction(vault, payer, async () => {
         await vault.escape(proof, mirror.nullifiers.clone());
       });
       return { zkappCommand, publicInputFields };
@@ -444,14 +482,14 @@ export async function createBuilder(options: BuilderOptions) {
     });
     const priv = new RequestPrivate({
       secret: n.secret, index: Field(index), size: Field(n.size), depositTime: Field(n.depositTime),
-      expiry: Field(expiryOf(n.depositTime)), path: mirror.tree.witness(index), balance: Field(s.balance),
+      expiry: Field(expiryOf(n.depositTime, generationFor(vault))), path: mirror.tree.witness(index), balance: Field(s.balance),
       blinding: s.blinding, rerandomBlinding: rerandom, anchor: s.anchor, isGenesis: s.isGenesis, signature: s.signature,
       prevNullifier: s.prevNullifier, prevAnchor: s.prevAnchor, edge: context.edge, sessionKeyX: context.sessionKeyX,
       sessionKeyIsOdd: context.sessionKeyIsOdd, requestExpiry: context.expiry,
     });
     const proof = await proving(async () => {
-      await compile({ request: true });
-      return (await RequestProgram.unsubsidised(pub, priv)).proof;
+      await compile(generationFor(vault), { request: true });
+      return (await forGeneration(generationFor(vault)).RequestProgram.unsubsidised(pub, priv)).proof;
     });
     return { publicInputFields: fieldStrings(RequestPublic.toFields(pub)), proof: proof.toJSON() };
   };
@@ -469,9 +507,9 @@ export async function createBuilder(options: BuilderOptions) {
     }
     const vaultCreation = p.vaultCreation === undefined ? undefined : u64(p.vaultCreation, 'vaultCreation');
     if (!options.proofs) throw bad('verifyRequestProof needs --proofs=on');
-    await compile({ request: true });
+    await compile(CURRENT_GENERATION, { request: true });
     const periodHolds = vaultCreation === undefined || subsidyPeriodHolds(proof.publicInput, vaultCreation);
-    return { valid: periodHolds && (await verify(proof, requestVk!)) };
+    return { valid: periodHolds && (await verify(proof, forGeneration(CURRENT_GENERATION).requestVk!)) };
   };
 
   /** Hashes of the commands `local.graphql` has landed. */

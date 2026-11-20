@@ -31,6 +31,9 @@ pub struct Options {
     pub journal: PathBuf,
     /// The o1js package, with its dependencies installed, that runs the transaction builder.
     pub o1js: PathBuf,
+    /// The published keys (`npm run keys`), if given: the transaction builder then finds the vault's generation by its
+    /// code hash and refuses a vault in none (ADR 0015). Without them it takes the vault to be the current generation's.
+    pub keys: Option<PathBuf>,
     pub config: Config,
     /// The pause between two passes.
     pub interval: Duration,
@@ -57,6 +60,7 @@ pub const FLAGS: &[Flag] = &[
     flag("--evidence", "<file>", true),
     flag("--journal", "<file>", true),
     flag("--o1js", "<dir>", true),
+    flag("--keys", "<verification-keys.json>", false),
     flag("--socks5", "<host:port>", false),
     flag("--fee", "<nanomina>", false),
     flag("--min-lead", "<slots>", false),
@@ -116,6 +120,7 @@ impl Options {
             evidence: need("--evidence")?.into(),
             journal: need("--journal")?.into(),
             o1js: need("--o1js")?.into(),
+            keys: get("--keys").map(PathBuf::from),
             config: Config { min_lead: number("--min-lead", 40)? },
             interval: seconds("--interval", 60)?,
             builder_timeout: seconds("--builder-timeout", 900)?,
@@ -130,7 +135,16 @@ pub fn run(options: Options) -> Result<(), String> {
     let graphql = Arc::new(HttpGraphql::new(options.endpoints.clone())?);
     let relay = Relay::start(graphql.clone()).map_err(|e| format!("relay: {e}"))?;
     let (mina, archive) = (relay.mina_url(), relay.archive_url());
-    let mut builder = TxBuilder::spawn(node_command(&options.o1js, &["--mina", &mina, "--archive", &archive]))
+    // The builder runs in the o1js directory, so a relative path is made absolute first.
+    let keys = match &options.keys {
+        Some(k) => Some(std::path::absolute(k).map_err(|e| format!("--keys: {e}"))?.to_string_lossy().into_owned()),
+        None => None,
+    };
+    let mut flags = vec!["--mina", &mina, "--archive", &archive];
+    if let Some(keys) = &keys {
+        flags.extend(["--keys", keys]);
+    }
+    let mut builder = TxBuilder::spawn(node_command(&options.o1js, &flags))
         .map_err(|e| format!("transaction builder: {e}"))?;
     builder.set_timeout(Some(options.builder_timeout));
     let builder = SharedBuilder { builder: Rc::new(RefCell::new(builder)), unreachable: Rc::default() };

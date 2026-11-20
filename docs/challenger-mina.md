@@ -96,6 +96,7 @@ ZK_TOON_FEE_PAYER_KEY=EK… zk-toon-challenger \
 | `--evidence` | required | the zk edge's evidence file, read as it grows |
 | `--journal` | required | created if missing; keep it across restarts |
 | `--o1js` | required | the o1js package (`npm ci` done) that runs the transaction builder |
+| `--keys` | none | the published keys (`npm run keys`, `docs/verification-keys.md`), passed to the builder: it finds the vault's generation by its code hash and refuses a vault in none. Without it the vault is taken to be the current generation's |
 | `--socks5` | none | reach both endpoints, and the builder, through this proxy only |
 | `--fee` | 100000000 | nanomina per defeat or raise |
 | `--min-lead` | 40 | the fewest slots before a deadline at which it still submits (an hour at 90 s slots) |

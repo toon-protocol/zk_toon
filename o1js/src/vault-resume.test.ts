@@ -4,7 +4,7 @@ import * as policy from './policy.js';
 import { balanceOf, now, vaultHarness } from './vault-harness.js';
 import { RequestProgram } from './request.js';
 import { WithdrawalKind, WithdrawalProgram } from './withdrawal.js';
-import { batchReducer, vaultBuild } from './vault.js';
+import { batchReducer, vaultForkBuild } from './vault.js';
 
 const [SMALL] = policy.DEPOSIT_SIZES;
 const MINA = 1_000_000_000n;
@@ -18,9 +18,9 @@ RequestProgram.setProofsEnabled(false);
 const { payer, alice, advance, freshVault } = vaultHarness(Local);
 
 /** A build for fork 1. A vault registered through the registry records fork 0, as a re-keyed vault's state would. */
-const Fork1 = vaultBuild(1n);
+const Fork1 = vaultForkBuild(1n);
 /** A build for fork 1 whose `init` records fork 1, as a new vault's does. */
-const NewFork1 = vaultBuild(1n);
+const NewFork1 = vaultForkBuild(1n);
 
 
 beforeAll(async () => {
