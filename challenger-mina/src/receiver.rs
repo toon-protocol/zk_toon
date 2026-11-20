@@ -3,7 +3,7 @@
 //! it as it reads the zk edge's own file. The latest accepted signature is kept next to the copy.
 //! The framing and signature checks are `zk_evidence::check_push`'s.
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -17,6 +17,8 @@ use zk_evidence::{write_header, Checkpoint, FileCopy, Push, PushRefusal};
 const NETWORK: NetworkId = NetworkId::TESTNET;
 /// The most one push may carry.
 const MAX_PUSH: usize = 16 << 20;
+/// The longest request or header line read.
+const MAX_LINE: u64 = 8 << 10;
 /// How long a connection may sit idle before it is dropped.
 const IDLE: Duration = Duration::from_secs(30);
 
@@ -47,6 +49,10 @@ fn signature_path(copy: &Path) -> PathBuf {
     let mut name = copy.as_os_str().to_owned();
     name.push(".sig");
     name.into()
+}
+
+fn failed(what: &'static str) -> impl Fn(std::io::Error) -> String {
+    move |e| format!("{what}: {e}")
 }
 
 fn sync_dir(path: &Path) -> std::io::Result<()> {
@@ -112,19 +118,33 @@ impl Receiver {
         }
     }
 
+    /// Appends the push and saves its signature. Until the signature is in place, a failure cuts the
+    /// copy back to its old length, so it only ever grows by whole records its signature covers.
     fn append(&mut self, push: &Push, extended: FileCopy) -> Result<(), String> {
-        let failed = |what: &'static str| move |e: std::io::Error| format!("{what}: {e}");
-        let mut file = OpenOptions::new().append(true).open(&self.path).map_err(failed("copy"))?;
-        file.write_all(&push.bytes).and_then(|_| file.sync_all()).map_err(failed("copy"))?;
+        let mut file = OpenOptions::new().write(true).open(&self.path).map_err(failed("copy"))?;
+        if let Err(e) = self.write_push(&mut file, push, extended) {
+            return Err(match file.set_len(self.copy.length).and_then(|_| file.sync_all()) {
+                Ok(()) => e,
+                Err(cut) => format!("{e}; cutting the copy back to {} bytes: {cut}", self.copy.length),
+            });
+        }
         self.copy = extended;
-        // The signature of the checkpoint at the new length, replaced whole.
+        sync_dir(&self.signature_path).map_err(failed("signature"))
+    }
+
+    /// Writes the push's bytes at the copy's length, then replaces the saved signature whole with the
+    /// signature of the checkpoint at the new length.
+    fn write_push(&self, file: &mut File, push: &Push, extended: FileCopy) -> Result<(), String> {
+        file.seek(SeekFrom::Start(self.copy.length))
+            .and_then(|_| file.write_all(&push.bytes))
+            .and_then(|_| file.sync_all())
+            .map_err(failed("copy"))?;
         let saved = Push { offset: extended.length, bytes: Vec::new(), signature: push.signature.clone() };
         let temp = self.signature_path.with_extension("sig.tmp");
-        let mut file = File::create(&temp).map_err(failed("signature"))?;
-        file.write_all(&saved.encode())
-            .and_then(|_| file.sync_all())
+        let mut sig = File::create(&temp).map_err(failed("signature"))?;
+        sig.write_all(&saved.encode())
+            .and_then(|_| sig.sync_all())
             .and_then(|_| fs::rename(&temp, &self.signature_path))
-            .and_then(|_| sync_dir(&self.signature_path))
             .map_err(failed("signature"))
     }
 
@@ -173,6 +193,15 @@ fn respond(out: &mut TcpStream, status: &str, body: &str) -> std::io::Result<()>
     out.flush()
 }
 
+/// Reads one request or header line of at most [`MAX_LINE`] bytes. `Ok(0)` is the end of the stream.
+fn read_line(reader: &mut BufReader<TcpStream>, line: &mut String) -> std::io::Result<usize> {
+    let n = reader.by_ref().take(MAX_LINE).read_line(line)?;
+    if n > 0 && !line.ends_with('\n') {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "request line too long or cut short"));
+    }
+    Ok(n)
+}
+
 /// Answers the requests on one connection.
 fn serve(stream: TcpStream, receiver: &Mutex<Receiver>, log: &dyn Fn(&str)) -> std::io::Result<()> {
     stream.set_read_timeout(Some(IDLE))?;
@@ -180,22 +209,28 @@ fn serve(stream: TcpStream, receiver: &Mutex<Receiver>, log: &dyn Fn(&str)) -> s
     let mut out = stream;
     loop {
         let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 {
+        if read_line(&mut reader, &mut line)? == 0 {
             return Ok(());
         }
         let method = line.split_whitespace().next().unwrap_or("").to_string();
-        let mut length = 0usize;
+        let mut length = Some(0usize);
+        let mut chunked = false;
         let mut close = line.trim_end().ends_with("HTTP/1.0");
         loop {
             let mut header = String::new();
-            reader.read_line(&mut header)?;
+            if read_line(&mut reader, &mut header)? == 0 {
+                return Ok(());
+            }
             let header = header.trim_end();
             if header.is_empty() {
                 break;
             }
             if let Some((name, value)) = header.split_once(':') {
                 if name.eq_ignore_ascii_case("content-length") {
-                    length = value.trim().parse().unwrap_or(0);
+                    length = value.trim().parse().ok();
+                }
+                if name.eq_ignore_ascii_case("transfer-encoding") {
+                    chunked = true;
                 }
                 if name.eq_ignore_ascii_case("connection") && value.trim().eq_ignore_ascii_case("close") {
                     close = true;
@@ -206,6 +241,10 @@ fn serve(stream: TcpStream, receiver: &Mutex<Receiver>, log: &dyn Fn(&str)) -> s
             respond(&mut out, "405 Method Not Allowed", r#"{"error":"POST an encoded push"}"#)?;
             return Ok(());
         }
+        let Some(length) = length.filter(|_| !chunked) else {
+            respond(&mut out, "411 Length Required", r#"{"error":"send the push with a Content-Length"}"#)?;
+            return Ok(());
+        };
         if length > MAX_PUSH {
             log(&format!("push-refused: {length} bytes is over the {MAX_PUSH} byte limit"));
             respond(&mut out, "413 Payload Too Large", r#"{"error":"push too large"}"#)?;

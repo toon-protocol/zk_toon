@@ -207,3 +207,44 @@ fn the_listener_replies_with_the_length_and_logs_a_line_for_a_refusal() {
     assert_eq!(refusals.len(), 1, "{refusals:?}");
     assert!(refusals[0].contains("BadSignature"));
 }
+
+#[test]
+fn each_forged_push_gets_its_reply_over_http() {
+    let d = dir("http-forged");
+    let path = d.join("copy");
+    let listener = Listener::start("127.0.0.1:0".parse().unwrap(), open(&path).unwrap(), |_| {}).unwrap();
+    let addr = listener.local_addr();
+    assert_eq!(post(addr, &good(&FileCopy::empty(), 1).encode()).0, 200);
+    let before = (std::fs::read(&path).unwrap(), std::fs::read(d.join("copy.sig")).unwrap());
+    let copy = FileCopy::of_file(&before.0).unwrap();
+
+    let other_vault = CompressedPubKey { x: vault_key().x + Field::from(1u64), is_odd: vault_key().is_odd };
+    let mut torn = close(2);
+    torn.pop();
+    for p in [
+        push(&copy, &close(2), &vault_key(), &keypair(1)),
+        push(&copy, &close(2), &other_vault, &state_key()),
+        push(&copy, &torn, &vault_key(), &state_key()),
+    ] {
+        assert_eq!(post(addr, &p.encode()).0, 400, "{p:?}");
+        assert_eq!((std::fs::read(&path).unwrap(), std::fs::read(d.join("copy.sig")).unwrap()), before);
+    }
+    let mut stale = good(&copy, 2);
+    stale.offset = 0;
+    assert_eq!(post(addr, &stale.encode()), (200, format!(r#"{{"length":{}}}"#, copy.length)));
+    assert_eq!((std::fs::read(&path).unwrap(), std::fs::read(d.join("copy.sig")).unwrap()), before);
+}
+
+#[test]
+fn a_push_without_a_content_length_is_refused() {
+    let d = dir("http-length");
+    let listener = Listener::start("127.0.0.1:0".parse().unwrap(), open(&d.join("copy")).unwrap(), |_| {}).unwrap();
+    for headers in ["Content-Length: lots", "Transfer-Encoding: chunked"] {
+        let mut s = TcpStream::connect(listener.local_addr()).unwrap();
+        write!(s, "POST /evidence HTTP/1.1\r\n{headers}\r\nConnection: close\r\n\r\n").unwrap();
+        let mut text = String::new();
+        s.read_to_string(&mut text).unwrap();
+        assert!(text.starts_with("HTTP/1.1 411"), "{text}");
+    }
+    assert_eq!(std::fs::read(d.join("copy")).unwrap(), zk_evidence::write_header());
+}

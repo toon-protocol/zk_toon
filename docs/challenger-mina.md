@@ -149,7 +149,8 @@ against the copy and the vault's state key, read from the vault at start, and ap
 | extends the copy exactly, whole records, valid signature | the bytes are appended and fsynced | `200`, `{"length": <new length>}` |
 | offset other than the copy's length (a push sent twice, or the copy is behind or ahead) | unchanged | `200`, `{"length": <current length>}`: resend from there. Not an error |
 | torn record, a record that doesn't decode, no records, bad signature (another key, another vault), or not a push | unchanged | `400`, `{"error": …}` |
-| the copy can't be written | unchanged or as before | `500` |
+| no `Content-Length`, or a chunked body | unchanged | `411` |
+| the copy or its signature can't be written | cut back to its old length | `500` |
 
 The latest accepted signature is saved next to the copy, in `<evidence>.sig` (a push with no bytes, at
 the copy's length). The copy only ever grows by whole records, and `FileEvidence` reads it as it
