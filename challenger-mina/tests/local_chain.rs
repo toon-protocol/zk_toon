@@ -13,17 +13,18 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use common::keypair;
-use mina_signer::{CompressedPubKey, Keypair};
+use mina_signer::{CompressedPubKey, Keypair, NetworkId};
 use serde_json::{json, Value};
 use zk_note::balance::{commit, Scalar};
 use zk_note::policy::{DEPOSIT_SIZES, REQUEST_MAX_AGE_SLOTS, TIERS};
 use zk_note::state::{sign_state, StateMessage};
 use zk_note::{commit_secret, genesis_anchor, next_anchor, nullifier, Field};
-use zk_toon_challenger::{EscapeId, PortError, VaultChainPort};
-use zk_toon_challenger_mina::{nullifier_of_field, Endpoint, Graphql, MinaChain, RequestProofs, Settings, TxSource};
+use zk_evidence::{extend_running_hash, frame, scan_records, write_header, Checkpoint, Close, FileCopy, Grant, Push, Record};
+use zk_toon_challenger::{Action, Challenger, Config, EscapeId, FileEvidence, MemoryJournal, PortError, ProofVerifier, Report, VaultChainPort};
+use zk_toon_challenger_mina::{nullifier_of_field, Endpoint, Graphql, Listener, MinaChain, Receiver, RequestProofs, Settings, TxSource};
 use zk_toon_tx_builder::{
     node_command, Challenge, Defeat, Deposit, Escape, FeePayer, Note, NoteState, Raise, RequestProofInput,
-    SignedState, TxBuilder,
+    RequestProof, SignedState, TxBuilder,
 };
 
 const SMALL: u64 = DEPOSIT_SIZES[0];
@@ -144,9 +145,14 @@ fn escape(b: &mut TxBuilder, c: &Chain, note: &Note, state: NoteState, conceded:
 
 /// A request proof at `state`, recorded as the zk edge records it when it grants an allowance.
 fn record_request(b: &mut TxBuilder, c: &Chain, note: &Note, state: NoteState, tier: u64, evidence: &Recorded) {
+    let proof = request(b, c, note, state, tier);
+    evidence.0.borrow_mut().entry(nullifier_of_field(proof.public.nullifier)).or_default().push(proof.proof);
+}
+
+/// A request proof at `state` for `tier`.
+fn request(b: &mut TxBuilder, c: &Chain, note: &Note, state: NoteState, tier: u64) -> RequestProof {
     let request_time = b.local().slot().unwrap();
-    let proof = b
-        .request_proof(&RequestProofInput {
+    b.request_proof(&RequestProofInput {
             vault: c.vault.clone(),
             note: note.clone(),
             state,
@@ -156,8 +162,7 @@ fn record_request(b: &mut TxBuilder, c: &Chain, note: &Note, state: NoteState, t
             session_key: keypair(777).public.into_compressed(),
             request_expiry: request_time + 60_000,
         })
-        .unwrap();
-    evidence.0.borrow_mut().entry(nullifier_of_field(proof.public.nullifier)).or_default().push(proof.proof);
+        .unwrap()
 }
 
 #[test]
@@ -253,4 +258,112 @@ fn record_fixture(graphql: &LocalGraphql, vault: &CompressedPubKey) {
     });
     let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/recorded-vault.json"));
     std::fs::write(path, serde_json::to_string_pretty(&fixture).unwrap() + "\n").unwrap();
+}
+
+/// Accepts every proof: the local chain runs with proofs off, so there is nothing to verify.
+struct AcceptAll;
+
+impl ProofVerifier for AcceptAll {
+    fn verifies(&self, _: &[u8]) -> Result<bool, PortError> {
+        Ok(true)
+    }
+}
+
+/// The stand-in zk edge's pushes: each carries `records` after the copy `at`, signed for `vault`.
+fn push_of(at: &FileCopy, records: &[Record], vault: &CompressedPubKey, state_key: &Keypair) -> (Push, FileCopy) {
+    let bytes: Vec<u8> = records.iter().flat_map(|r| frame(&r.encode().unwrap())).collect();
+    let scan = scan_records(&bytes, 0).unwrap();
+    let after = FileCopy {
+        length: at.length + bytes.len() as u64,
+        running_hash: scan.records.iter().fold(at.running_hash, |h, r| extend_running_hash(&h, r.payload)),
+    };
+    let checkpoint = Checkpoint { vault: vault.clone(), length: after.length, running_hash: after.running_hash };
+    (Push { offset: at.length, bytes, signature: checkpoint.sign(NetworkId::TESTNET, state_key) }, after)
+}
+
+fn grant_of(proof: &RequestProof, id: &[u8]) -> Record {
+    Record::Grant(Grant {
+        proof: serde_json::to_vec(&proof.proof).unwrap(),
+        allowance_id: id.to_vec(),
+        session_key_x: Field::from(1u64),
+        session_key_is_odd: false,
+        expires_at: 1_700_000_900_000,
+        granted_at: 1_700_000_100_000,
+    })
+}
+
+/// #107's test: the zk edge pushes its grant and close records to the challenger's listener and
+/// stops, and its own file is deleted. The challenger decides from its evidence copy alone.
+#[test]
+fn with_the_zk_edge_gone_the_challenger_acts_from_its_copy() {
+    let o1js = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../o1js"));
+    let builder: Shared = Rc::new(RefCell::new(
+        TxBuilder::spawn(node_command(&o1js, &["--local", "--proofs=off"])).expect("start the transaction builder"),
+    ));
+    let mut b = builder.borrow_mut();
+    let c = chain(&mut b);
+
+    let stale = deposit_note(&mut b, &c, 7007);
+    let (genesis, stale_at) = state(&c, &stale, 0, SMALL);
+    escape(&mut b, &c, &stale, genesis, 0);
+    let low = deposit_note(&mut b, &c, 8008);
+    let (signed, low_at) = state(&c, &low, 1, 3 * MINA);
+    escape(&mut b, &c, &low, signed.clone(), MINA / 100);
+    b.local().reduce(&c.vault).unwrap();
+
+    // The zk edge granted the stale note's successor an allowance, and the low note's escaping state
+    // one of the top tier that closed at a charge of half a MINA.
+    let (successor, _) = state(&c, &stale, 1, 4 * MINA);
+    let successor_proof = request(&mut b, &c, &stale, successor, TIERS[2]);
+    let low_proof = request(&mut b, &c, &low, signed, TIERS[2]);
+    drop(b);
+
+    let dir = std::env::temp_dir().join(format!("zk-edge-down-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (copy_path, edge_path) = (dir.join("copy"), dir.join("edge"));
+
+    let receiver = Receiver::open(&copy_path, c.vault.clone(), &c.state_key.public.into_compressed()).unwrap();
+    let listener = Listener::start("127.0.0.1:0".parse().unwrap(), receiver, |_| {}).unwrap();
+    let url = format!("http://{}/", listener.local_addr());
+
+    let mut edge = std::fs::File::create(&edge_path).unwrap();
+    std::io::Write::write_all(&mut edge, &write_header()).unwrap();
+    let mut at = FileCopy::empty();
+    let close = Record::Close(Close { nullifier: low_proof.public.nullifier, allowance_id: b"low".to_vec(), charge: MINA / 2 });
+    for records in [vec![grant_of(&successor_proof, b"stale"), grant_of(&low_proof, b"low")], vec![close]] {
+        let (push, after) = push_of(&at, &records, &c.vault, &c.state_key);
+        std::io::Write::write_all(&mut edge, &push.bytes).unwrap();
+        let reply = ureq::post(&url).send_bytes(&push.encode()).unwrap().into_string().unwrap();
+        assert_eq!(reply, format!(r#"{{"length":{}}}"#, after.length));
+        at = after;
+    }
+    // The zk edge stops, and its file goes with its host.
+    drop(edge);
+    std::fs::remove_file(&edge_path).unwrap();
+    assert_eq!(std::fs::read(&copy_path).unwrap().len() as u64, at.length);
+
+    let evidence = Rc::new(FileEvidence::new(&copy_path, AcceptAll));
+    let graphql = LocalGraphql { builder: builder.clone(), recorded: RefCell::default() };
+    let settings = Settings { vault: c.vault.clone(), fee_payer: c.payer.clone(), poll: Duration::from_millis(50) };
+    let port = MinaChain::new(settings, &graphql, SharedTxs(builder.clone()), evidence.clone()).unwrap();
+    let mut challenger = Challenger::new(port, evidence, MemoryJournal::default(), Config { min_lead: 0 });
+
+    let now = challenger.chain.now().unwrap();
+    let reports = challenger.tick(now).unwrap();
+    let submitted: Vec<_> = reports
+        .iter()
+        .filter_map(|r| match r {
+            Report::Submitted { escape, action } => Some((*escape, action.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reports.len(), 4, "{reports:?}");
+    assert!(submitted.contains(&(nullifier_of_field(stale_at), Action::Defeat)), "{reports:?}");
+    assert!(submitted.contains(&(nullifier_of_field(low_at), Action::Raise { to: MINA / 2 })), "{reports:?}");
+
+    builder.borrow_mut().local().reduce(&c.vault).unwrap();
+    let escapes = challenger.chain.escapes().unwrap();
+    assert_eq!(escapes.len(), 1, "the defeated escape is gone");
+    assert_eq!((escapes[0].id, escapes[0].conceded), (nullifier_of_field(low_at), MINA / 2));
 }
