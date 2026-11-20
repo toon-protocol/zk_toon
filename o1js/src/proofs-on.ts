@@ -7,6 +7,7 @@ export const PROOFS_ON = {
   subsidised: 'proofs on: a subsidised request proof verifies',
   close: 'proofs on: a mutual close with a real withdrawal proof pays at the reduce',
   escape: 'proofs on: an escape with a real withdrawal proof is bound to its destination, and pays it after the window',
+  closeFresh: 'proofs on: a mutual close with a real withdrawal proof to a fresh address opens its account at the reduce',
   defeat: 'proofs on: a real request proof at the next nullifier defeats an escape',
   reduceLimit: 'proofs on: a keeper reduces a vault with more action lists pending than a reduce takes',
   vault: 'proofs on: the vault compiles, and a deployed vault carries the published code hash',

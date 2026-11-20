@@ -62,6 +62,9 @@ Two holders sign.
 4. Run the two rounds of `zk-toon-upgrade-key sign`, exchanging encrypted files. The result is the signature
    `{"r", "s"}`, which the transaction builder's attach operation adds to the transaction.
 
+After a key install, the operator calls the vault's `resume` (ADR 0015). The rest of what happens around a fork is in
+`docs/hard-fork.md`.
+
 ## The pre-fork check
 
 **When:** within 7 days of a fork's stop slot being announced, and at least 42 days before that stop slot. That

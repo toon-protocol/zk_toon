@@ -218,4 +218,5 @@ fn policy_constants_match() {
     assert_eq!(tiers, policy::TIERS);
     let sizes: Vec<u64> = p["depositSizes"].as_array().unwrap().iter().map(u).collect();
     assert_eq!(sizes, policy::DEPOSIT_SIZES);
+    assert_eq!(policy::ACCOUNT_CREATION_FEE, u(&p["accountCreationFee"]));
 }

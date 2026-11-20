@@ -18,6 +18,8 @@ fn id(n: u8) -> Nullifier {
     id
 }
 
+const BIG: u64 = 1_000_000_000;
+
 fn esc(n: u8, conceded: u64, balance: u64, deadline: Slot) -> Escape {
     Escape { id: id(n), next_nullifier: id(n + 100), conceded, balance, deadline }
 }
@@ -34,22 +36,22 @@ pub fn run<H: Harness>() {
 
 fn reports_the_chain_time<H: Harness>() {
     assert_eq!(H::port(10, vec![]).now().unwrap(), 10);
-    assert_eq!(H::port(1_234, vec![esc(1, 5, 50, 2_000)]).now().unwrap(), 1_234);
+    assert_eq!(H::port(1_234, vec![esc(1, 5, 50 * BIG, 2_000)]).now().unwrap(), 1_234);
 }
 
 fn lists_open_escapes_with_deadlines<H: Harness>() {
-    let e = esc(1, 5, 50, 1_000);
+    let e = esc(1, 5, 50 * BIG, 1_000);
     let port = H::port(10, vec![e.clone()]);
     assert_eq!(port.escapes().unwrap(), vec![e]);
 }
 
 fn hides_escapes_past_their_deadline<H: Harness>() {
-    let port = H::port(1_000, vec![esc(1, 5, 50, 1_000)]);
+    let port = H::port(1_000, vec![esc(1, 5, 50 * BIG, 1_000)]);
     assert!(port.escapes().unwrap().is_empty());
 }
 
 fn defeat_closes_the_escape<H: Harness>() {
-    let mut port = H::port(10, vec![esc(1, 5, 50, 1_000), esc(2, 5, 50, 1_000)]);
+    let mut port = H::port(10, vec![esc(1, 5, 50 * BIG, 1_000), esc(2, 5, 50 * BIG, 1_000)]);
     port.submit_defeat(&id(1)).unwrap();
     let left = port.escapes().unwrap();
     assert_eq!(left.len(), 1);
@@ -58,15 +60,15 @@ fn defeat_closes_the_escape<H: Harness>() {
 }
 
 fn raise_lifts_the_concession<H: Harness>() {
-    let mut port = H::port(10, vec![esc(1, 5, 50, 1_000)]);
+    let mut port = H::port(10, vec![esc(1, 5, 50 * BIG, 1_000)]);
     port.submit_raise(&id(1), 20).unwrap();
     assert_eq!(port.escapes().unwrap()[0].conceded, 20);
 }
 
 fn raise_must_exceed_concession_and_fit_balance<H: Harness>() {
-    let mut port = H::port(10, vec![esc(1, 5, 50, 1_000)]);
+    let mut port = H::port(10, vec![esc(1, 5, 50 * BIG, 1_000)]);
     assert!(matches!(port.submit_raise(&id(1), 5), Err(PortError::Refused(_))));
-    assert!(matches!(port.submit_raise(&id(1), 51), Err(PortError::Refused(_))));
+    assert!(matches!(port.submit_raise(&id(1), 50 * BIG + 1), Err(PortError::Refused(_))));
     assert_eq!(port.escapes().unwrap()[0].conceded, 5);
 }
 

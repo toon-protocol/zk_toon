@@ -172,6 +172,7 @@ export function buildVectors() {
     requestMaxLeadSlots: policy.REQUEST_MAX_LEAD_SLOTS.toString(),
     tiers: policy.TIERS.map(String),
     depositSizes: policy.DEPOSIT_SIZES.map(String),
+    accountCreationFee: policy.ACCOUNT_CREATION_FEE.toString(),
   };
 
   const generators = {

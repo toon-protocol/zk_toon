@@ -80,7 +80,9 @@ requests take the same path and it never connects to an endpoint itself.
 
 The crate's binary, `zk-toon-challenger`, is the challenger as a service. It wires the decision core
 to `MinaChain`, the zk edge's evidence file (`FileEvidence`) and a journal file (`FileJournal`), and
-makes one pass every `--interval`:
+makes one pass every `--interval`. For now it reads the zk edge's evidence file on the zk edge's own
+host. ADR 0014 decides that each challenger will hold its own signed copy, pushed by the zk edge
+(#107):
 
 ```sh
 ZK_TOON_FEE_PAYER_KEY=EK… zk-toon-challenger \
