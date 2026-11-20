@@ -216,6 +216,26 @@ impl TxBuilder {
         Challenge::from_answer(self.call("raise", r.to_json())?)
     }
 
+    /// The unsigned delegation of a vault, and the full commitment the upgrade key signs.
+    pub fn prepare_delegation(&mut self, d: &Delegation) -> Result<Prepared, Error> {
+        Prepared::from_answer(self.call("prepareDelegation", d.to_json())?, &d.network)
+    }
+
+    /// The delegation with the upgrade key's signature and the fee payer's: ready to send.
+    pub fn attach_delegation(&mut self, a: &Attachment) -> Result<Transaction, Error> {
+        Transaction::from_answer(self.call("attachDelegation", a.to_json())?)
+    }
+
+    /// The unsigned install of a verification key, and the full commitment the upgrade key signs.
+    pub fn prepare_key_install(&mut self, k: &KeyInstall) -> Result<Prepared, Error> {
+        Prepared::from_answer(self.call("prepareKeyInstall", k.to_json())?, &k.network)
+    }
+
+    /// The key install with the upgrade key's signature and the fee payer's: ready to send.
+    pub fn attach_key_install(&mut self, a: &Attachment) -> Result<Transaction, Error> {
+        Transaction::from_answer(self.call("attachKeyInstall", a.to_json())?)
+    }
+
     /// A request proof for an allowance.
     pub fn request_proof(&mut self, r: &RequestProofInput) -> Result<RequestProof, Error> {
         RequestProof::from_answer(self.call("requestProof", r.to_json())?)

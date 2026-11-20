@@ -163,6 +163,47 @@ verifies against the request program's verification key, compiled by the builder
 (`subsidyPeriodHolds` in `o1js/src/request.ts`, `RequestPublic::check_subsidy_period` in zk-note): the
 circuit can't check that, so a zk edge must. Needs `--proofs=on`.
 
+### The upgrade key's transactions
+
+The upgrade key is a 2-of-3 threshold key (ADR 0012) that nobody holds whole, so the builder can't sign
+with it. Each of its two transactions is two operations. **Prepare** builds the transaction unsigned and
+answers its full commitment; the share holders sign that commitment (the `upgrade-key` crate) under the
+network ID it was prepared for; **attach** puts their signature and the fee payer's in. The builder never
+holds a key share. Neither operation needs proofs, and neither compiles anything.
+
+The account update is authorised by signature with the full commitment and no nonce increment (ADR 0006),
+so the transaction's replay protection is the fee payer's nonce. Prepare it just before it is signed: a
+transaction that lands first moves the nonce and voids it.
+
+| param | |
+|---|---|
+| `feePayer` (prepare) | `{"publicKey": "B62…", "fee": "<nanomina>"}`: it pays, but isn't asked to sign yet. `fee` defaults to `"0"` |
+| `network` | `"testnet"` or `"mainnet"`: the domain the full commitment is signed under. Lightnet, devnet and LocalBlockchain are `"testnet"` |
+| `zkappCommand` (attach) | the unsigned command prepare answered |
+| `signature` (attach) | the upgrade key's, `{"r", "s"}`, over the full commitment, under the same `network` |
+| `feePayer` (attach) | `{"privateKey": "EK…"}`, the key of the fee payer prepare named; it signs for itself |
+
+`prepareDelegation` and `prepareKeyInstall` answer `{"zkappCommand": {…}, "fullCommitment": "<field>"}`.
+`attachDelegation` and `attachKeyInstall` answer `{"zkappCommand": {…}}`, ready for `sendZkapp`. Attach is
+`badInput` unless the command's fee payer is the key given and exactly one account update wants a signature, with
+the full commitment and no nonce increment. It doesn't check the upgrade key's signature: a node refuses a wrong one (another key, another
+commitment, the other network), and `local.submit` answers `rejected`.
+
+| op | params | what it does |
+|---|---|---|
+| `prepareDelegation` | `vault`, `delegate` | sets the vault's delegate. The vault is registry-deployed (ADR 0011), and the upgrade key is its account's key |
+| `prepareKeyInstall` | `account`, `verificationKey` | sets the verification key of a zkApp account whose `setVerificationKey` permission is `signature`. `verificationKey` is a key o1js compiled, `{"data": "<string>", "hash": "<field>"}` |
+
+Before a fork the vault's own `setVerificationKey` is `impossibleDuringCurrentVersion`, so a node refuses a
+key install on it; installing the vault's own key after a fork is the fork rehearsal (#109). A key install
+here is for an account whose permission is `signature`. In Rust: `TxBuilder::prepare_delegation`,
+`attach_delegation`, `prepare_key_install` and `attach_key_install`, with `Attachment` taking the
+`Prepared` transaction, the signature and the fee payer.
+
+`o1js/src/upgrade-key.lightnet.ts` does both on the proofs-on lightnet, signing with
+`cargo run --release -p upgrade-key --features test-utils --example threshold_sign` (`npm run test:lightnet`; the gate
+doesn't run it).
+
 ### Local chain operations (`--local` only)
 
 These let tests show that the vault accepts what the builder builds.
@@ -171,6 +212,11 @@ These let tests show that the vault accepts what the builder builds.
 |---|---|---|
 | `local.accounts` | | `{"accounts": [{"publicKey", "privateKey"}]}`, the funded test accounts |
 | `local.deployVault` | `stateKey`, `treasury` | `{"vault": <address>}`, deployed and set up |
+| `local.deployRegisteredVault` | `privateKey` | `{"vault": <address>}`: a vault at that test key's address, deployed through a registry (ADR 0011), not set up |
+| `local.deployStandIn` | `privateKey` | `{"account": <address>}`: an account at that test key's address whose `setVerificationKey` is `signature` |
+| `local.compileKey` | | `{"verificationKey": {"data", "hash"}}`, a small program's key, compiled by o1js |
+| `local.delegate` | `account` | `{"delegate": <address>\|null}` |
+| `local.verificationKey` | `account` | `{"verificationKey": {"data", "hash"}\|null}` |
 | `local.submit` | `zkappCommand` | `{}`, or a `rejected` failure |
 | `local.reduce` | `vault` | `{}`, after reducing every pending action as a keeper would |
 | `local.advance` | `slots` | `{}`, after moving the chain forward `slots` |

@@ -3557,6 +3557,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 name = "upgrade-key"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "ark-ec",
  "ark-ff",
  "frost-bluepallas",
@@ -4292,6 +4293,8 @@ dependencies = [
  "ark-ff",
  "mina-curves 0.6.0",
  "mina-signer 0.6.0",
+ "rand_chacha",
  "serde_json",
+ "upgrade-key",
  "zk-note",
 ]
