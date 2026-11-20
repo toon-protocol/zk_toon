@@ -80,9 +80,9 @@ requests take the same path and it never connects to an endpoint itself.
 
 The crate's binary, `zk-toon-challenger`, is the challenger as a service. It wires the decision core
 to `MinaChain`, the zk edge's evidence file (`FileEvidence`) and a journal file (`FileJournal`), and
-makes one pass every `--interval`. For now it reads the zk edge's evidence file on the zk edge's own
-host. ADR 0014 decides that each challenger will hold its own signed copy, pushed by the zk edge
-(#107):
+makes one pass every `--interval`. Without `--listen` it reads the zk edge's evidence file on the zk
+edge's own host. With `--listen` it holds its own signed copy of that file, pushed by the zk edge (ADR
+0014, #107; see "The evidence copy" below):
 
 ```sh
 ZK_TOON_FEE_PAYER_KEY=EK… zk-toon-challenger \
@@ -93,7 +93,8 @@ ZK_TOON_FEE_PAYER_KEY=EK… zk-toon-challenger \
 | flag | default | |
 |---|---|---|
 | `--vault`, `--mina`, `--archive` | required | the vault and the two GraphQL endpoints |
-| `--evidence` | required | the zk edge's evidence file, read as it grows |
+| `--evidence` | required | the zk edge's evidence file, read as it grows; with `--listen`, the challenger's evidence copy |
+| `--listen` | none | receive the zk edge's pushes at this address (`host:port`) into the evidence copy |
 | `--journal` | required | created if missing; keep it across restarts |
 | `--o1js` | required | the o1js package (`npm ci` done) that runs the transaction builder |
 | `--socks5` | none | reach both endpoints, and the builder, through this proxy only |
@@ -135,6 +136,39 @@ A pass reads the chain time again after each submission, since each waits for it
 later escape's `--min-lead` is measured from when the pass reaches it. A builder request that takes
 longer than `--builder-timeout` stops the builder, and the service exits as for a builder that died.
 
+## The evidence copy
+
+With `--listen <addr>`, `--evidence` names the challenger's **evidence copy**: byte for byte a prefix
+of the zk edge's evidence file, created with the file's header if missing. A listener on its own
+thread takes `POST` requests (any path) whose body is a `Push` as `zk-evidence` encodes it
+(`u64 LE offset ‖ u32 LE byte count ‖ bytes ‖ signature`). Each is checked with `zk_evidence::check_push`
+against the copy and the vault's state key, read from the vault at start, and applied one at a time:
+
+| push | copy | reply |
+|---|---|---|
+| extends the copy exactly, whole records, valid signature | the bytes are appended and fsynced | `200`, `{"length": <new length>}` |
+| offset other than the copy's length (a push sent twice, or the copy is behind or ahead) | unchanged | `200`, `{"length": <current length>}`: resend from there. Not an error |
+| torn record, a record that doesn't decode, no records, bad signature (another key, another vault), or not a push | unchanged | `400`, `{"error": …}` |
+| the copy can't be written | unchanged or as before | `500` |
+
+The latest accepted signature is saved next to the copy, in `<evidence>.sig` (a push with no bytes, at
+the copy's length). The copy only ever grows by whole records, and `FileEvidence` reads it as it
+reads the zk edge's file. There is no TLS: run the challenger behind a proxy or onion service.
+
+On start with `--listen`, the challenger checks the copy it has: its records scan intact (no torn
+tail), and its running hash matches the saved signature under the state key. A copy that fails, or a
+copy with records and no saved signature, stops it with exit status 2 and the reason. Without
+`--listen` none of this applies.
+
+The listener logs one line per push, alongside a pass's lines:
+
+| line | |
+|---|---|
+| `push-accepted <n> bytes, copy is <length> bytes` | appended |
+| `push-behind: copy is <length> bytes` | offset other than the copy's length; nothing appended |
+| `push-refused: <why>` | refused with `400`; nothing appended. `<why>` is `check_push`'s refusal (`BadSignature`, `NotWholeRecords`, …) |
+| `push-failed: <why>` | the copy or its signature couldn't be written |
+
 ## Secrets and logs
 
 The adapter logs nothing. Its only secret is the fee payer's key, which goes only to the builder's
@@ -151,6 +185,8 @@ vault's public transaction shows.
 | `tests/waiting.rs` | failed polls, a lost send answer, a failed transaction, a lost transaction past the deadline |
 | `tests/socks.rs` | direct GraphQL, SOCKS with remote resolution, no fallback when the proxy is down, the builder's relay |
 | `tests/local_chain.rs` | a defeat and a raise through the adapter, accepted by the vault on the builder's local chain |
+| `tests/receiver.rs` | the evidence copy: forged, torn, stale and repeated pushes leave it unchanged, a restart keeps it, a copy that fails its check is refused at start, and the listener's replies and log lines |
+| `tests/local_chain.rs` (edge down) | a stand-in zk edge pushes grant and close records, stops and loses its file; the challenger defeats and raises from its copy alone |
 | `tests/encoding.rs` | the nullifier encoding |
 | `tests/options.rs` | the service's flags and defaults, the fee payer's key taken only from the environment, and every flag in the usage and in this page |
 | `tests/reading.rs` (chain time, state key) | `now` is the recorded tip's slot; `state_key` is the key the recorded vault was set up with |

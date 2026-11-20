@@ -39,6 +39,7 @@ fn the_required_flags_and_the_defaults() {
     assert_eq!(o.o1js, PathBuf::from("/opt/zk_toon/o1js"));
     assert_eq!(o.config.min_lead, 40);
     assert_eq!(o.interval, Duration::from_secs(60));
+    assert_eq!(o.listen, None);
 }
 
 #[test]
@@ -53,6 +54,13 @@ fn the_optional_flags() {
     assert_eq!(o.interval, Duration::from_secs(3));
     assert_eq!(o.settings.poll, Duration::from_secs(2));
     assert_eq!(o.endpoints.timeout, Duration::from_secs(9));
+}
+
+#[test]
+fn listen_takes_an_address() {
+    let o = Options::parse(&args(&["--listen", "127.0.0.1:8080"]), key()).unwrap();
+    assert_eq!(o.listen, Some("127.0.0.1:8080".parse().unwrap()));
+    assert!(Options::parse(&args(&["--listen", "everywhere"]), key()).unwrap_err().contains("--listen"));
 }
 
 #[test]

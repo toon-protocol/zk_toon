@@ -1,6 +1,7 @@
 //! The challenger service, `zk-toon-challenger`: the decision core over [`MinaChain`], the zk edge's
 //! evidence file and a journal file, one pass per interval. `docs/challenger-mina.md` documents it.
 use std::cell::{Cell, RefCell};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -14,7 +15,7 @@ use zk_toon_challenger::{Challenger, Config, EscapeId, FileEvidence, FileJournal
 use zk_toon_tx_builder::{node_command, Challenge, Defeat, Error as BuilderError, FeePayer, Raise, TxBuilder};
 
 use crate::chain::{read_state_key, request_public};
-use crate::{Endpoints, HttpGraphql, MinaChain, Relay, RequestProofs, Settings, TxSource};
+use crate::{Endpoints, HttpGraphql, Listener, MinaChain, Receiver, Relay, RequestProofs, Settings, TxSource};
 
 /// The environment variable that holds the fee payer's private key (base58, `EK…`). No flag carries
 /// it, so it never shows in a process listing.
@@ -25,8 +26,10 @@ pub const FEE_PAYER_KEY: &str = "ZK_TOON_FEE_PAYER_KEY";
 pub struct Options {
     pub settings: Settings,
     pub endpoints: Endpoints,
-    /// The zk edge's evidence file.
+    /// The zk edge's evidence file, or with `listen`, the challenger's evidence copy.
     pub evidence: PathBuf,
+    /// Where to receive the zk edge's pushes into the evidence copy.
+    pub listen: Option<SocketAddr>,
     /// The challenger's journal: every escape seen and action taken, for restarts.
     pub journal: PathBuf,
     /// The o1js package, with its dependencies installed, that runs the transaction builder.
@@ -55,6 +58,7 @@ pub const FLAGS: &[Flag] = &[
     flag("--mina", "<url>", true),
     flag("--archive", "<url>", true),
     flag("--evidence", "<file>", true),
+    flag("--listen", "<addr>", false),
     flag("--journal", "<file>", true),
     flag("--o1js", "<dir>", true),
     flag("--socks5", "<host:port>", false),
@@ -114,6 +118,9 @@ impl Options {
                 timeout: seconds("--timeout", 30)?,
             },
             evidence: need("--evidence")?.into(),
+            listen: get("--listen")
+                .map(|a| a.parse().map_err(|_| format!("--listen is an address like 127.0.0.1:8080, not {a:?}")))
+                .transpose()?,
             journal: need("--journal")?.into(),
             o1js: need("--o1js")?.into(),
             config: Config { min_lead: number("--min-lead", 40)? },
@@ -136,6 +143,10 @@ pub fn run(options: Options) -> Result<(), String> {
     let builder = SharedBuilder { builder: Rc::new(RefCell::new(builder)), unreachable: Rc::default() };
     let state_key = read_state_key(&*graphql, &options.settings.vault)
         .map_err(|e| format!("reading the vault's state key: {e:?}"))?;
+    if let Some(addr) = options.listen {
+        let receiver = Receiver::open(&options.evidence, options.settings.vault.clone(), &state_key)?;
+        Listener::start(addr, receiver, |line| println!("{line}")).map_err(|e| format!("--listen {addr}: {e}"))?;
+    }
     let verifier = ForStateKey { state_key, inner: BuilderVerifier(builder.clone()) };
     let evidence = Rc::new(FileEvidence::new(&options.evidence, verifier));
     let chain = MinaChain::new(options.settings.clone(), graphql, builder.clone(), evidence.clone())
