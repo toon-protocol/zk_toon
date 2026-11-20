@@ -19,7 +19,7 @@ import { NoteTree } from './note-tree.js';
 import type { PublishedKey } from './keys.js';
 import * as policy from './policy.js';
 import {
-  ActionKind, CLOSE_WINDOW_SLOTS, DepositSizes, EscapeUpdate, NullifierSet, PendingEscapes, RootRing, VaultAction, VaultState,
+  ActionKind, CLOSE_WINDOW_SLOTS, DepositSizes, EscapeUpdate, NullifierSet, PendingEscapes, RootRing, VAULT_FORK, VaultAction, VaultState,
 } from './vault.js';
 
 /** Every permission's value in ADR 0006's table, in o1js's JSON. `setVerificationKey` adds the transaction version. */
@@ -198,6 +198,8 @@ function judge(s: VaultSnapshot, { key, registryKey }: VaultPins): VaultVerdict 
   same('noteLifetime', state.noteLifetime, policy.NOTE_LIFETIME_SLOTS);
   same('challengeWindow', state.challengeWindow, policy.CHALLENGE_WINDOW_SLOTS);
   if (state.creationTime.toBigInt() > BigInt(s.slot)) refuse('creationTime', `${state.creationTime} is after the current slot ${s.slot}`);
+  same('forkResumed', state.forkResumed, VAULT_FORK);
+  if (state.resumedAt.toBigInt() > BigInt(s.slot)) refuse('resumedAt', `${state.resumedAt} is after the current slot ${s.slot}`);
   if (state.stateKey.isEmpty().toBoolean()) refuse('setup', 'no state key: setup has not run');
   if (state.treasury.isEmpty().toBoolean()) refuse('setup', 'no treasury: setup has not run');
   else if (!s.treasuryExists) refuse('setup', 'the treasury has no account, so a reduce paying it would fail');

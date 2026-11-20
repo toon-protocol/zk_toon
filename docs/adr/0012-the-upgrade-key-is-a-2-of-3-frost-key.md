@@ -33,4 +33,4 @@ native multisig, so it is a threshold Schnorr key over Pallas: three key shares,
 - **Mina's deterministic nonces.** A threshold signer can't derive them without the whole key, and a reused nonce
   leaks the key.
 
-Tooling for the share holders (running the DKG, exchanging round messages, storing a key share) isn't decided here.
+Tooling for the share holders (running the DKG, exchanging round messages, storing a key share) is ADR 0013.

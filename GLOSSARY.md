@@ -30,11 +30,47 @@ A party holding one key share: the operator, the TOON team, or an independent ho
 Mina team, since the Mina team ships the forks.
 _Avoid_: Key holder, signer (unqualified), custodian
 
+**Re-share**:
+Giving the share holders new key shares of the same upgrade key: a refresh of all three, or replacing a
+holder. A share from before a re-share doesn't combine with one from after, but two old shares still sign
+together, so every old share is destroyed afterwards (ADR 0013).
+_Avoid_: Key rotation (the key itself never changes), reshuffle
+
+**Pre-fork check**:
+Each pair of share holders threshold-signs a check value, which shows that every key share still works.
+It runs at least 42 days before a fork's stop slot, after the ceremony and every re-share, and every 6
+months (ADR 0013).
+_Avoid_: Liveness check, key ceremony
+
 **Fork notice**:
 The operator's promise, made off chain at the vault's zkApp URI at least 14 days before a fork's stop
-slot, to publish the post-fork verification key with its source tag and a reproducible build. The vault
-doesn't enforce it (ADR 0006).
+slot, to publish the vault's re-key with its source tag and a reproducible build, and the vault's
+durations in post-fork time. The vault doesn't enforce it (ADR 0006, ADR 0015).
 _Avoid_: Upgrade notice, migration window
+
+**Stop slot**:
+The slot from which a forking network lands no transaction until its new chain starts (Mina's
+`slot_tx_end`). The fork notice and the pre-fork check count back from it. The slot keeps counting
+through the halt that follows (ADR 0015).
+_Avoid_: Fork slot, halt slot, chain end
+
+**Vault generation**:
+The vaults built with one set of policy values: one slot length, the slot counts it gives, and one
+minimum withdrawal. A vault keeps its generation's slot counts for life, across every fork; the vault
+deployed after a fork starts a new generation (ADR 0015).
+_Avoid_: Vault version, epoch
+
+**Re-key**:
+The verification key a vault from before a fork gets after it: built for the fork's proof system with
+the vault's own slot counts and the fork's fee, and installed by the share holders. A vault is re-keyed
+only while it holds a balance (ADR 0015).
+_Avoid_: Upgrade, migration, redeploy
+
+**Resume**:
+The first call a re-keyed vault takes after its install. Anyone may make it, once, and no escape
+finalizes until a full challenge window after it, so challengers get a whole window for the escapes
+pending across the fork (ADR 0015).
+_Avoid_: Unpause, restart
 
 **Keeper**:
 Whoever calls the vault's reduce, which anyone may. The zk edge operator is the natural keeper
@@ -122,9 +158,14 @@ _Avoid_: Δ (in prose), usage, spend
 ### Evidence
 
 **Evidence file**:
-The zk edge's append-only record of every allowance it granted and how each one closed, which the
-challenger reads.
+The zk edge's append-only record of every allowance it granted and how each one closed, of which
+each challenger holds a copy.
 _Avoid_: Proof log, journal (that's the connector's own record)
+
+**Evidence copy**:
+A challenger's copy of the evidence file: byte for byte a prefix of the zk edge's file, so one length
+says how far behind it is.
+_Avoid_: Replica, mirror, evidence store
 
 **Grant record**:
 An entry in the evidence file for one granted allowance: its request proof and the allowance's
@@ -183,6 +224,11 @@ or `b` if it never closed. If that would leave a payout above zero but under the
 fee, the concession is the whole balance instead (ADR 0013). Refused unless it increases the
 concession, and never from a subsidised proof.
 _Avoid_: Penalty, top-up, dispute
+
+**Challenger**:
+A service that watches the vault and challenges escapes from its evidence copy, on the zk edge
+operator's behalf. The operator may run it or name a third party to.
+_Avoid_: Watchtower (for ours), verifier, monitor
 
 **Challenge**:
 A defeat or a raise: a challenger's answer to an escape within its challenge window, carrying a

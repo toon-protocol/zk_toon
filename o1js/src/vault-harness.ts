@@ -43,9 +43,9 @@ export function vaultHarness(Local: Local) {
   const advance = (slots: bigint) => Local.setGlobalSlot(Number(now() + slots));
 
   /** A fresh vault on the shared chain, with its own state key and an off-chain mirror. It is deployed through the registry, or `direct`ly under its own key. */
-  async function freshVault({ setup = true, direct = false } = {}) {
+  async function freshVault({ setup = true, direct = false, build = Vault }: { setup?: boolean; direct?: boolean; build?: typeof Vault } = {}) {
     const zkappKey = PrivateKey.random();
-    const vault = new Vault(zkappKey.toPublicKey());
+    const vault = new build(zkappKey.toPublicKey());
     const stateKey = PrivateKey.random();
     const treasury = treasuryAccount;
     const mirror = new VaultMirror();

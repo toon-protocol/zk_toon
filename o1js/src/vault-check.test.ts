@@ -193,6 +193,8 @@ describe('a vault the code hash cannot tell apart', () => {
     ['depositSizes.c', (v) => v.depositSizes.set(sizes({ c: UInt64.from(1) }))],
     ['noteLifetime', (v) => v.noteLifetime.set(UInt64.from(1))],
     ['challengeWindow', (v) => v.challengeWindow.set(UInt64.from(1))],
+    ['forkResumed', (v) => v.forkResumed.set(Field(1))],
+    ['resumedAt', (v) => v.resumedAt.set(UInt64.from(now() + 100n))],
     ['creationTime', (v) => v.creationTime.set(UInt64.from(now() + 100n))],
   ])('is refused with %s changed', async (name, write) => {
     expect(failed(await check((await forged({ write })).address))).toEqual([name]);

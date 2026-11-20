@@ -116,6 +116,7 @@ end, and the [glossary](GLOSSARY.md) defines every term.
 | [`zk-evidence`](zk-evidence/) | The evidence file's byte format: records, framing, header and evidence hash. No file I/O |
 | [`zk-prover`](zk-prover/) | A Kimchi step prover for o1js circuits, on the pinned mina-rust fork |
 | [`tx-builder`](tx-builder/) | The Rust client of the o1js transaction builder: proved vault transactions and request proofs |
+| [`upgrade-key`](upgrade-key/) | The upgrade key's 2-of-3 FROST signer, checked against the pinned `mina-signer` |
 | [`challenger`](challenger/) | The challenger's decision core and its ports |
 | [`challenger-mina`](challenger-mina/) | The challenger's Mina adapter, and the `zk-toon-challenger` service |
 | [`fixture-gen/`](fixture-gen/) | The code that produced `zk-prover/fixtures/` |
@@ -133,6 +134,7 @@ this repo.
 | [The transaction builder](docs/tx-builder.md) | Running the o1js process, its JSON protocol, and every operation and failure |
 | [The challenger's Mina adapter](docs/challenger-mina.md) | Reading escapes and deadlines, submitting defeats and raises, and running `zk-toon-challenger` |
 | [Published keys and the proofs-on set](docs/verification-keys.md) | Building the verification keys and the vault code hash, and the tests that prove for real |
+| [The upgrade key's share holders](docs/upgrade-key-holders.md) | The ceremony, backups, signing, the pre-fork check, re-sharing and replacing a holder, and the holders' record |
 | [The devnet smoke test](docs/devnet-smoke.md) | Deploying a vault and the vault registry to Mina devnet, and reproducing the sighting |
 | [Lightnet tests](o1js/lightnet/README.md) | The tests that need a chain that checks proofs, on a local Docker lightnet |
 | [fixture-gen](fixture-gen/README.md) | Regenerating the prover's fixtures from o1js |

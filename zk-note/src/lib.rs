@@ -56,6 +56,9 @@ pub mod tags {
     pub const PERIOD_NULLIFIER: &str = "toon.zk.period-nullifier.v1";
     /// Leads the clearance message, so a clearance never passes as a state message.
     pub const CLEARANCE: &str = "toon.zk.clearance.v1";
+    /// Leads the evidence checkpoint message (`zk-evidence`), so a checkpoint never passes as a
+    /// state message or a clearance.
+    pub const EVIDENCE_CHECKPOINT: &str = "toon.zk.evidence-checkpoint.v1";
 }
 
 pub fn tag_to_field(tag: &str) -> Field {

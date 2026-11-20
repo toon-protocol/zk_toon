@@ -5,8 +5,8 @@
 - Rust 1.92, pinned in `rust-toolchain.toml`.
 - Node 22, for the o1js package in `o1js/`. o1js is pinned to 3.1.0.
 
-The Rust workspace is `challenger`, `challenger-mina`, `tx-builder`, `zk-evidence`,
-`zk-note` and `zk-prover`. `zk-prover` builds mina-rust from the pinned fork ([ADR
+The Rust workspace is `challenger`, `challenger-mina`, `tx-builder`, `upgrade-key`,
+`zk-evidence`, `zk-note` and `zk-prover`. `zk-prover` builds mina-rust from the pinned fork ([ADR
 0003](adr/0003-mina-rust-via-a-pinned-fork.md)), so a first build is slow. Its tests are
 built with `opt-level = 3`: unoptimised, its witness and proof take minutes.
 
