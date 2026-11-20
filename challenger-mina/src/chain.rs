@@ -185,7 +185,7 @@ impl<G: Graphql, T: TxSource, P: RequestProofs> MinaChain<G, T, P> {
     }
 
     /// The evidence for a challenge at `nullifier`: the proof `pick` prefers among those recorded there.
-    fn evidence(&self, nullifier: &EscapeId, pick: impl Fn(&[Value]) -> Option<Value>) -> Result<Value, PortError> {
+    fn evidence<R>(&self, nullifier: &EscapeId, pick: impl Fn(&[Value]) -> Option<R>) -> Result<R, PortError> {
         pick(&self.proofs.at(nullifier)?).ok_or_else(|| PortError::Refused("no recorded request proof to act on".into()))
     }
 }
@@ -321,18 +321,25 @@ impl<G: Graphql, T: TxSource, P: RequestProofs> VaultChainPort for MinaChain<G, 
         if to <= record.conceded || to > record.amount {
             return Err(PortError::Refused("a raise must exceed the concession and fit the balance".into()));
         }
-        // The vault lifts the concession to min(claimed, b, balance) (ADR 0004): claim `to` with the
-        // unsubsidised proof of the largest tier, which a subsidised one never is (ADR 0001).
-        let evidence = self.evidence(id, |proofs| {
-            proofs
-                .iter()
-                .filter_map(|p| Some((request_public(p)?, p)))
-                .filter(|(public, _)| !public.subsidised)
-                .max_by_key(|(public, _)| public.tier)
-                .filter(|(public, _)| public.tier >= to)
-                .map(|(_, p)| p.clone())
-        })?;
-        let raise = Raise { vault: self.settings.vault.clone(), fee_payer: self.settings.fee_payer.clone(), escape, evidence, claimed: to };
+        // The vault lifts the concession to min(claimed, b, balance), or to the whole balance if that would
+        // strand less than the account creation fee (ADR 0004, ADR 0013). Claim with the unsubsidised proof of
+        // the largest tier, which a subsidised one never is (ADR 0001): `to` itself, or when `to` is the
+        // rounded-up balance, the largest claim below it that the tier allows.
+        let (evidence, claimed) = self
+            .evidence(id, |proofs| {
+                proofs
+                    .iter()
+                    .filter_map(|p| Some((request_public(p)?, p)))
+                    .filter(|(public, _)| !public.subsidised)
+                    .max_by_key(|(public, _)| public.tier)
+                    .and_then(|(public, p)| {
+                        [to, public.tier.min(record.amount.saturating_sub(1))]
+                            .into_iter()
+                            .find(|c| zk_note::policy::raised_concession(*c, public.tier, record.amount) == to)
+                            .map(|c| (p.clone(), c))
+                    })
+            })?;
+        let raise = Raise { vault: self.settings.vault.clone(), fee_payer: self.settings.fee_payer.clone(), escape, evidence, claimed };
         let challenge = self.txs.raise(&raise).map_err(builder_error)?;
         self.submit(challenge, record.deadline)
     }

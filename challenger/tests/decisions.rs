@@ -19,6 +19,8 @@ const ID: Nullifier = [1; 32];
 const NEXT: Nullifier = [2; 32];
 const DEADLINE: Slot = 100_000;
 const CFG: Config = Config { min_lead: 5 };
+/// A balance far above the account creation fee, so a raise strands nothing (ADR 0013).
+const BIG: u64 = 1_000_000_000;
 
 fn escape(conceded: u64, balance: u64) -> Escape {
     Escape { id: ID, next_nullifier: NEXT, conceded, balance, deadline: DEADLINE }
@@ -34,13 +36,13 @@ fn decide_with(e: &Escape, evidence: FakeEvidence, now: Slot) -> Decision {
 
 #[test]
 fn evidence_at_next_nullifier_defeats() {
-    let d = decide_with(&escape(0, 100), FakeEvidence::default().with(ev(NEXT, 10, 3, false, true)), 0);
+    let d = decide_with(&escape(0, 100 * BIG), FakeEvidence::default().with(ev(NEXT, 10, 3, false, true)), 0);
     assert_eq!(d, Decision::Defeat);
 }
 
 #[test]
 fn subsidised_evidence_at_next_nullifier_still_defeats() {
-    let d = decide_with(&escape(0, 100), FakeEvidence::default().with(ev(NEXT, 1, 0, true, true)), 0);
+    let d = decide_with(&escape(0, 100 * BIG), FakeEvidence::default().with(ev(NEXT, 1, 0, true, true)), 0);
     assert_eq!(d, Decision::Defeat);
 }
 
@@ -49,35 +51,35 @@ fn charge_above_concession_raises_to_min_of_charge_tier_and_balance() {
     let raise = |tier, charge, balance| {
         decide_with(&escape(2, balance), FakeEvidence::default().with(ev(ID, tier, charge, false, true)), 0)
     };
-    assert_eq!(raise(10, 7, 100), Decision::Raise { to: 7 });
-    assert_eq!(raise(5, 7, 100), Decision::Raise { to: 5 });
+    assert_eq!(raise(10, 7, 100 * BIG), Decision::Raise { to: 7 });
+    assert_eq!(raise(5, 7, 100 * BIG), Decision::Raise { to: 5 });
     assert_eq!(raise(10, 7, 4), Decision::Raise { to: 4 });
 }
 
 #[test]
 fn charge_not_above_concession_does_nothing() {
-    let d = decide_with(&escape(7, 100), FakeEvidence::default().with(ev(ID, 10, 7, false, true)), 0);
+    let d = decide_with(&escape(7, 100 * BIG), FakeEvidence::default().with(ev(ID, 10, 7, false, true)), 0);
     assert_eq!(d, Decision::NoOp);
-    assert_eq!(decide_with(&escape(7, 100), FakeEvidence::default(), 0), Decision::NoOp);
+    assert_eq!(decide_with(&escape(7, 100 * BIG), FakeEvidence::default(), 0), Decision::NoOp);
 }
 
 #[test]
 fn subsidised_evidence_never_raises() {
-    let d = decide_with(&escape(0, 100), FakeEvidence::default().with(ev(ID, 10, 10, true, true)), 0);
+    let d = decide_with(&escape(0, 100 * BIG), FakeEvidence::default().with(ev(ID, 10, 10, true, true)), 0);
     assert_eq!(d, Decision::NoOp);
 }
 
 #[test]
 fn unverifying_evidence_alarms() {
     for at in [ID, NEXT] {
-        let d = decide_with(&escape(0, 100), FakeEvidence::default().with(ev(at, 10, 10, false, false)), 0);
+        let d = decide_with(&escape(0, 100 * BIG), FakeEvidence::default().with(ev(at, 10, 10, false, false)), 0);
         assert_eq!(d, Decision::Alarm(AlarmReason::EvidenceInvalid));
     }
 }
 
 #[test]
 fn unverifying_evidence_is_never_submitted() {
-    let chain = FakeChain::new(0, vec![escape(0, 100)]);
+    let chain = FakeChain::new(0, vec![escape(0, 100 * BIG)]);
     let evidence = FakeEvidence::default().with(ev(NEXT, 10, 10, false, false));
     let mut c = Challenger::new(chain.clone(), evidence, MemoryJournal::default(), CFG);
     let reports = c.tick(0).unwrap();
@@ -90,10 +92,10 @@ fn deadline_too_close_is_reported_not_skipped() {
     let evidence = FakeEvidence::default().with(ev(NEXT, 10, 3, false, true));
     let late = DEADLINE - 4;
     assert_eq!(
-        decide_with(&escape(0, 100), evidence.clone(), late),
+        decide_with(&escape(0, 100 * BIG), evidence.clone(), late),
         Decision::Alarm(AlarmReason::DeadlineTooClose { remaining: 4 })
     );
-    let chain = FakeChain::new(late, vec![escape(0, 100)]);
+    let chain = FakeChain::new(late, vec![escape(0, 100 * BIG)]);
     let mut c = Challenger::new(chain.clone(), evidence, MemoryJournal::default(), CFG);
     let reports = c.tick(late).unwrap();
     assert!(reports.contains(&Report::Alarm {
@@ -105,7 +107,7 @@ fn deadline_too_close_is_reported_not_skipped() {
 
 #[test]
 fn restart_neither_repeats_nor_misses() {
-    let chain = FakeChain::new(0, vec![escape(0, 100)]);
+    let chain = FakeChain::new(0, vec![escape(0, 100 * BIG)]);
     let evidence = FakeEvidence::default().with(ev(ID, 10, 7, false, true));
     let path = std::env::temp_dir().join(format!("challenger-journal-{}", std::process::id()));
     let _ = std::fs::remove_file(&path);
@@ -117,14 +119,14 @@ fn restart_neither_repeats_nor_misses() {
 
     // Restart: a fresh challenger over the same journal file. The chain still shows the escape
     // (the raise is not yet reflected), so only the journal stops a repeat.
-    let stale = FakeChain::new(0, vec![escape(0, 100)]);
+    let stale = FakeChain::new(0, vec![escape(0, 100 * BIG)]);
     let mut c = Challenger::new(stale.clone(), evidence.clone(), FileJournal::open(&path).unwrap(), CFG);
     let reports = c.tick(0).unwrap();
     assert!(stale.submissions().is_empty());
     assert!(!reports.iter().any(|r| matches!(r, Report::Seen { .. })));
 
     // An escape that appeared while the challenger was down is still acted on.
-    let other = Escape { id: [3; 32], next_nullifier: [4; 32], ..escape(0, 100) };
+    let other = Escape { id: [3; 32], next_nullifier: [4; 32], ..escape(0, 100 * BIG) };
     stale.add_escape(other);
     let evidence = evidence.with(ev([4; 32], 10, 0, false, true));
     let mut c = Challenger::new(stale.clone(), evidence, FileJournal::open(&path).unwrap(), CFG);
@@ -135,7 +137,7 @@ fn restart_neither_repeats_nor_misses() {
 
 #[test]
 fn reports_carry_only_escape_ids_and_actions() {
-    let chain = FakeChain::new(0, vec![escape(0, 100)]);
+    let chain = FakeChain::new(0, vec![escape(0, 100 * BIG)]);
     let evidence = FakeEvidence::default().with(ev(NEXT, 10, 3, false, true));
     let mut c = Challenger::new(chain, evidence, MemoryJournal::default(), CFG);
     let reports = c.tick(0).unwrap();
@@ -150,7 +152,7 @@ fn reports_carry_only_escape_ids_and_actions() {
 
 #[test]
 fn chain_outage_is_an_error_not_a_silent_skip() {
-    let chain = FakeChain::new(0, vec![escape(0, 100)]);
+    let chain = FakeChain::new(0, vec![escape(0, 100 * BIG)]);
     chain.set_unavailable(true);
     let mut c = Challenger::new(chain, FakeEvidence::default(), MemoryJournal::default(), CFG);
     assert!(matches!(c.tick(0), Err(PortError::Unavailable(_))));
@@ -158,7 +160,7 @@ fn chain_outage_is_an_error_not_a_silent_skip() {
 
 #[test]
 fn evidence_outage_is_reported_not_skipped() {
-    let chain = FakeChain::new(0, vec![escape(0, 100)]);
+    let chain = FakeChain::new(0, vec![escape(0, 100 * BIG)]);
     let mut c = Challenger::new(chain.clone(), FakeEvidence::default().unavailable(), MemoryJournal::default(), CFG);
     let reports = c.tick(0).unwrap();
     assert!(reports.contains(&Report::EvidenceUnavailable { escape: ID }));
@@ -168,11 +170,11 @@ fn evidence_outage_is_reported_not_skipped() {
 #[test]
 fn a_submitted_action_is_not_alarmed_on_as_its_deadline_nears() {
     // The raise is submitted but not yet reflected on chain, so the evidence still calls for it.
-    let chain = FakeChain::new(0, vec![escape(0, 100)]);
+    let chain = FakeChain::new(0, vec![escape(0, 100 * BIG)]);
     let evidence = FakeEvidence::default().with(ev(ID, 10, 7, false, true));
     let mut c = Challenger::new(chain.clone(), evidence, MemoryJournal::default(), CFG);
     c.tick(0).unwrap();
-    let stale = FakeChain::new(DEADLINE - 4, vec![escape(0, 100)]);
+    let stale = FakeChain::new(DEADLINE - 4, vec![escape(0, 100 * BIG)]);
     c.chain = stale.clone();
     assert!(c.tick(DEADLINE - 4).unwrap().is_empty());
     assert!(stale.submissions().is_empty());
@@ -198,7 +200,7 @@ impl VaultChainPort for Refusing {
 #[test]
 fn a_failed_submission_reports_why() {
     let evidence = FakeEvidence::default().with(ev(NEXT, 10, 3, false, true));
-    let mut c = Challenger::new(Refusing(vec![escape(0, 100)]), evidence, MemoryJournal::default(), CFG);
+    let mut c = Challenger::new(Refusing(vec![escape(0, 100 * BIG)]), evidence, MemoryJournal::default(), CFG);
     assert!(c.tick(0).unwrap().contains(&Report::SubmitFailed {
         escape: ID,
         action: Action::Defeat,
@@ -211,9 +213,9 @@ fn evidence_without_a_close_record_raises_to_the_tier() {
     let raise = |tier, balance| {
         decide_with(&escape(2, balance), FakeEvidence::default().with(ev(ID, tier, None, false, true)), 0)
     };
-    assert_eq!(raise(10, 100), Decision::Raise { to: 10 });
+    assert_eq!(raise(10, 100 * BIG), Decision::Raise { to: 10 });
     assert_eq!(raise(10, 4), Decision::Raise { to: 4 });
-    let d = decide_with(&escape(2, 100), FakeEvidence::default().with(ev(ID, 10, None, true, true)), 0);
+    let d = decide_with(&escape(2, 100 * BIG), FakeEvidence::default().with(ev(ID, 10, None, true, true)), 0);
     assert_eq!(d, Decision::NoOp);
 }
 
@@ -221,23 +223,23 @@ fn evidence_without_a_close_record_raises_to_the_tier() {
 fn the_lead_is_a_count_of_slots() {
     let evidence = FakeEvidence::default().with(ev(NEXT, 10, 3, false, true));
     // Five slots remain: as many as the lead asks for, so there is still time to act.
-    assert_eq!(decide_with(&escape(0, 100), evidence.clone(), DEADLINE - 5), Decision::Defeat);
+    assert_eq!(decide_with(&escape(0, 100 * BIG), evidence.clone(), DEADLINE - 5), Decision::Defeat);
     // Four slots remain: too close.
     assert_eq!(
-        decide_with(&escape(0, 100), evidence.clone(), DEADLINE - 4),
+        decide_with(&escape(0, 100 * BIG), evidence.clone(), DEADLINE - 4),
         Decision::Alarm(AlarmReason::DeadlineTooClose { remaining: 4 })
     );
     // At the deadline the escape is no longer open: no time remains.
     assert_eq!(
-        decide_with(&escape(0, 100), evidence, DEADLINE),
+        decide_with(&escape(0, 100 * BIG), evidence, DEADLINE),
         Decision::Alarm(AlarmReason::DeadlineTooClose { remaining: 0 })
     );
 }
 
 #[test]
 fn the_escape_with_the_nearest_deadline_is_acted_on_first() {
-    let later = Escape { id: [5; 32], next_nullifier: [6; 32], deadline: DEADLINE, ..escape(0, 100) };
-    let sooner = Escape { id: [7; 32], next_nullifier: [8; 32], deadline: DEADLINE / 2, ..escape(0, 100) };
+    let later = Escape { id: [5; 32], next_nullifier: [6; 32], deadline: DEADLINE, ..escape(0, 100 * BIG) };
+    let sooner = Escape { id: [7; 32], next_nullifier: [8; 32], deadline: DEADLINE / 2, ..escape(0, 100 * BIG) };
     let chain = FakeChain::new(0, vec![later, sooner]);
     let evidence = FakeEvidence::default().with(ev([6; 32], 10, 0, false, true)).with(ev([8; 32], 10, 0, false, true));
     let mut c = Challenger::new(chain.clone(), evidence, MemoryJournal::default(), CFG);
@@ -249,8 +251,8 @@ fn the_escape_with_the_nearest_deadline_is_acted_on_first() {
 fn the_chain_time_is_read_again_after_a_submission_waited() {
     // Two escapes with evidence to defeat. Submitting the first takes 8 slots to land, which leaves
     // the second 4 slots: inside `min_lead`, so it is alarmed on, not submitted.
-    let first = Escape { id: [5; 32], next_nullifier: [6; 32], deadline: 1_000, ..escape(0, 100) };
-    let second = Escape { id: [7; 32], next_nullifier: [8; 32], deadline: 1_002, ..escape(0, 100) };
+    let first = Escape { id: [5; 32], next_nullifier: [6; 32], deadline: 1_000, ..escape(0, 100 * BIG) };
+    let second = Escape { id: [7; 32], next_nullifier: [8; 32], deadline: 1_002, ..escape(0, 100 * BIG) };
     let chain = FakeChain::new(990, vec![second, first]);
     chain.set_slots_per_submission(8);
     let evidence = FakeEvidence::default().with(ev([6; 32], 10, 0, false, true)).with(ev([8; 32], 10, 0, false, true));
@@ -258,4 +260,16 @@ fn the_chain_time_is_read_again_after_a_submission_waited() {
     let reports = c.tick(990).unwrap();
     assert_eq!(chain.submissions(), vec![([5; 32], Action::Defeat)]);
     assert!(reports.contains(&Report::Alarm { escape: [7; 32], reason: AlarmReason::DeadlineTooClose { remaining: 4 } }));
+}
+
+#[test]
+fn a_raise_that_strands_less_than_the_creation_fee_concedes_the_whole_balance() {
+    const MINA: u64 = 1_000_000_000;
+    let raise = |tier, charge, balance| {
+        decide_with(&escape(2, balance), FakeEvidence::default().with(ev(ID, tier, charge, false, true)), 0)
+    };
+    // 10 MINA balance, 9.5 MINA claimed: 0.5 MINA would be left, under the 1 MINA fee.
+    assert_eq!(raise(10 * MINA, 9 * MINA + MINA / 2, 10 * MINA), Decision::Raise { to: 10 * MINA });
+    // Exactly the fee left: unchanged.
+    assert_eq!(raise(10 * MINA, 9 * MINA, 10 * MINA), Decision::Raise { to: 9 * MINA });
 }

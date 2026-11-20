@@ -151,6 +151,28 @@ describe('raising an escape', () => {
     expect(balanceOf(h.treasury)).toBe(t + SMALL - (balance - charge));
   });
 
+  it('concedes the whole balance when the raise would leave a payout below the account creation fee (ADR 0013)', async () => {
+    const { note, proof, balance } = await recordedEscape(h, { balance: 3n * MINA / 2n });
+    const evidence = await h.requestProof(note, { balance, tier: TOP_TIER });
+    // 1 MINA claimed (the top tier) would leave 0.5 MINA, under the 1 MINA fee: the record concedes all 1.5 MINA.
+    await h.raise(proof.publicInput.nullifier, evidence, MINA);
+    await h.reduce();
+    const record = h.mirror.pendingEscape(proof.publicInput.nullifier)!;
+    expect(record.conceded.toBigInt()).toBe(balance);
+    expect(h.vault.pendingEscapesRoot.get().toBigInt()).toBe(h.mirror.escapes.root.toBigInt());
+
+    // A deposit reduced alongside the finalize still applies.
+    const [a, t, leaves] = [balanceOf(alice), balanceOf(h.treasury), h.vault.nextLeafIndex.get().toBigInt()];
+    advance(record.deadline.toBigInt() - now());
+    await h.finalize(proof.publicInput.nullifier);
+    await h.deposit(SMALL);
+    await h.reduce();
+    expect(balanceOf(alice)).toBe(a);
+    expect(balanceOf(h.treasury)).toBe(t + SMALL);
+    expect(h.vault.nextLeafIndex.get().toBigInt()).toBe(leaves + 1n);
+    expect(h.vault.noteRoot.get().toBigInt()).toBe(h.mirror.tree.root.toBigInt());
+  });
+
   it('caps the concession at the tier b when more is claimed', async () => {
     const { note, proof, balance } = await recordedEscape(h, { step: 0 });
     const evidence = await h.requestProof(note, { step: 0, tier: TOP_TIER });

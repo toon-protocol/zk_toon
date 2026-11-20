@@ -96,15 +96,35 @@ describe('vault mutual close', () => {
     expect(balanceOf(h.treasury)).toBe(t);
   });
 
-  it('pays the deposit to the treasury when the balance is zero', async () => {
+  it('refuses a close paying less than the account creation fee, with a reason', async () => {
     const note = await h.deposit(SMALL);
     await h.reduce();
-    const proof = await h.withdrawalProof(note, { signed: true, balance: 0n, destination: bob });
-    const [b, t] = [balanceOf(bob), balanceOf(h.treasury)];
+    for (const balance of [0n, 1n, policy.ACCOUNT_CREATION_FEE - 1n]) {
+      const proof = await h.withdrawalProof(note, { signed: true, balance, destination: bob });
+      await expect(h.close(proof)).rejects.toThrow(/payout below the account creation fee/);
+    }
+  });
+
+  it('opens a destination with no account with the balance less the creation fee', async () => {
+    const note = await h.deposit(SMALL);
+    await h.reduce();
+    const fresh = PrivateKey.random().toPublicKey();
+    const proof = await h.withdrawalProof(note, { signed: true, balance: 3n * MINA, destination: fresh });
+    const t = balanceOf(h.treasury);
     await h.close(proof);
     await h.reduce();
-    expect(balanceOf(bob)).toBe(b);
-    expect(balanceOf(h.treasury)).toBe(t + SMALL);
+    expect(balanceOf(fresh)).toBe(3n * MINA - policy.ACCOUNT_CREATION_FEE);
+    expect(balanceOf(h.treasury)).toBe(t + SMALL - 3n * MINA);
+  });
+
+  it('opens a destination with no account at a zero balance when it is paid exactly the fee', async () => {
+    const note = await h.deposit(SMALL);
+    await h.reduce();
+    const fresh = PrivateKey.random().toPublicKey();
+    const proof = await h.withdrawalProof(note, { signed: true, balance: policy.ACCOUNT_CREATION_FEE, destination: fresh });
+    await h.close(proof);
+    await h.reduce();
+    expect(balanceOf(fresh)).toBe(0n);
   });
 
   it('pays two closes of the same state, dispatched before one reduce, exactly once', async () => {
@@ -234,12 +254,15 @@ describe('vault mutual close timing', () => {
 
 // Its own vault, since LocalBlockchain records the actions of a transaction its preconditions reject.
 describe('vault mutual close destination', () => {
-  it('refuses a destination that has no account, which would fail the reduce', async () => {
+  it('accepts a destination that has no account (ADR 0013)', async () => {
     const h = await freshVault();
     const note = await h.deposit(SMALL);
     await h.reduce();
-    const proof = await h.withdrawalProof(note, { destination: PrivateKey.random().toPublicKey() });
-    await expect(h.send(await h.closeTx(proof, h.clearance(proof.publicInput)))).rejects.toThrow();
+    const fresh = PrivateKey.random().toPublicKey();
+    const proof = await h.withdrawalProof(note, { destination: fresh });
+    await h.close(proof);
+    await h.reduce();
+    expect(balanceOf(fresh)).toBe(SMALL - policy.ACCOUNT_CREATION_FEE);
   });
 });
 
@@ -257,6 +280,26 @@ describe('vault mutual close with a real withdrawal proof', () => {
       await h.close(proof);
       await h.reduce();
       expect(balanceOf(alice)).toBe(a + 1_000_000_000n);
+    } finally {
+      WithdrawalProgram.setProofsEnabled(false);
+    }
+  }, 1_800_000);
+});
+
+describe('vault mutual close to a fresh address with a real withdrawal proof', () => {
+  it(PROOFS_ON.closeFresh, async () => {
+    const { verificationKey } = await WithdrawalProgram.compile({ proofsEnabled: true });
+    WithdrawalProgram.setProofsEnabled(true);
+    try {
+      const h = await freshVault();
+      const note = await h.deposit(SMALL);
+      await h.reduce();
+      const fresh = PrivateKey.random().toPublicKey();
+      const proof = await h.withdrawalProof(note, { signed: true, balance: 3n * MINA, destination: fresh });
+      expect(await verify(proof, verificationKey)).toBe(true);
+      await h.close(proof);
+      await h.reduce();
+      expect(balanceOf(fresh)).toBe(3n * MINA - policy.ACCOUNT_CREATION_FEE);
     } finally {
       WithdrawalProgram.setProofsEnabled(false);
     }
