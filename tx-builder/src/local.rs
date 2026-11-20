@@ -3,7 +3,7 @@
 use mina_signer::CompressedPubKey;
 use serde_json::{json, Value};
 
-use crate::{parse_key, parse_u64, Error, Transaction, TxBuilder};
+use crate::{parse_field, parse_key, parse_u64, Error, Transaction, TxBuilder, VerificationKey};
 
 /// A funded account of the local chain. Its key is a test key, not a secret.
 #[derive(Clone, Debug)]
@@ -42,6 +42,34 @@ impl LocalChain<'_> {
         parse_key(&answer["vault"])
     }
 
+    /// Deploys a vault at the address of `private_key` (base58, a test key) through a registry, as ADR 0011 has it.
+    pub fn deploy_registered_vault(&mut self, private_key: &str) -> Result<CompressedPubKey, Error> {
+        parse_key(&self.0.call("local.deployRegisteredVault", json!({ "privateKey": private_key }))?["vault"])
+    }
+
+    /// Creates a stand-in account at the address of `private_key` (base58, a test key) whose
+    /// `setVerificationKey` permission is `signature`.
+    pub fn deploy_stand_in(&mut self, private_key: &str) -> Result<CompressedPubKey, Error> {
+        parse_key(&self.0.call("local.deployStandIn", json!({ "privateKey": private_key }))?["account"])
+    }
+
+    /// A verification key o1js compiled, of a small program.
+    pub fn compile_key(&mut self) -> Result<VerificationKey, Error> {
+        verification_key(&self.0.call("local.compileKey", json!({}))?["verificationKey"])
+    }
+
+    /// An account's delegate, if it has one.
+    pub fn delegate(&mut self, account: &CompressedPubKey) -> Result<Option<CompressedPubKey>, Error> {
+        let answer = self.0.call("local.delegate", json!({ "account": account.into_address() }))?;
+        if answer["delegate"].is_null() { Ok(None) } else { parse_key(&answer["delegate"]).map(Some) }
+    }
+
+    /// An account's verification key, if it has one.
+    pub fn verification_key(&mut self, account: &CompressedPubKey) -> Result<Option<VerificationKey>, Error> {
+        let answer = self.0.call("local.verificationKey", json!({ "account": account.into_address() }))?;
+        if answer["verificationKey"].is_null() { Ok(None) } else { verification_key(&answer["verificationKey"]).map(Some) }
+    }
+
     /// Sends a transaction to the local chain. A refusal is a [`crate::FailureKind::Rejected`] failure.
     pub fn submit(&mut self, tx: &Transaction) -> Result<(), Error> {
         self.0.call("local.submit", json!({ "zkappCommand": tx.zkapp_command })).map(|_| ())
@@ -78,4 +106,9 @@ impl LocalChain<'_> {
     pub fn vault_state(&mut self, vault: &CompressedPubKey) -> Result<Value, Error> {
         self.0.call("local.vaultState", json!({ "vault": vault.into_address() }))
     }
+}
+
+fn verification_key(v: &Value) -> Result<VerificationKey, Error> {
+    let data = v["data"].as_str().ok_or_else(|| Error::Protocol("verification key without data".into()))?;
+    Ok(VerificationKey { data: data.to_string(), hash: parse_field(&v["hash"])? })
 }

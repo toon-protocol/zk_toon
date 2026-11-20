@@ -12,3 +12,7 @@ mina-curves = { git = "https://github.com/o1-labs/proof-systems", rev = "ab84160
 mina-signer = { git = "https://github.com/o1-labs/proof-systems", rev = "ab84160fa2c22290a8506a7742ac1378879fc386", default-features = false }
 serde_json = "1"
 zk-note = { path = "../zk-note" }
+
+[dev-dependencies]
+rand_chacha = "0.3"
+upgrade-key = { path = "../upgrade-key", features = ["test-utils"] }

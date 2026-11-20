@@ -1,7 +1,7 @@
 //! The typed requests and answers. `docs/tx-builder.md` documents their JSON.
 use std::fmt;
 
-use mina_signer::{CompressedPubKey, Signature};
+use mina_signer::{CompressedPubKey, NetworkId, Signature};
 use serde_json::{json, Value};
 use zk_note::balance::Scalar;
 pub use zk_note::request::RequestPublic;
@@ -283,6 +283,117 @@ impl RequestProofInput {
             "rerandomBlinding": dec_scalar(self.rerandom_blinding),
             "sessionKey": self.session_key.into_address(),
             "requestExpiry": self.request_expiry.to_string(),
+        })
+    }
+}
+
+/// The network a signature is for: the domain the upgrade key signs a full commitment under.
+fn network_json(network: &NetworkId) -> &'static str {
+    match *network {
+        NetworkId::TESTNET => "testnet",
+        NetworkId::MAINNET => "mainnet",
+    }
+}
+
+/// The account that pays the fee of a transaction it doesn't sign yet. Its key is only named.
+#[derive(Clone, Debug)]
+pub struct FeePayerAddress {
+    pub public_key: CompressedPubKey,
+    /// Nanomina.
+    pub fee: u64,
+}
+
+impl FeePayerAddress {
+    fn to_json(&self) -> Value {
+        json!({ "publicKey": self.public_key.into_address(), "fee": self.fee.to_string() })
+    }
+}
+
+/// Set the delegate of `vault`, a registry-deployed vault, to `delegate`. The upgrade key authorises it.
+#[derive(Clone, Debug)]
+pub struct Delegation {
+    pub vault: CompressedPubKey,
+    pub delegate: CompressedPubKey,
+    pub fee_payer: FeePayerAddress,
+    pub network: NetworkId,
+}
+
+impl Delegation {
+    pub(crate) fn to_json(&self) -> Value {
+        json!({
+            "vault": self.vault.into_address(),
+            "delegate": self.delegate.into_address(),
+            "feePayer": self.fee_payer.to_json(),
+            "network": network_json(&self.network),
+        })
+    }
+}
+
+/// A verification key o1js compiled.
+#[derive(Clone, Debug)]
+pub struct VerificationKey {
+    pub data: String,
+    pub hash: Field,
+}
+
+/// Install `verification_key` on `account`, a zkApp account whose `setVerificationKey` permission is
+/// `signature`. The account's key authorises it.
+#[derive(Clone, Debug)]
+pub struct KeyInstall {
+    pub account: CompressedPubKey,
+    pub verification_key: VerificationKey,
+    pub fee_payer: FeePayerAddress,
+    pub network: NetworkId,
+}
+
+impl KeyInstall {
+    pub(crate) fn to_json(&self) -> Value {
+        json!({
+            "account": self.account.into_address(),
+            "verificationKey": { "data": self.verification_key.data, "hash": dec_field(self.verification_key.hash) },
+            "feePayer": self.fee_payer.to_json(),
+            "network": network_json(&self.network),
+        })
+    }
+}
+
+/// An unsigned transaction and its full commitment under the network asked for, which the upgrade key
+/// signs. [`Attachment`] puts the signature in.
+#[derive(Clone, Debug)]
+pub struct Prepared {
+    /// o1js `Transaction.toJSON()`, unsigned.
+    pub zkapp_command: Value,
+    pub full_commitment: Field,
+    pub network: NetworkId,
+}
+
+impl Prepared {
+    pub(crate) fn from_answer(mut answer: Value, network: &NetworkId) -> Result<Self, Error> {
+        Ok(Prepared {
+            full_commitment: parse_field(&answer["fullCommitment"])?,
+            zkapp_command: answer["zkappCommand"].take(),
+            network: network.clone(),
+        })
+    }
+}
+
+/// The upgrade key's signature over a [`Prepared`] transaction's full commitment, and the fee payer, which
+/// signs for itself.
+#[derive(Clone, Debug)]
+pub struct Attachment {
+    pub prepared: Prepared,
+    pub signature: Signature,
+    /// Its `fee` is ignored: the fee is in the transaction already.
+    pub fee_payer: FeePayer,
+}
+
+impl Attachment {
+    pub(crate) fn to_json(&self) -> Value {
+        json!({
+            "zkappCommand": self.prepared.zkapp_command,
+            "signature": sig_json(&self.signature),
+            "feePayer": self.fee_payer.to_json(),
+            "network": network_json(&self.prepared.network),
         })
     }
 }
