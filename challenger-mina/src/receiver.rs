@@ -316,7 +316,11 @@ fn serve(stream: TcpStream, receiver: &Mutex<Receiver>, token: Option<&str>, log
                     chunked = true;
                 }
                 if name.eq_ignore_ascii_case("authorization") {
-                    bearer = value.trim().strip_prefix("Bearer ").map(|t| t.trim().to_string());
+                    bearer = value
+                        .trim()
+                        .split_once(' ')
+                        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+                        .map(|(_, t)| t.trim().to_string());
                 }
                 if name.eq_ignore_ascii_case("connection") && value.trim().eq_ignore_ascii_case("close") {
                     close = true;
@@ -325,7 +329,8 @@ fn serve(stream: TcpStream, receiver: &Mutex<Receiver>, token: Option<&str>, log
         }
         if method == "GET" {
             serve_copy(&mut out, receiver, &target, bearer.as_deref(), token, log)?;
-            if close {
+            // A body on a `GET` is never read, so the connection can't carry another request.
+            if close || chunked || length != Some(0) {
                 return Ok(());
             }
             continue;

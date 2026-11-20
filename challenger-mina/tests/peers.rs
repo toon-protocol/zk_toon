@@ -10,8 +10,9 @@ use std::time::Duration;
 
 use common::{keypair, vault_key};
 use mina_signer::{Keypair, NetworkId};
-use zk_evidence::{extend_running_hash, frame, scan_records, Checkpoint, Close, FileCopy, Push, Record};
+use zk_evidence::{extend_running_hash, frame, scan_records, Checkpoint, Close, FileCopy, Grant, Push, Record};
 use zk_note::Field;
+use zk_toon_challenger::{decide, Config, Decision, Escape, FileEvidence, PortError, ProofVerifier};
 use zk_toon_challenger_mina::{Listener, Peers, Receiver};
 
 const NETWORK: NetworkId = NetworkId::TESTNET;
@@ -46,17 +47,22 @@ fn push(copy: &FileCopy, bytes: &[u8], signer: &Keypair) -> Push {
     Push { offset: copy.length, bytes: bytes.to_vec(), signature: checkpoint.sign(NETWORK, signer) }
 }
 
-/// A peer holding records 1..=`n`, serving with `token`.
-fn peer(name: &str, n: u64, token: Option<&str>) -> (Listener, PathBuf, Arc<Mutex<Receiver>>) {
+/// A copy holding the framed `records`, each pushed in turn.
+fn holding(name: &str, records: &[Vec<u8>]) -> (PathBuf, Arc<Mutex<Receiver>>) {
     let path = dir(name).join("copy");
     let mut receiver = open(&path);
     let mut copy = FileCopy::empty();
-    for i in 1..=n {
-        let p = push(&copy, &close(i), &state_key());
+    for record in records {
+        let p = push(&copy, record, &state_key());
         receiver.receive(&p.encode());
         copy = FileCopy::of_file(&std::fs::read(&path).unwrap()).unwrap();
     }
-    let receiver = Arc::new(Mutex::new(receiver));
+    (path, Arc::new(Mutex::new(receiver)))
+}
+
+/// A peer holding records 1..=`n`, serving with `token`.
+fn peer(name: &str, n: u64, token: Option<&str>) -> (Listener, PathBuf, Arc<Mutex<Receiver>>) {
+    let (path, receiver) = holding(name, &(1..=n).map(close).collect::<Vec<_>>());
     let listener = Listener::start_shared("127.0.0.1:0".parse().unwrap(), receiver.clone(), token.map(Into::into), |_| {}).unwrap();
     (listener, path, receiver)
 }
@@ -164,6 +170,51 @@ fn a_peer_ahead_by_a_record_gives_the_close_it_lacked() {
     let lines = peers(vec![url(behind.local_addr()), url(ahead.local_addr())], TOKEN, mine.clone()).catch_up();
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert_eq!(mine.lock().unwrap().length(), std::fs::metadata(&ahead_path).unwrap().len());
+}
+
+/// A grant at nullifier `n` with tier `tier`, whose proof the fake verifier takes.
+fn grant(n: u64, tier: u64) -> Vec<u8> {
+    let input = ["1", "0", "5", "1700000000000", &tier.to_string(), &n.to_string(), "9", "3", "4", "0", "0", "0"];
+    let proof = format!(
+        "{{\"publicInput\":[{}],\"publicOutput\":[],\"maxProofsVerified\":0,\"proof\":\"fake\"}}",
+        input.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(",")
+    );
+    let grant = Grant {
+        proof: proof.into_bytes(),
+        allowance_id: vec![n as u8],
+        session_key_x: Field::from(7u64),
+        session_key_is_odd: false,
+        expires_at: 2,
+        granted_at: 1,
+    };
+    frame(&Record::Grant(grant).encode().unwrap())
+}
+
+struct Verifies;
+impl ProofVerifier for Verifies {
+    fn verifies(&self, _: &[u8]) -> Result<bool, PortError> {
+        Ok(true)
+    }
+}
+
+#[test]
+fn a_copy_with_a_grant_and_no_close_catches_the_close_up_and_raises_to_the_charge() {
+    const ID: u64 = 11;
+    let (tier, charge) = (10, 6);
+    let closed = frame(&Record::Close(Close { nullifier: Field::from(ID), allowance_id: vec![ID as u8], charge }).encode().unwrap());
+    let (_, theirs) = holding("raise-peer", &[grant(ID, tier), closed]);
+    let ahead = Listener::start_shared("127.0.0.1:0".parse().unwrap(), theirs, Some(TOKEN.into()), |_| {}).unwrap();
+    let (path, mine) = holding("raise-mine", &[grant(ID, tier)]);
+    let nullifier = |n: u64| zk_evidence::field_to_bytes(Field::from(n));
+    let escape = Escape { id: nullifier(ID), next_nullifier: nullifier(ID + 1), conceded: 2, balance: 100_000_000_000, deadline: 100_000 };
+    let cfg = Config { min_lead: 10 };
+    let evidence = FileEvidence::new(&path, Verifies);
+    // Far from the deadline, the copy's grant with no close holds the raise to the tier.
+    assert!(matches!(decide(&escape, &evidence, 1_000, &cfg).unwrap(), Decision::Wait { .. }));
+    let lines = peers(vec![url(ahead.local_addr())], TOKEN, mine).catch_up();
+    assert!(lines.len() == 1 && lines[0].contains("caught up"), "{lines:?}");
+    // With the close caught up, it raises to the recorded charge at once, not to the tier.
+    assert_eq!(decide(&escape, &evidence, 1_000, &cfg).unwrap(), Decision::Raise { to: charge });
 }
 
 #[test]
