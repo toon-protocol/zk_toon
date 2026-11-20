@@ -6,6 +6,8 @@
 use serde_json::{json, Value};
 use std::str::FromStr;
 use zk_evidence::*;
+use mina_signer::{CompressedPubKey, Keypair, NetworkId, SecKey, Signature};
+use zk_note::balance::Scalar;
 use zk_note::{field_to_string, Field};
 
 const ZK_NOTE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../test-vectors/zk-note.json");
@@ -76,6 +78,137 @@ fn file_bytes(records: &[&Record]) -> Vec<u8> {
     out
 }
 
+const NETWORK: NetworkId = NetworkId::TESTNET;
+
+/// Fixed test keys. The key numbers are not in the vector file, only the public halves.
+fn keypair(n: u64) -> Keypair {
+    Keypair::try_from(SecKey::new(Scalar::from(n))).unwrap()
+}
+
+fn key_json(k: &CompressedPubKey) -> Value {
+    json!({ "x": field_to_string(k.x), "isOdd": k.is_odd, "address": k.into_address() })
+}
+
+fn key_from(v: &Value) -> CompressedPubKey {
+    CompressedPubKey { x: field(v["x"].as_str().unwrap()), is_odd: v["isOdd"].as_bool().unwrap() }
+}
+
+fn sig_json(s: &Signature) -> Value {
+    json!({ "r": field_to_string(s.rx), "s": s.s.to_string() })
+}
+
+fn sig_from(v: &Value) -> Signature {
+    Signature::new(field(v["r"].as_str().unwrap()), Scalar::from_str(v["s"].as_str().unwrap()).unwrap())
+}
+
+fn copy_json(c: &FileCopy) -> Value {
+    json!({ "length": c.length.to_string(), "runningHash": hex::encode(c.running_hash) })
+}
+
+fn copy_from(v: &Value) -> FileCopy {
+    FileCopy {
+        length: v["length"].as_str().unwrap().parse().unwrap(),
+        running_hash: hx(&v["runningHash"]).try_into().unwrap(),
+    }
+}
+
+/// A push of `bytes` onto `copy`, signed by `signer` for `vault`.
+fn signed_push(copy: &FileCopy, bytes: &[u8], vault: &CompressedPubKey, signer: &Keypair) -> Push {
+    let scan = scan_records(bytes, 0).unwrap();
+    let cp = Checkpoint {
+        vault: vault.clone(),
+        length: copy.length + bytes.len() as u64,
+        running_hash: scan.records.iter().fold(copy.running_hash, |h, r| extend_running_hash(&h, r.payload)),
+    };
+    Push { offset: copy.length, bytes: bytes.to_vec(), signature: cp.sign(NETWORK, signer) }
+}
+
+fn refusal_name(r: &PushRefusal) -> &'static str {
+    match r {
+        PushRefusal::BadCopy(_) => "badCopy",
+        PushRefusal::WrongOffset { .. } => "wrongOffset",
+        PushRefusal::Empty => "empty",
+        PushRefusal::NotWholeRecords => "notWholeRecords",
+        PushRefusal::BadRecord(_) => "badRecord",
+        PushRefusal::BadSignature => "badSig",
+    }
+}
+
+fn evidence_push_vectors(whole: &[u8], torn: &[u8]) -> Value {
+    let state = keypair(1001);
+    let other_state = keypair(1002);
+    let vault = keypair(2001).public.into_compressed();
+    let other_vault = keypair(2002).public.into_compressed();
+
+    let scan = scan(whole).unwrap();
+    let hash_after = |n: usize| running_hash(scan.records[..n].iter().map(|r| r.payload));
+    let after_header = FileCopy::empty();
+    let second_at = scan.records[2].offset;
+    let first_two = &whole[after_header.length as usize..second_at];
+    let last = &whole[second_at..];
+    let after_two = FileCopy { length: second_at as u64, running_hash: hash_after(2) };
+
+    let cp = Checkpoint { vault: vault.clone(), length: whole.len() as u64, running_hash: hash_after(3) };
+    let cp_sig = cp.sign(NETWORK, &state);
+
+    let push_a = signed_push(&after_header, first_two, &vault, &state);
+    let push_b = signed_push(&after_two, last, &vault, &state);
+    let push_json = |p: &Push, copy: &FileCopy| {
+        json!({
+            "copy": copy_json(copy),
+            "offset": p.offset.to_string(),
+            "bytesHex": hex::encode(&p.bytes),
+            "sig": sig_json(&p.signature),
+            "pushHex": hex::encode(p.encode()),
+        })
+    };
+
+    let wrong_offset = Push { offset: after_two.length + 1, ..push_b.clone() };
+    let torn_bytes = &torn[second_at..];
+    let torn_push = signed_push_unchecked(&after_two, torn_bytes, &vault, &state);
+    let bad_sig = Push { signature: cp.sign(NETWORK, &other_state), ..push_b.clone() };
+    let other_vault_push = signed_push(&after_two, last, &other_vault, &state);
+
+    let refused = |name: &str, p: &Push, copy: &FileCopy| {
+        let mut v = push_json(p, copy);
+        v["name"] = name.into();
+        v["refusal"] = refusal_name(&check_push(NETWORK, &state.public, &vault, copy, p).unwrap_err()).into();
+        v
+    };
+
+    json!({
+        "runningHashes": {
+            "empty": hex::encode(EMPTY_RUNNING_HASH),
+            "afterEachRecord": (1..=3).map(|n| hex::encode(hash_after(n))).collect::<Vec<_>>(),
+        },
+        "checkpoint": {
+            "networkId": "devnet",
+            "stateKey": key_json(&state.public.into_compressed()),
+            "vault": key_json(&vault),
+            "length": cp.length.to_string(),
+            "runningHash": hex::encode(cp.running_hash),
+            "fields": cp.to_fields().into_iter().map(field_to_string).collect::<Vec<_>>(),
+            "sig": sig_json(&cp_sig),
+        },
+        "stateKey": key_json(&state.public.into_compressed()),
+        "vault": key_json(&vault),
+        "otherVault": key_json(&other_vault),
+        "pushes": [push_json(&push_a, &after_header), push_json(&push_b, &after_two)],
+        "refusedPushes": [
+            refused("wrongOffset", &wrong_offset, &after_two),
+            refused("tornRecord", &torn_push, &after_two),
+            refused("badSig", &bad_sig, &after_two),
+            refused("otherVault", &other_vault_push, &after_two),
+        ],
+    })
+}
+
+/// Sign whatever `bytes` hold, as if its records were whole: what a faulty or hostile sender does.
+fn signed_push_unchecked(copy: &FileCopy, bytes: &[u8], vault: &CompressedPubKey, signer: &Keypair) -> Push {
+    let cp = Checkpoint { vault: vault.clone(), length: copy.length + bytes.len() as u64, running_hash: copy.running_hash };
+    Push { offset: copy.length, bytes: bytes.to_vec(), signature: cp.sign(NETWORK, signer) }
+}
+
 fn build() -> Value {
     let zk_note = load(ZK_NOTE);
     let entries = zk_note["requestProofs"].as_array().unwrap();
@@ -94,7 +227,9 @@ fn build() -> Value {
     let first_payload = 10 + 4;
     corrupt[first_payload + 1] ^= 0xff;
 
-    json!({
+    let push_vectors = evidence_push_vectors(&whole, &torn);
+
+    let mut v = json!({
         "description": "Evidence file test vectors, generated by Rust (`UPDATE_VECTORS=1 cargo test -p zk-evidence`). \
             Integers wider than 32 bits are decimal strings; field elements are decimal strings and encode as 32 bytes LE. \
             The proof is a dummy JsonProof around a real request sample's public input.",
@@ -116,7 +251,9 @@ fn build() -> Value {
         "corruptMidFile": { "hex": hex::encode(&corrupt), "error": { "corrupt": { "offset": 10 } } },
         "badMagic": { "hex": hex::encode(b"TOONZKEX\x01\x00") },
         "unknownVersion": { "hex": hex::encode([MAGIC.as_slice(), &2u16.to_le_bytes()].concat()), "version": 2 },
-    })
+    });
+    v["evidencePush"] = push_vectors;
+    v
 }
 
 #[test]
@@ -288,4 +425,142 @@ fn nothing_in_the_vectors_is_a_secret() {
     for word in ["secret", "private", "blinding", "signature"] {
         assert!(!text.contains(word), "vectors mention {word}");
     }
+}
+
+// --- the running hash, the checkpoint and the push ---
+
+fn whole_file(v: &Value) -> Vec<u8> {
+    hx(&v["file"]["hex"])
+}
+
+#[test]
+fn the_running_hash_matches_and_extends() {
+    let v = load(VECTORS);
+    let want = &v["evidencePush"]["runningHashes"];
+    assert_eq!(EMPTY_RUNNING_HASH, [0u8; 32]);
+    assert_eq!(hx(&want["empty"]), vec![0u8; 32]);
+    let file = whole_file(&v);
+    let s = scan(&file).unwrap();
+    let mut h = EMPTY_RUNNING_HASH;
+    for (i, r) in s.records.iter().enumerate() {
+        h = extend_running_hash(&h, r.payload);
+        assert_eq!(h[..], hx(&want["afterEachRecord"][i])[..]);
+        assert_eq!(running_hash(s.records[..=i].iter().map(|r| r.payload)), h);
+    }
+    assert_eq!(FileCopy::of_file(&file).unwrap().running_hash, h);
+    assert_eq!(FileCopy::of_file(&write_header()).unwrap(), FileCopy::empty());
+}
+
+#[test]
+fn a_checkpoint_verifies_only_for_what_it_names() {
+    let v = load(VECTORS);
+    let c = &v["evidencePush"]["checkpoint"];
+    let state_pub = mina_signer::PubKey::from_address(c["stateKey"]["address"].as_str().unwrap()).unwrap();
+    let cp = Checkpoint {
+        vault: key_from(&c["vault"]),
+        length: c["length"].as_str().unwrap().parse().unwrap(),
+        running_hash: hx(&c["runningHash"]).try_into().unwrap(),
+    };
+    let fields: Vec<String> = cp.to_fields().into_iter().map(field_to_string).collect();
+    assert_eq!(fields, c["fields"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_string()).collect::<Vec<_>>());
+    assert_eq!(cp.to_fields()[0], zk_note::tag_to_field(zk_note::tags::EVIDENCE_CHECKPOINT));
+
+    let sig = sig_from(&c["sig"]);
+    assert_eq!(cp.sign(NETWORK, &keypair(1001)), sig);
+    assert!(cp.verify(NETWORK, &state_pub, &sig));
+
+    assert!(!cp.verify(NETWORK, &keypair(1002).public, &sig), "another key");
+    let other_vault = Checkpoint { vault: key_from(&v["evidencePush"]["otherVault"]), ..cp.clone() };
+    assert!(!other_vault.verify(NETWORK, &state_pub, &sig), "another vault");
+    assert!(!Checkpoint { length: cp.length + 1, ..cp.clone() }.verify(NETWORK, &state_pub, &sig), "another length");
+    let mut other_hash = cp.running_hash;
+    other_hash[31] ^= 1;
+    assert!(!Checkpoint { running_hash: other_hash, ..cp.clone() }.verify(NETWORK, &state_pub, &sig), "another hash");
+    other_hash = cp.running_hash;
+    other_hash[0] ^= 1;
+    assert!(!Checkpoint { running_hash: other_hash, ..cp.clone() }.verify(NETWORK, &state_pub, &sig), "another hash, high half");
+}
+
+#[test]
+fn a_checkpoint_is_not_a_state_message_or_a_clearance() {
+    use zk_note::balance::commit;
+    use zk_note::clearance::{sign_clearance, ClearanceMessage};
+    use zk_note::state::{sign_state, StateMessage};
+    let state = keypair(1001);
+    let vault = keypair(2001).public.into_compressed();
+    let cp = Checkpoint { vault: vault.clone(), length: 10, running_hash: [7; 32] };
+    // A clearance with the same field values in its slots: the tags differ, so the signatures do.
+    let clearance = ClearanceMessage::new(&vault, Field::from(10u64), &vault);
+    assert!(!cp.verify(NETWORK, &state.public, &sign_clearance(&state, &clearance)));
+    // A state message for the same vault, signed with the same key.
+    let state_msg = StateMessage::new(&vault, commit(Scalar::from(10u64), Scalar::from(7u64)), Field::from(10u64));
+    assert!(!cp.verify(NETWORK, &state.public, &sign_state(&state, &state_msg)));
+    // The checkpoint's fields with the tag dropped: the tag alone keeps them apart.
+    let fields = cp.to_fields();
+    let as_state = zk_note::state::sign_fields(NETWORK, &state, fields[1..].to_vec());
+    assert!(!cp.verify(NETWORK, &state.public, &as_state));
+    assert!(cp.verify(NETWORK, &state.public, &cp.sign(NETWORK, &state)));
+}
+
+#[test]
+fn a_push_round_trips_and_refuses_truncated_and_trailing_input() {
+    let v = load(VECTORS);
+    for p in v["evidencePush"]["pushes"].as_array().unwrap() {
+        let bytes = hx(&p["pushHex"]);
+        let push = Push::decode(&bytes).unwrap();
+        assert_eq!(push.offset.to_string(), p["offset"].as_str().unwrap());
+        assert_eq!(push.bytes, hx(&p["bytesHex"]));
+        assert_eq!(push.signature, sig_from(&p["sig"]));
+        assert_eq!(push.encode(), bytes);
+        for cut in 0..bytes.len() {
+            assert_eq!(Push::decode(&bytes[..cut]), Err(PushDecodeError::Truncated), "cut {cut}");
+        }
+        let mut long = bytes.clone();
+        long.push(0);
+        assert_eq!(Push::decode(&long), Err(PushDecodeError::TrailingBytes));
+        let mut bad = bytes.clone();
+        let n = bad.len();
+        bad[n - 1] = 0xff;
+        assert_eq!(Push::decode(&bad), Err(PushDecodeError::NonCanonicalSignature));
+    }
+}
+
+fn state_pub(v: &Value) -> mina_signer::PubKey {
+    mina_signer::PubKey::from_address(v["evidencePush"]["stateKey"]["address"].as_str().unwrap()).unwrap()
+}
+
+#[test]
+fn a_valid_push_is_accepted_and_extends_the_copy() {
+    let v = load(VECTORS);
+    let vault = key_from(&v["evidencePush"]["vault"]);
+    let file = whole_file(&v);
+    let mut copy = FileCopy::empty();
+    for p in v["evidencePush"]["pushes"].as_array().unwrap() {
+        assert_eq!(copy_from(&p["copy"]), copy);
+        let push = Push::decode(&hx(&p["pushHex"])).unwrap();
+        copy = check_push(NETWORK, &state_pub(&v), &vault, &copy, &push).unwrap();
+    }
+    assert_eq!(copy, FileCopy::of_file(&file).unwrap());
+    let c = &v["evidencePush"]["checkpoint"];
+    assert_eq!(copy.length.to_string(), c["length"].as_str().unwrap());
+    assert_eq!(hex::encode(copy.running_hash), c["runningHash"].as_str().unwrap());
+}
+
+#[test]
+fn a_bad_push_is_refused_for_the_reason_named() {
+    let v = load(VECTORS);
+    let vault = key_from(&v["evidencePush"]["vault"]);
+    let refused = v["evidencePush"]["refusedPushes"].as_array().unwrap();
+    assert_eq!(refused.len(), 4);
+    for p in refused {
+        let push = Push::decode(&hx(&p["pushHex"])).unwrap();
+        let got = check_push(NETWORK, &state_pub(&v), &vault, &copy_from(&p["copy"]), &push).unwrap_err();
+        assert_eq!(refusal_name(&got), p["refusal"].as_str().unwrap(), "{}", p["name"]);
+    }
+    let names: Vec<&str> = refused.iter().map(|p| p["refusal"].as_str().unwrap()).collect();
+    assert_eq!(names, ["wrongOffset", "notWholeRecords", "badSig", "badSig"]);
+    let pushes = v["evidencePush"]["pushes"].as_array().unwrap().len();
+    let hashes = 1 + v["evidencePush"]["runningHashes"]["afterEachRecord"].as_array().unwrap().len();
+    // The running hashes, the checkpoint, the pushes and the refused pushes.
+    println!("vector cases run: {}", hashes + 1 + pushes + refused.len());
 }

@@ -83,3 +83,15 @@ pub fn verify_state_on(network: NetworkId, sig: &Signature, vault: &PubKey, msg:
     }
     mina_signer::create_kimchi::<Fields>(network).verify(sig, vault, &Fields(msg.to_fields()))
 }
+
+/// Sign a message of field elements the way a state is signed: Mina Schnorr with the o1js-compatible
+/// chunked nonce, under `network`. For messages other than a state or clearance, which lead with
+/// their own domain tag.
+pub fn sign_fields(network: NetworkId, keypair: &Keypair, fields: Vec<Field>) -> Signature {
+    mina_signer::create_kimchi::<Fields>(network).sign(keypair, &Fields(fields), NonceMode::Chunked)
+}
+
+/// Verify what [`sign_fields`] signed.
+pub fn verify_fields(network: NetworkId, sig: &Signature, key: &PubKey, fields: Vec<Field>) -> bool {
+    mina_signer::create_kimchi::<Fields>(network).verify(sig, key, &Fields(fields))
+}
