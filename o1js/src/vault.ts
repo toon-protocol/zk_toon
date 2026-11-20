@@ -536,7 +536,7 @@ function buildVault(gen: policy.Generation) {
       requireSlotBetween(this, action.time, action.time.add(UInt64.from(gen.requestMaxAgeSlots)));
       // The reduce pays `amount`, less the creation fee if that opens the destination's account (ADR 0013).
       // Dispatch can't tell a new destination from an existing one, so every close must cover the generation's minimum.
-      action.amount.greaterThanOrEqual(minWithdrawal).assertTrue('payout below the account creation fee');
+      action.amount.greaterThanOrEqual(minWithdrawal).assertTrue('payout below the minimum withdrawal');
 
       nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
       nullifiers.assertNotIncluded(pub.nullifier, 'nullifier spent');
@@ -562,7 +562,7 @@ function buildVault(gen: policy.Generation) {
       requireSlotBetween(this, action.time, action.validUntil);
       // Finalizing pays `amount − conceded`, which must cover the creation fee, as for a close (ADR 0013).
       action.amount.sub(action.conceded).greaterThanOrEqual(minWithdrawal)
-        .assertTrue('payout below the account creation fee');
+        .assertTrue('payout below the minimum withdrawal');
 
       nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
       nullifiers.assertNotIncluded(pub.nullifier, 'nullifier spent');

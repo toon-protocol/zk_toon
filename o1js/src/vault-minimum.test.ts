@@ -91,15 +91,15 @@ describe('a generation\'s minimum withdrawal', () => {
   });
 
   it('refuses a new close or escape below the generation\'s minimum', async () => {
-    const h = await freshVault({ build: Raised.Vault });
+    const h = await freshVault({ build: Raised.Vault, minWithdrawal: RAISED });
     const note = await h.deposit(SMALL);
     await h.reduce();
     const low = await h.withdrawalProof(note, { signed: true, balance: RAISED - 1n, destination: alice });
-    await expect(h.close(low)).rejects.toThrow(/payout below the account creation fee/);
+    await expect(h.close(low)).rejects.toThrow(/payout below the minimum withdrawal/);
     const lowEscape = await h.withdrawalProof(note, {
       kind: WithdrawalKind.escape, signed: true, step: 1, balance: 3n * MINA, conceded: 3n * MINA - RAISED + 1n, destination: alice,
     });
-    await expect(h.escape(lowEscape)).rejects.toThrow(/payout below the account creation fee/);
+    await expect(h.escape(lowEscape)).rejects.toThrow(/payout below the minimum withdrawal/);
 
     const ok = await h.withdrawalProof(note, { signed: true, balance: RAISED, destination: alice });
     const before = balanceOf(alice);

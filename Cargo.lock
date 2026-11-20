@@ -4213,7 +4213,7 @@ dependencies = [
  "ark-ff",
  "crc32c",
  "hex",
- "mina-signer",
+ "mina-signer 0.6.0",
  "serde_json",
  "sha2 0.10.8",
  "zk-note",

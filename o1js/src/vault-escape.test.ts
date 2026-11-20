@@ -77,7 +77,7 @@ describe('vault escape and finalize', () => {
     await h.reduce();
     for (const [balance, conceded] of [[3n * MINA, 3n * MINA], [3n * MINA, 3n * MINA - MINA / 2n], [MINA / 2n, 0n]] as const) {
       const proof = await h.withdrawalProof(note, { kind: ESCAPE, signed: true, balance, conceded, destination: bob });
-      await expect(h.escape(proof)).rejects.toThrow(/payout below the account creation fee/);
+      await expect(h.escape(proof)).rejects.toThrow(/payout below the minimum withdrawal/);
     }
   });
 

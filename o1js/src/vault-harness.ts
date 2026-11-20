@@ -42,8 +42,13 @@ export function vaultHarness(Local: Local) {
   /** Moves the chain forward by `slots`. */
   const advance = (slots: bigint) => Local.setGlobalSlot(Number(now() + slots));
 
-  /** A fresh vault on the shared chain, with its own state key and an off-chain mirror. It is deployed through the registry, or `direct`ly under its own key. */
-  async function freshVault({ setup = true, direct = false, build = Vault }: { setup?: boolean; direct?: boolean; build?: typeof Vault } = {}) {
+  /**
+   * A fresh vault on the shared chain, with its own state key and an off-chain mirror. It is deployed through the registry, or `direct`ly under its own key.
+   * `minWithdrawal` is the minimum withdrawal of `build`'s generation, which the mirror's raises follow.
+   */
+  async function freshVault({ setup = true, direct = false, build = Vault, minWithdrawal = policy.ACCOUNT_CREATION_FEE }: {
+    setup?: boolean; direct?: boolean; build?: typeof Vault; minWithdrawal?: bigint;
+  } = {}) {
     const zkappKey = PrivateKey.random();
     const vault = new build(zkappKey.toPublicKey());
     const stateKey = PrivateKey.random();
@@ -230,7 +235,7 @@ export function vaultHarness(Local: Local) {
         const escape = mirror.pendingEscape(nullifier);
         if (!escape) throw Error('no pending escape at that nullifier in the mirror');
         await send(await raiseTx(escape, evidence, claimed, from), [], from);
-        mirror.dispatched(VaultAction.raise(escape, evidence.publicInput, UInt64.from(claimed)));
+        mirror.dispatched(VaultAction.raise(escape, evidence.publicInput, UInt64.from(claimed), minWithdrawal));
       },
     };
     if (setup) await h.setup();
