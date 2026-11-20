@@ -95,6 +95,7 @@ ZK_TOON_FEE_PAYER_KEY=EK… zk-toon-challenger \
 | `--vault`, `--mina`, `--archive` | required | the vault and the two GraphQL endpoints |
 | `--evidence` | required | the zk edge's evidence file, read as it grows; with `--listen`, the challenger's evidence copy |
 | `--listen` | none | receive the zk edge's pushes at this address (`host:port`) into the evidence copy |
+| `--peer` | none | another challenger (or the zk edge) to catch the evidence copy up from; repeat it for each. Needs `--listen` and `ZK_TOON_PEER_TOKEN` |
 | `--journal` | required | created if missing; keep it across restarts |
 | `--o1js` | required | the o1js package (`npm ci` done) that runs the transaction builder |
 | `--keys` | none | the published keys (`npm run keys`, `docs/verification-keys.md`), passed to the builder: it finds the vault's generation by its code hash and refuses a vault in none. Without it the vault is taken to be the current generation's |
@@ -105,7 +106,8 @@ ZK_TOON_FEE_PAYER_KEY=EK… zk-toon-challenger \
 | `--builder-timeout` | 900 | seconds one request to the transaction builder may take; past it the builder is stopped and the service exits |
 
 The fee payer's key is read only from `ZK_TOON_FEE_PAYER_KEY`, never from a flag, so it doesn't show
-in a process listing. A bad flag or key stops it at once with exit status 2.
+in a process listing. The same goes for the peer token, `ZK_TOON_PEER_TOKEN` (see "Reading and
+catching up" below). Both print as `[secret]`. A bad flag or key stops it at once with exit status 2.
 
 The builder runs with proofs on, started through a `Relay`. It also verifies each recorded request
 proof before the core acts on it: its `vault` input must be the vault's state key (read from the
@@ -122,6 +124,7 @@ Then it prints one line per report to stdout:
 | `submit-failed <nullifier> <action>: refused: …` / `…: unavailable: …` | the vault, the chain or the builder refused it, or it couldn't be sent; the next pass decides again |
 | `alarm <nullifier> evidence-invalid` | recorded evidence that doesn't verify or doesn't make sense; nothing submitted |
 | `alarm <nullifier> deadline-too-close <slots>` | too close to the deadline to act safely; nothing submitted |
+| `waiting <nullifier> raise-to-tier <slots-left>` | a raise to the tier `b` is held while the copy may still catch up; `<slots-left>` is how far off the deadline is. See "Waiting before a raise to `b`" |
 | `evidence-unavailable <nullifier>` | the evidence file couldn't be read; retried next pass |
 | `unavailable: …` / `refused: …` | the chain or the journal couldn't be read; the whole pass is retried next interval |
 
@@ -171,10 +174,59 @@ The listener logs one line per push, alongside a pass's lines:
 | `push-refused: <why>` | refused with `400`; nothing appended. `<why>` is `check_push`'s refusal (`BadSignature`, `NotWholeRecords`, …) |
 | `push-failed: <why>` | the copy or its signature couldn't be written |
 
+## Reading and catching up
+
+A copy can lag the zk edge: the zk edge waits only for `k` challengers to confirm each record. So every
+challenger with `--listen` also serves its copy, and catches up from its peers (ADR 0014).
+
+**The read endpoint.** `GET /?offset=<n>` on the `--listen` address gives the copy's bytes from `n`
+and the latest signature it holds, as an encoded `Push` (`application/octet-stream`) at offset `n`. The
+signature signs the checkpoint at the copy's length. A request needs `Authorization: Bearer <token>`,
+where the token is the value of `ZK_TOON_PEER_TOKEN`, shared by all of an operator's challengers. It
+is read only from the environment, never from a flag.
+
+| request | reply |
+|---|---|
+| right token, `n` below the copy's length | `200` and the push |
+| right token, `n` equal to the copy's length | `204`, nothing to give |
+| right token, `n` past the copy's length | `416`, `{"length": …}` |
+| no `Authorization`, or a wrong token | `401`; no bytes |
+| `ZK_TOON_PEER_TOKEN` unset (or empty) | `403` for every read; no bytes |
+
+A refused read logs `read-refused: …`; a served one `read-served <n> bytes from <offset>`. Pushes need
+no token, since the zk edge signs them. There is no TLS: run behind a proxy or onion service.
+
+**Catching up.** `--peer <url>` (repeatable) names other challengers, and may name the zk edge. It needs
+`--listen` (the copy it grows) and `ZK_TOON_PEER_TOKEN`, else it stops at start with exit status 2.
+At the start of every pass, before the chain time is read, the challenger asks each peer in turn for
+bytes past its own length (`GET <url>?offset=<length>`, with the token, through `--socks5` if given and
+with no direct fallback). It keeps a reply only if it checks as a push against the copy
+(`zk_evidence::check_push`), and then appends it as `--listen` would. Each peer that gave something, or
+failed, costs one line, and never stops the pass:
+
+| line | |
+|---|---|
+| `peer <url>: caught up, copy is <length> bytes` | the peer's bytes were appended |
+| `peer <url>: unreachable: …` / `answered <status>` / `cut short: …` | down, refused, or answered badly; skipped |
+| `peer <url>: served bytes that don't check: <why>` | a bad signature, a torn record, or not a push (`check_push`'s refusal); the copy is unchanged |
+| `peer <url>: served bytes that don't extend the copy of <n> bytes` | the peer's offset isn't the copy's length (it changed since the ask); unchanged |
+
+A peer with nothing past the copy's length says nothing.
+
+**Waiting before a raise to `b`.** A grant record with no close record makes the challenger raise to
+the tier `b` (ADR 0004), and a copy that has the grant but not yet the close would take more than the
+payer owed. So when a raise would claim `b` because the copy has a grant and no close at the escape's
+nullifier, the challenger holds off, prints `waiting <nullifier> raise-to-tier <slots-left>` and tries
+again, after catching up, on the next pass. It raises only once the deadline is within `2 × --min-lead`
+slots, then on the best copy it holds. (Inside `--min-lead` itself it alarms `deadline-too-close`, as
+ever.) A defeat, or a raise to a recorded charge, goes ahead at once: a record the copy lacks could
+only make those missed, never wrong. Set `--interval` well under `2 × --min-lead` slots, or a held
+raise may be passed over.
+
 ## Secrets and logs
 
-The adapter logs nothing. Its only secret is the fee payer's key, which goes only to the builder's
-stdin and prints as `[secret]`. Errors carry nullifiers and the chain's or builder's messages (the
+The adapter logs nothing. Its secrets are the fee payer's key, which goes only to the builder's
+stdin, and the peer token, which goes only to the peers; both print as `[secret]`. Errors carry nullifiers and the chain's or builder's messages (the
 builder scrubs secrets from its own). Nothing it does links an allowance to the escape beyond what the
 vault's public transaction shows.
 
@@ -189,6 +241,8 @@ vault's public transaction shows.
 | `tests/local_chain.rs` | a defeat and a raise through the adapter, accepted by the vault on the builder's local chain |
 | `tests/receiver.rs` | the evidence copy: forged, torn, stale and repeated pushes leave it unchanged, a restart keeps it, a copy that fails its check is refused at start, and the listener's replies and log lines |
 | `tests/local_chain.rs` (edge down) | a stand-in zk edge pushes grant and close records, stops and loses its file; the challenger defeats and raises from its copy alone |
+| `tests/peers.rs` | reads need the token (none, a wrong one, or an unset variable serve no bytes), a read gives the bytes and signature that check as a push, a copy catches up from a peer and skips one that is down, and a peer that refuses, lies or doesn't extend the copy changes nothing |
+| `challenger/tests/decisions.rs` | a raise to the tier waits until the deadline is within `2 × min-lead` and a defeat or a raise to a recorded charge doesn't |
 | `tests/encoding.rs` | the nullifier encoding |
 | `tests/options.rs` | the service's flags and defaults, the fee payer's key taken only from the environment, and every flag in the usage and in this page |
 | `tests/reading.rs` (chain time, state key) | `now` is the recorded tip's slot; `state_key` is the key the recorded vault was set up with |

@@ -11,14 +11,19 @@ use crate::types::*;
 
 /// Runs passes, each at the chain time as read then, writing their lines to `out`. After each pass it
 /// asks `stop` whether to stop, and returns its reason if so; otherwise it calls `wait` and runs
-/// the next. Nothing a pass meets stops it: that is `stop`'s to decide.
+/// the next. Nothing a pass meets stops it: that is `stop`'s to decide. `before` runs at the start of
+/// every pass, before the chain time is read, and returns lines to log (catching up an evidence copy).
 pub fn serve<C: VaultChainPort, E: EvidencePort, J: Journal>(
     challenger: &mut Challenger<C, E, J>,
+    mut before: impl FnMut() -> Vec<String>,
     mut stop: impl FnMut() -> Option<String>,
     mut wait: impl FnMut(),
     mut out: impl FnMut(&str),
 ) -> String {
     loop {
+        for line in before() {
+            out(&line);
+        }
         let now = challenger.chain.now();
         for line in pass(challenger, now) {
             out(&line);
@@ -49,6 +54,7 @@ fn line(report: &Report) -> String {
             format!("submit-failed {} {}: {}", hex(escape), act(action), error(e))
         }
         Report::EvidenceUnavailable { escape } => format!("evidence-unavailable {}", hex(escape)),
+        Report::Waiting { escape, remaining } => format!("waiting {} raise-to-tier {remaining}", hex(escape)),
         Report::Alarm { escape, reason: AlarmReason::EvidenceInvalid } => {
             format!("alarm {} evidence-invalid", hex(escape))
         }

@@ -1,7 +1,8 @@
 //! The challenger's evidence copy and the listener that grows it (ADR 0014). The zk edge `POST`s an
 //! encoded [`Push`]; the copy is a prefix of the zk edge's evidence file, and `FileEvidence` reads
 //! it as it reads the zk edge's own file. The latest accepted signature is kept next to the copy.
-//! The framing and signature checks are `zk_evidence::check_push`'s.
+//! The framing and signature checks are `zk_evidence::check_push`'s. The listener also serves the copy
+//! to peers on a `GET`, behind a bearer token, and [`Peers`] catches the copy up from them.
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -148,6 +149,21 @@ impl Receiver {
             .map_err(failed("signature"))
     }
 
+    /// The copy's bytes from `offset`, with the latest signature, as the [`Push`] that brings a copy
+    /// of `offset` bytes up to this one. `None` if there is no signature yet or `offset` is past the
+    /// copy's end.
+    pub fn since(&self, offset: u64) -> Option<Push> {
+        if offset > self.copy.length {
+            return None;
+        }
+        let signature = self.signature()?;
+        let mut file = File::open(&self.path).ok()?;
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        let mut bytes = Vec::new();
+        file.take(self.copy.length - offset).read_to_end(&mut bytes).ok()?;
+        (bytes.len() as u64 == self.copy.length - offset).then_some(Push { offset, bytes, signature })
+    }
+
     /// The signature saved with the copy, if a push was ever accepted.
     pub fn signature(&self) -> Option<Signature> {
         let saved = fs::read(&self.signature_path).ok()?;
@@ -162,21 +178,33 @@ pub struct Listener {
 
 impl Listener {
     /// Binds `addr` and serves pushes to `receiver`, one at a time, logging a line for each through
-    /// `log`.
+    /// `log`. A `GET` serves the copy to a peer that sends `token` as its bearer token; with no
+    /// `token`, reads are refused.
     pub fn start(
         addr: SocketAddr,
         receiver: Receiver,
+        token: Option<String>,
+        log: impl Fn(&str) + Send + Sync + 'static,
+    ) -> std::io::Result<Listener> {
+        Self::start_shared(addr, Arc::new(Mutex::new(receiver)), token, log)
+    }
+
+    /// As [`Listener::start`], over a copy that catching up from peers shares.
+    pub fn start_shared(
+        addr: SocketAddr,
+        receiver: Arc<Mutex<Receiver>>,
+        token: Option<String>,
         log: impl Fn(&str) + Send + Sync + 'static,
     ) -> std::io::Result<Listener> {
         let listener = TcpListener::bind(addr)?;
         let addr = listener.local_addr()?;
-        let receiver = Arc::new(Mutex::new(receiver));
         let log = Arc::new(log);
+        let token = Arc::new(token);
         thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                let (receiver, log) = (receiver.clone(), log.clone());
+                let (receiver, log, token) = (receiver.clone(), log.clone(), token.clone());
                 thread::spawn(move || {
-                    let _ = serve(stream, &receiver, &*log);
+                    let _ = serve(stream, &receiver, token.as_deref(), &*log);
                 });
             }
         });
@@ -193,6 +221,58 @@ fn respond(out: &mut TcpStream, status: &str, body: &str) -> std::io::Result<()>
     out.flush()
 }
 
+/// Whether `given` is `token`, taking as long for any two values of the same length.
+fn same_token(given: &str, token: &str) -> bool {
+    given.len() == token.len() && given.bytes().zip(token.bytes()).fold(0, |d, (a, b)| d | (a ^ b)) == 0
+}
+
+/// The `offset` of a `GET`'s request target, `/?offset=<n>`.
+fn requested_offset(target: &str) -> Option<u64> {
+    let query = target.split_once('?')?.1;
+    query.split('&').find_map(|pair| pair.strip_prefix("offset=")).and_then(|n| n.parse().ok())
+}
+
+/// Answers a `GET`: the copy from the requested offset as an encoded push, to a peer with the token.
+fn serve_copy(
+    out: &mut TcpStream,
+    receiver: &Mutex<Receiver>,
+    target: &str,
+    given: Option<&str>,
+    token: Option<&str>,
+    log: &dyn Fn(&str),
+) -> std::io::Result<()> {
+    let Some(token) = token else {
+        log("read-refused: ZK_TOON_PEER_TOKEN is not set");
+        return respond(out, "403 Forbidden", r#"{"error":"reads are off"}"#);
+    };
+    if !given.is_some_and(|g| same_token(g, token)) {
+        log("read-refused: missing or wrong token");
+        return respond(out, "401 Unauthorized", r#"{"error":"a bearer token is required"}"#);
+    }
+    let Some(offset) = requested_offset(target) else {
+        return respond(out, "400 Bad Request", r#"{"error":"ask for ?offset=<bytes>"}"#);
+    };
+    let push = {
+        let receiver = receiver.lock().unwrap_or_else(|p| p.into_inner());
+        if offset > receiver.length() {
+            return respond(out, "416 Range Not Satisfiable", &format!(r#"{{"length":{}}}"#, receiver.length()));
+        }
+        if offset == receiver.length() {
+            return respond(out, "204 No Content", "");
+        }
+        receiver.since(offset)
+    };
+    let Some(push) = push else {
+        log("read-failed: the copy or its signature couldn't be read");
+        return respond(out, "500 Internal Server Error", r#"{"error":"copy unreadable"}"#);
+    };
+    let body = push.encode();
+    log(&format!("read-served {} bytes from {offset}", push.bytes.len()));
+    write!(out, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n", body.len())?;
+    out.write_all(&body)?;
+    out.flush()
+}
+
 /// Reads one request or header line of at most [`MAX_LINE`] bytes. `Ok(0)` is the end of the stream.
 fn read_line(reader: &mut BufReader<TcpStream>, line: &mut String) -> std::io::Result<usize> {
     let n = reader.by_ref().take(MAX_LINE).read_line(line)?;
@@ -203,7 +283,7 @@ fn read_line(reader: &mut BufReader<TcpStream>, line: &mut String) -> std::io::R
 }
 
 /// Answers the requests on one connection.
-fn serve(stream: TcpStream, receiver: &Mutex<Receiver>, log: &dyn Fn(&str)) -> std::io::Result<()> {
+fn serve(stream: TcpStream, receiver: &Mutex<Receiver>, token: Option<&str>, log: &dyn Fn(&str)) -> std::io::Result<()> {
     stream.set_read_timeout(Some(IDLE))?;
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut out = stream;
@@ -212,7 +292,10 @@ fn serve(stream: TcpStream, receiver: &Mutex<Receiver>, log: &dyn Fn(&str)) -> s
         if read_line(&mut reader, &mut line)? == 0 {
             return Ok(());
         }
-        let method = line.split_whitespace().next().unwrap_or("").to_string();
+        let mut words = line.split_whitespace();
+        let method = words.next().unwrap_or("").to_string();
+        let target = words.next().unwrap_or("").to_string();
+        let mut bearer: Option<String> = None;
         let mut length = Some(0usize);
         let mut chunked = false;
         let mut close = line.trim_end().ends_with("HTTP/1.0");
@@ -232,13 +315,23 @@ fn serve(stream: TcpStream, receiver: &Mutex<Receiver>, log: &dyn Fn(&str)) -> s
                 if name.eq_ignore_ascii_case("transfer-encoding") {
                     chunked = true;
                 }
+                if name.eq_ignore_ascii_case("authorization") {
+                    bearer = value.trim().strip_prefix("Bearer ").map(|t| t.trim().to_string());
+                }
                 if name.eq_ignore_ascii_case("connection") && value.trim().eq_ignore_ascii_case("close") {
                     close = true;
                 }
             }
         }
+        if method == "GET" {
+            serve_copy(&mut out, receiver, &target, bearer.as_deref(), token, log)?;
+            if close {
+                return Ok(());
+            }
+            continue;
+        }
         if method != "POST" {
-            respond(&mut out, "405 Method Not Allowed", r#"{"error":"POST an encoded push"}"#)?;
+            respond(&mut out, "405 Method Not Allowed", r#"{"error":"POST an encoded push, or GET the copy"}"#)?;
             return Ok(());
         }
         let Some(length) = length.filter(|_| !chunked) else {
@@ -273,6 +366,78 @@ fn serve(stream: TcpStream, receiver: &Mutex<Receiver>, log: &dyn Fn(&str)) -> s
         }
         if close {
             return Ok(());
+        }
+    }
+}
+
+/// The most a peer's reply may carry.
+const MAX_CATCH_UP: u64 = 256 << 20;
+
+/// The peers a challenger catches its copy up from.
+pub struct Peers {
+    urls: Vec<String>,
+    token: String,
+    agent: ureq::Agent,
+    receiver: Arc<Mutex<Receiver>>,
+}
+
+impl Peers {
+    /// `urls` are asked in order, each with `token`, through `socks5` if it is given (and with no
+    /// direct fallback), for at most `timeout` a request.
+    pub fn new(
+        urls: Vec<String>,
+        token: String,
+        socks5: Option<&str>,
+        timeout: Duration,
+        receiver: Arc<Mutex<Receiver>>,
+    ) -> Result<Peers, String> {
+        let mut agent = ureq::AgentBuilder::new().timeout(timeout);
+        if let Some(proxy) = socks5 {
+            agent = agent.proxy(ureq::Proxy::new(format!("socks5://{proxy}")).map_err(|e| format!("socks proxy: {e}"))?);
+        }
+        Ok(Peers { urls, token, agent: agent.build(), receiver })
+    }
+
+    /// Asks each peer in turn for bytes past the copy's length and appends what checks as a push. A
+    /// peer that is down, answers badly or serves bytes that don't check costs one returned line and
+    /// is skipped.
+    pub fn catch_up(&self) -> Vec<String> {
+        self.urls
+            .iter()
+            .filter_map(|url| match self.ask(url) {
+                Ok(caught_up) => caught_up.map(|line| format!("peer {url}: {line}")),
+                Err(why) => Some(format!("peer {url}: {why}")),
+            })
+            .collect()
+    }
+
+    /// `Ok` with a line if the copy grew; `Err` with why not if the peer couldn't be used.
+    fn ask(&self, url: &str) -> Result<Option<String>, String> {
+        let length = self.receiver.lock().unwrap_or_else(|p| p.into_inner()).length();
+        let response = match self
+            .agent
+            .get(url)
+            .set("Authorization", &format!("Bearer {}", self.token))
+            .query("offset", &length.to_string())
+            .call()
+        {
+            Ok(r) => r,
+            Err(ureq::Error::Status(code, _)) => return Err(format!("answered {code}")),
+            Err(e) => return Err(format!("unreachable: {}", e.kind())),
+        };
+        if response.status() == 204 {
+            return Ok(None);
+        }
+        let mut body = Vec::new();
+        response.into_reader().take(MAX_CATCH_UP + 1).read_to_end(&mut body).map_err(|e| format!("cut short: {}", e.kind()))?;
+        if body.len() as u64 > MAX_CATCH_UP {
+            return Err("answered with too many bytes".into());
+        }
+        match self.receiver.lock().unwrap_or_else(|p| p.into_inner()).receive(&body) {
+            Reply::Accepted { length: now } => Ok(Some(format!("caught up, copy is {now} bytes"))),
+            Reply::Behind { length: now } => Err(format!("served bytes that don't extend the copy of {now} bytes")),
+            Reply::Refused(why) => Err(format!("served bytes that don't check: {why}")),
+            Reply::Failed(why) => Err(format!("the copy couldn't be written: {why}")),
         }
     }
 }

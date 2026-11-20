@@ -70,6 +70,7 @@ fn the_service_passes_at_the_chain_time_until_told_to_stop() {
     let (mut lines, mut checks, mut waits) = (Vec::new(), 0, 0);
     let why = serve(
         &mut c,
+        Vec::new,
         || {
             checks += 1;
             (checks == 2).then(|| "the builder died".to_string())
@@ -101,7 +102,7 @@ fn a_restarted_service_neither_repeats_nor_misses() {
 
     let chain = FakeChain::new(0, vec![escape()]);
     let mut c = Challenger::new(chain.clone(), evidence.clone(), FileJournal::open(&path).unwrap(), CFG);
-    serve(&mut c, once(), || {}, |_| {});
+    serve(&mut c, Vec::new, once(), || {}, |_| {});
     assert_eq!(chain.submissions(), vec![(ID, Action::Raise { to: 7 })]);
 
     // After the restart the chain still shows the escape unraised, and another escape opened.
@@ -110,7 +111,7 @@ fn a_restarted_service_neither_repeats_nor_misses() {
     let evidence = evidence.with(ev([4; 32], 0, true));
     let mut c = Challenger::new(stale.clone(), evidence, FileJournal::open(&path).unwrap(), CFG);
     let mut lines = Vec::new();
-    serve(&mut c, once(), || {}, |l| lines.push(l.to_string()));
+    serve(&mut c, Vec::new, once(), || {}, |l| lines.push(l.to_string()));
     assert_eq!(stale.submissions(), vec![([3; 32], Action::Defeat)]);
     assert_eq!(lines, vec![format!("seen {}", "03".repeat(32)), format!("submitted {} defeat", "03".repeat(32))]);
     let _ = std::fs::remove_file(&path);

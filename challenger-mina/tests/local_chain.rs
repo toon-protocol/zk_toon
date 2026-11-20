@@ -324,7 +324,7 @@ fn with_the_zk_edge_gone_the_challenger_acts_from_its_copy() {
     let (copy_path, edge_path) = (dir.join("copy"), dir.join("edge"));
 
     let receiver = Receiver::open(&copy_path, c.vault.clone(), &c.state_key.public.into_compressed()).unwrap();
-    let listener = Listener::start("127.0.0.1:0".parse().unwrap(), receiver, |_| {}).unwrap();
+    let listener = Listener::start("127.0.0.1:0".parse().unwrap(), receiver, None, |_| {}).unwrap();
     let url = format!("http://{}/", listener.local_addr());
 
     let mut edge = std::fs::File::create(&edge_path).unwrap();
