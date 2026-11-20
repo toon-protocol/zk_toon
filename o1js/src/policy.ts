@@ -23,10 +23,22 @@ export type Generation = {
   requestMaxAgeSlots: bigint;
   /** How far a request's `requestTime` may be ahead of the zk edge's current slot: a minute, rounded up. Fixed by the connector. */
   requestMaxLeadSlots: bigint;
+  /**
+   * The least a close or an escape may pay, and the least a payout may be unless it is zero: the account creation fee when the
+   * generation was built, or the fork's after a re-key. It follows the network's fee, separately from the slot counts (ADR 0015).
+   */
+  minWithdrawal: bigint;
 };
 
-/** The generation whose slots last `slotSeconds`: every slot count follows from it (ADR 0007). */
-export function generationOf(id: string, slotSeconds: bigint): Generation {
+const MINA = 1_000_000_000n;
+/** What the chain takes from a payout that opens its destination's account (1 MINA). Every withdrawal must pay at least it (ADR 0013). */
+export const ACCOUNT_CREATION_FEE = MINA;
+
+/**
+ * The generation whose slots last `slotSeconds`: every slot count follows from it (ADR 0007). Its minimum withdrawal is the
+ * fork's account creation fee, `minWithdrawal`, the fee today's chain takes unless given.
+ */
+export function generationOf(id: string, slotSeconds: bigint, minWithdrawal: bigint = ACCOUNT_CREATION_FEE): Generation {
   const slotsCeil = (seconds: bigint) => (seconds + slotSeconds - 1n) / slotSeconds;
   const slotsPerDay = 86_400n / slotSeconds;
   return {
@@ -39,6 +51,7 @@ export function generationOf(id: string, slotSeconds: bigint): Generation {
     challengeWindowSlots: 2n * slotsPerDay,
     requestMaxAgeSlots: slotsCeil(600n),
     requestMaxLeadSlots: slotsCeil(60n),
+    minWithdrawal,
   };
 }
 
@@ -85,14 +98,10 @@ export const REQUEST_MAX_AGE_SLOTS = CURRENT.requestMaxAgeSlots;
 /** How far a request's `requestTime` may be ahead of the zk edge's current slot: a minute, rounded up. Fixed by the connector. */
 export const REQUEST_MAX_LEAD_SLOTS = CURRENT.requestMaxLeadSlots;
 
-const MINA = 1_000_000_000n;
 /** Request tiers `b`, ascending. The first is the smallest, the only one a subsidised allowance may use. */
 export const TIERS: readonly bigint[] = [MINA / 100n, MINA / 10n, MINA];
 /** Accepted deposit sizes, ascending. */
 export const DEPOSIT_SIZES: readonly bigint[] = [10n * MINA, 100n * MINA, 1000n * MINA];
-
-/** What the chain takes from a payout that opens its destination's account (1 MINA). Every withdrawal must pay at least it (ADR 0013). */
-export const ACCOUNT_CREATION_FEE = MINA;
 
 export const isTier = (b: bigint) => TIERS.includes(b);
 export const isDepositSize = (size: bigint) => DEPOSIT_SIZES.includes(size);

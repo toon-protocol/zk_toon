@@ -105,15 +105,15 @@ export class PendingEscape extends Struct({
    * The concession a raise from `evidence` claiming `claimed` lifts this escape to: `min(claimed, b,
    * balance)` (ADR 0004), where `b` is the evidence's tier. A subsidised proof's `b` counts as zero, so it
    * never raises (ADR 0001). The request circuit bounds the tier to 64 bits. A result that would leave a
-   * payout above zero and below the account creation fee concedes the whole `amount` instead, so a pending
-   * escape's payout is zero or at least the fee (ADR 0013).
+   * payout above zero and below the generation's minimum withdrawal (the account creation fee unless given) concedes the
+   * whole `amount` instead, so a pending escape's payout is zero or at least it (ADR 0013, ADR 0015).
    */
-  raisedConcession(evidence: RequestPublic, claimed: UInt64): UInt64 {
+  raisedConcession(evidence: RequestPublic, claimed: UInt64, minWithdrawal: bigint = policy.ACCOUNT_CREATION_FEE): UInt64 {
     const tier = Provable.if(evidence.subsidised, UInt64, UInt64.zero, UInt64.Unsafe.fromField(evidence.tier));
     const min = (a: UInt64, b: UInt64) => Provable.if(a.lessThan(b), UInt64, a, b);
     const raised = min(min(claimed, tier), this.amount);
     const left = this.amount.sub(raised);
-    const stranded = left.greaterThan(UInt64.zero).and(left.lessThan(UInt64.from(policy.ACCOUNT_CREATION_FEE)));
+    const stranded = left.greaterThan(UInt64.zero).and(left.lessThan(UInt64.from(minWithdrawal)));
     return Provable.if(stranded, UInt64, this.amount, raised);
   }
 }
@@ -186,8 +186,10 @@ export class VaultAction extends Struct({
     return new VaultAction({ ...VaultAction.none(), kind: Field(ActionKind.sweep), size: expired });
   }
   /** Replaces `e` with the record whose concession `evidence` and `claimed` lift it to. */
-  static raise(e: PendingEscape, evidence: RequestPublic, claimed: UInt64): VaultAction {
-    const raised = new PendingEscape({ ...e, conceded: e.raisedConcession(evidence, claimed) });
+  static raise(
+    e: PendingEscape, evidence: RequestPublic, claimed: UInt64, minWithdrawal: bigint = policy.ACCOUNT_CREATION_FEE,
+  ): VaultAction {
+    const raised = new PendingEscape({ ...e, conceded: e.raisedConcession(evidence, claimed, minWithdrawal) });
     return new VaultAction({ ...VaultAction.naming(ActionKind.raise, raised), commitment: e.hash() });
   }
   private static naming(kind: ActionKind, e: PendingEscape): VaultAction {
@@ -385,6 +387,7 @@ const builds = new Map<string, ReturnType<typeof buildVault>>();
 function buildVault(gen: policy.Generation) {
   const { program: RequestProgram, Proof: RequestProof } = requestBuild(gen);
   const { program: WithdrawalProgram, Proof: WithdrawalProof } = withdrawalBuild(gen);
+  const minWithdrawal = UInt64.from(gen.minWithdrawal);
   const batchReducer = new BatchReducer({ actionType: VaultAction, batchSize: REDUCE_BATCH_SIZE });
   class VaultBatch extends batchReducer.Batch {}
   class VaultBatchProof extends batchReducer.BatchProof {}
@@ -532,8 +535,8 @@ function buildVault(gen: policy.Generation) {
       const action = VaultAction.mutualClose(pub);
       requireSlotBetween(this, action.time, action.time.add(UInt64.from(gen.requestMaxAgeSlots)));
       // The reduce pays `amount`, less the creation fee if that opens the destination's account (ADR 0013).
-      // Dispatch can't tell a new destination from an existing one, so every close must cover the fee.
-      action.amount.greaterThanOrEqual(UInt64.from(policy.ACCOUNT_CREATION_FEE)).assertTrue('payout below the account creation fee');
+      // Dispatch can't tell a new destination from an existing one, so every close must cover the generation's minimum.
+      action.amount.greaterThanOrEqual(minWithdrawal).assertTrue('payout below the account creation fee');
 
       nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
       nullifiers.assertNotIncluded(pub.nullifier, 'nullifier spent');
@@ -558,7 +561,7 @@ function buildVault(gen: policy.Generation) {
       const action = VaultAction.escape(pub);
       requireSlotBetween(this, action.time, action.validUntil);
       // Finalizing pays `amount − conceded`, which must cover the creation fee, as for a close (ADR 0013).
-      action.amount.sub(action.conceded).greaterThanOrEqual(UInt64.from(policy.ACCOUNT_CREATION_FEE))
+      action.amount.sub(action.conceded).greaterThanOrEqual(minWithdrawal)
         .assertTrue('payout below the account creation fee');
 
       nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
@@ -621,7 +624,7 @@ function buildVault(gen: policy.Generation) {
       this.checkEvidence(evidence);
       evidence.publicInput.nullifier.assertEquals(escape.nullifier, "not the escape's nullifier");
       this.checkChallengeable(escape, escapes);
-      const action = VaultAction.raise(escape, evidence.publicInput, claimed);
+      const action = VaultAction.raise(escape, evidence.publicInput, claimed, gen.minWithdrawal);
       action.conceded.assertGreaterThan(escape.conceded, 'raise would not increase the concession');
       batchReducer.dispatch(action);
     }
@@ -785,7 +788,12 @@ function buildVault(gen: policy.Generation) {
         // A close pays its balance and a finalize its balance less the concession, each the rest of the size
         // to the treasury; a sweep pays the treasury alone; other kinds pay nothing.
         const pays = closes.or(finalizes);
-        const payout = Provable.if(isFinalize, UInt64, record.payout(), action.amount);
+        // A payout above zero and below the minimum was dispatched under an earlier, lower one: it goes to the treasury
+        // with the rest, since the reduce can't tell whether its destination is new (ADR 0015).
+        const due = Provable.if(isFinalize, UInt64, record.payout(), action.amount);
+        const payout = Provable.if(
+          due.greaterThan(UInt64.zero).and(due.lessThan(minWithdrawal)), UInt64, UInt64.zero, due
+        );
         this.payIf(pays, action.destination, payout);
         this.payIf(pays.or(isSweep), treasury, Provable.if(isSweep, UInt64, sweeps, action.size.sub(payout)));
       });

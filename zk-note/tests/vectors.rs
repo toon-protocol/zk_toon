@@ -238,6 +238,7 @@ fn generation_tables_agree() {
         assert_eq!(g.challenge_window_slots, u(&e["challengeWindowSlots"]), "{} challengeWindowSlots", g.id);
         assert_eq!(g.request_max_age_slots, u(&e["requestMaxAgeSlots"]), "{} requestMaxAgeSlots", g.id);
         assert_eq!(g.request_max_lead_slots, u(&e["requestMaxLeadSlots"]), "{} requestMaxLeadSlots", g.id);
+        assert_eq!(g.min_withdrawal, u(&e["minWithdrawal"]), "{} minWithdrawal", g.id);
     }
 }
 

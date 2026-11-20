@@ -185,6 +185,7 @@ export function buildVectors() {
       challengeWindowSlots: g.challengeWindowSlots.toString(),
       requestMaxAgeSlots: g.requestMaxAgeSlots.toString(),
       requestMaxLeadSlots: g.requestMaxLeadSlots.toString(),
+      minWithdrawal: g.minWithdrawal.toString(),
     })),
   };
 

@@ -308,11 +308,18 @@ describe('a vault whose reduce could never run', () => {
   it.each<[string, () => VaultAction, string]>([
     ['a deposit conceding more than its amount', () => new VaultAction({ ...phantomDeposit(9n), conceded: UInt64.from(1) }), 'actions'],
     ['a sweep conceding more than its amount', () => new VaultAction({ ...VaultAction.sweep(UInt64.zero), conceded: UInt64.from(1) }), 'actions'],
-    ['a close paying less than the creation fee', () => new VaultAction({ ...forgedCloseTo(PrivateKey.random().toPublicKey()), amount: UInt64.from(1) }), 'actions'],
   ])('is refused with %s, which fails the reduce', async (_name, action, refusal) => {
     const vault = await backed(action());
     expect(failed(await check(vault.address))).toEqual([refusal]);
     await expect(reduceAll(vault)).rejects.toThrow();
+  });
+
+  // The reduce pays a payout below the generation's minimum to the treasury, so it runs (ADR 0015); the check still refuses
+  // the close, which no method dispatches.
+  it('is refused with a close paying less than the creation fee, which the reduce sends to the treasury', async () => {
+    const vault = await backed(new VaultAction({ ...forgedCloseTo(PrivateKey.random().toPublicKey()), amount: UInt64.from(1) }));
+    expect(failed(await check(vault.address))).toEqual(['actions']);
+    await reduceAll(vault);
   });
 
   it('is refused with more actions in one account update than a batch holds, which no batch can pop', async () => {
