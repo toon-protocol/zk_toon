@@ -6,7 +6,7 @@ to each vault value, ADR 0006 the fork notice, and `docs/upgrade-key-holders.md`
 The **stop slot** is the fork's `slot_tx_end`: from it no transaction lands until the new chain starts. Every deadline
 here counts back from it. The slot keeps counting through the halt (ADR 0015).
 
-Parts of this need code that isn't built yet: the generation table, `resume` and the fee rule (#136, #137, #138).
+Parts of this need code that isn't built yet: the generation table and `resume` (#136, #137).
 
 ## When the fork is announced
 
