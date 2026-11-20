@@ -236,7 +236,7 @@ fn each_forged_push_gets_its_reply_over_http() {
 }
 
 #[test]
-fn a_push_without_a_content_length_is_refused() {
+fn a_push_without_a_byte_count_is_refused() {
     let d = dir("http-length");
     let listener = Listener::start("127.0.0.1:0".parse().unwrap(), open(&d.join("copy")).unwrap(), |_| {}).unwrap();
     for headers in ["Content-Length: lots", "Transfer-Encoding: chunked"] {
