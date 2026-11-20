@@ -16,34 +16,45 @@ pub struct Config {
 /// A subsidised proof can defeat but never raise (ADR 0001). A proof that does not verify yields
 /// an alarm and no submission.
 pub fn decide(escape: &Escape, evidence: &dyn EvidencePort, now: Slot, cfg: &Config) -> Result<Decision, PortError> {
-    Ok(within_deadline(escape, from_evidence(escape, evidence)?, now, cfg))
+    let (decision, claims_tier) = from_evidence(escape, evidence)?;
+    Ok(within_deadline(escape, decision, claims_tier, now, cfg))
 }
 
-/// What the evidence calls for, before the deadline is considered.
-fn from_evidence(escape: &Escape, evidence: &dyn EvidencePort) -> Result<Decision, PortError> {
+/// What the evidence calls for, before the deadline is considered, and whether a raise it calls for
+/// claims the tier `b` because the copy has a grant and no close at the escape's nullifier.
+fn from_evidence(escape: &Escape, evidence: &dyn EvidencePort) -> Result<(Decision, bool), PortError> {
     let next = evidence.at_nullifier(&escape.next_nullifier)?;
     let current = evidence.at_nullifier(&escape.id)?;
     if next.iter().chain(current.iter()).any(|e| !e.verifies) {
-        return Ok(Decision::Alarm(AlarmReason::EvidenceInvalid));
+        return Ok((Decision::Alarm(AlarmReason::EvidenceInvalid), false));
     }
     if !next.is_empty() {
-        return Ok(Decision::Defeat);
+        return Ok((Decision::Defeat, false));
     }
-    let raise_to = current
+    let raises: Vec<(u64, bool)> = current
         .iter()
         .filter(|e| !e.subsidised)
-        .map(|e| zk_note::policy::raised_concession(e.charge.unwrap_or(e.tier), e.tier, escape.balance))
-        .filter(|to| *to > escape.conceded)
-        .max();
-    Ok(raise_to.map_or(Decision::NoOp, |to| Decision::Raise { to }))
+        .map(|e| (zk_note::policy::raised_concession(e.charge.unwrap_or(e.tier), e.tier, escape.balance), e.charge.is_none()))
+        .filter(|(to, _)| *to > escape.conceded)
+        .collect();
+    let Some(to) = raises.iter().map(|(to, _)| *to).max() else { return Ok((Decision::NoOp, false)) };
+    // A close record that the copy lacks could only lower the raise, so it waits only when no recorded
+    // charge gives the same amount.
+    let claims_tier = raises.iter().filter(|(t, _)| *t == to).all(|(_, no_close)| *no_close);
+    Ok((Decision::Raise { to }, claims_tier))
 }
 
-/// Turn a submission into an alarm when the deadline is too close to act on safely.
-fn within_deadline(escape: &Escape, decision: Decision, now: Slot, cfg: &Config) -> Decision {
+/// Hold a raise to the tier `b` until the deadline is within `2 × min_lead` slots, so a copy that lags
+/// has time to catch up (ADR 0014). Turn a submission into an alarm when the deadline is too close to
+/// act on safely.
+fn within_deadline(escape: &Escape, decision: Decision, claims_tier: bool, now: Slot, cfg: &Config) -> Decision {
     if !matches!(decision, Decision::Defeat | Decision::Raise { .. }) {
         return decision;
     }
     let remaining = escape.deadline.saturating_sub(now);
+    if claims_tier && now < escape.deadline && remaining > cfg.min_lead.saturating_mul(2) {
+        return Decision::Wait { remaining };
+    }
     if now >= escape.deadline || remaining < cfg.min_lead {
         return Decision::Alarm(AlarmReason::DeadlineTooClose { remaining });
     }
@@ -80,7 +91,7 @@ impl<C: VaultChainPort, E: EvidencePort, J: Journal> Challenger<C, E, J> {
                 reports.push(Report::Seen { escape: escape.id });
             }
             // An action already submitted is not repeated, nor alarmed on as its deadline nears.
-            let decision = match from_evidence(&escape, &self.evidence) {
+            let (decision, claims_tier) = match from_evidence(&escape, &self.evidence) {
                 Ok(d) => d,
                 Err(PortError::Unavailable(_)) => {
                     reports.push(Report::EvidenceUnavailable { escape: escape.id });
@@ -93,8 +104,12 @@ impl<C: VaultChainPort, E: EvidencePort, J: Journal> Challenger<C, E, J> {
                     continue;
                 }
             }
-            let action = match within_deadline(&escape, decision, now, &self.config) {
+            let action = match within_deadline(&escape, decision, claims_tier, now, &self.config) {
                 Decision::NoOp => continue,
+                Decision::Wait { remaining } => {
+                    reports.push(Report::Waiting { escape: escape.id, remaining });
+                    continue;
+                }
                 Decision::Alarm(reason) => {
                     reports.push(Report::Alarm { escape: escape.id, reason });
                     continue;
@@ -127,6 +142,6 @@ fn as_action(decision: &Decision) -> Option<Action> {
     match decision {
         Decision::Defeat => Some(Action::Defeat),
         Decision::Raise { to } => Some(Action::Raise { to: *to }),
-        Decision::NoOp | Decision::Alarm(_) => None,
+        Decision::NoOp | Decision::Wait { .. } | Decision::Alarm(_) => None,
     }
 }

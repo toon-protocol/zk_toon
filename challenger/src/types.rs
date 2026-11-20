@@ -45,6 +45,9 @@ pub enum Decision {
     Defeat,
     Raise { to: u64 },
     NoOp,
+    /// A raise to the tier `b` is held: the copy has a grant and no close, and the deadline is more
+    /// than `2 × min_lead` slots away, so the copy may yet catch up.
+    Wait { remaining: Slot },
     Alarm(AlarmReason),
 }
 
@@ -72,4 +75,6 @@ pub enum Report {
     /// The evidence port could not be read for this escape. Nothing was decided; retried next tick.
     EvidenceUnavailable { escape: EscapeId },
     Alarm { escape: EscapeId, reason: AlarmReason },
+    /// A raise to the tier `b` is held while the copy may still catch up; `remaining` slots to the deadline.
+    Waiting { escape: EscapeId, remaining: Slot },
 }

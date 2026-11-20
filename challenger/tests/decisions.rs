@@ -211,12 +211,47 @@ fn a_failed_submission_reports_why() {
 #[test]
 fn evidence_without_a_close_record_raises_to_the_tier() {
     let raise = |tier, balance| {
-        decide_with(&escape(2, balance), FakeEvidence::default().with(ev(ID, tier, None, false, true)), 0)
+        decide_with(&escape(2, balance), FakeEvidence::default().with(ev(ID, tier, None, false, true)), DEADLINE - 10)
     };
     assert_eq!(raise(10, 100 * BIG), Decision::Raise { to: 10 });
     assert_eq!(raise(10, 4), Decision::Raise { to: 4 });
     let d = decide_with(&escape(2, 100 * BIG), FakeEvidence::default().with(ev(ID, 10, None, true, true)), 0);
     assert_eq!(d, Decision::NoOp);
+}
+
+#[test]
+fn a_raise_to_the_tier_waits_until_the_deadline_is_within_twice_the_lead() {
+    let evidence = FakeEvidence::default().with(ev(ID, 10, None, false, true));
+    let at = |now| decide_with(&escape(2, 100 * BIG), evidence.clone(), now);
+    // The lead is 5 slots: 11 slots out it waits, 10 out it raises.
+    assert_eq!(at(0), Decision::Wait { remaining: DEADLINE });
+    assert_eq!(at(DEADLINE - 11), Decision::Wait { remaining: 11 });
+    assert_eq!(at(DEADLINE - 10), Decision::Raise { to: 10 });
+    // Inside the lead itself the alarm is as it was.
+    assert_eq!(at(DEADLINE - 4), Decision::Alarm(AlarmReason::DeadlineTooClose { remaining: 4 }));
+}
+
+#[test]
+fn a_raise_to_a_recorded_charge_and_a_defeat_do_not_wait() {
+    let charged = FakeEvidence::default().with(ev(ID, 10, 7, false, true));
+    assert_eq!(decide_with(&escape(2, 100 * BIG), charged, 0), Decision::Raise { to: 7 });
+    let defeated = FakeEvidence::default().with(ev(ID, 10, None, false, true)).with(ev(NEXT, 1, 0, false, true));
+    assert_eq!(decide_with(&escape(2, 100 * BIG), defeated, 0), Decision::Defeat);
+    // A grant with no close beside one with the same raise recorded: nothing is missing that matters.
+    let both = FakeEvidence::default().with(ev(ID, 10, None, false, true)).with(ev(ID, 10, 10, false, true));
+    assert_eq!(decide_with(&escape(2, 100 * BIG), both, 0), Decision::Raise { to: 10 });
+}
+
+#[test]
+fn a_held_raise_is_reported_and_submitted_once_the_deadline_nears() {
+    let chain = FakeChain::new(0, vec![escape(2, 100 * BIG)]);
+    let evidence = FakeEvidence::default().with(ev(ID, 10, None, false, true));
+    let mut c = Challenger::new(chain.clone(), evidence, MemoryJournal::default(), CFG);
+    let reports = c.tick(0).unwrap();
+    assert!(reports.contains(&Report::Waiting { escape: ID, remaining: DEADLINE }));
+    assert!(chain.submissions().is_empty());
+    c.tick(DEADLINE - 10).unwrap();
+    assert_eq!(chain.submissions(), vec![(ID, Action::Raise { to: 10 })]);
 }
 
 #[test]

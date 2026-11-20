@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -15,13 +15,28 @@ use zk_toon_challenger::{Challenger, Config, EscapeId, FileEvidence, FileJournal
 use zk_toon_tx_builder::{node_command, Challenge, Defeat, Error as BuilderError, FeePayer, Raise, TxBuilder};
 
 use crate::chain::{read_state_key, request_public};
-use crate::{Endpoints, HttpGraphql, Listener, MinaChain, Receiver, Relay, RequestProofs, Settings, TxSource};
+use crate::{Endpoints, HttpGraphql, Listener, MinaChain, Peers, Receiver, Relay, RequestProofs, Settings, TxSource};
 
 /// The environment variable that holds the fee payer's private key (base58, `EK…`). No flag carries
 /// it, so it never shows in a process listing.
 pub const FEE_PAYER_KEY: &str = "ZK_TOON_FEE_PAYER_KEY";
 
-/// What the service runs with. Prints the fee payer's key as `[secret]`.
+/// The environment variable that holds the bearer token a peer sends to read this challenger's evidence
+/// copy, and that this challenger sends to its `--peer`s. No flag carries it. If it is unset, reads are
+/// refused.
+pub const PEER_TOKEN: &str = "ZK_TOON_PEER_TOKEN";
+
+/// A secret that prints as `[secret]`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secret(pub String);
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[secret]")
+    }
+}
+
+/// What the service runs with. Prints the fee payer's key and the peer token as `[secret]`.
 #[derive(Clone, Debug)]
 pub struct Options {
     pub settings: Settings,
@@ -30,6 +45,10 @@ pub struct Options {
     pub evidence: PathBuf,
     /// Where to receive the zk edge's pushes into the evidence copy.
     pub listen: Option<SocketAddr>,
+    /// The other challengers (and the zk edge) to catch the evidence copy up from. Needs `listen`.
+    pub peers: Vec<String>,
+    /// The bearer token for reading a copy, [`PEER_TOKEN`]'s value.
+    pub peer_token: Option<Secret>,
     /// The challenger's journal: every escape seen and action taken, for restarts.
     pub journal: PathBuf,
     /// The o1js package, with its dependencies installed, that runs the transaction builder.
@@ -62,6 +81,7 @@ pub const FLAGS: &[Flag] = &[
     flag("--archive", "<url>", true),
     flag("--evidence", "<file>", true),
     flag("--listen", "<addr>", false),
+    flag("--peer", "<url>", false),
     flag("--journal", "<file>", true),
     flag("--o1js", "<dir>", true),
     flag("--keys", "<verification-keys.json>", false),
@@ -80,13 +100,14 @@ pub fn usage() -> String {
         .iter()
         .map(|f| if f.required { format!("{} {}", f.name, f.value) } else { format!("[{} {}]", f.name, f.value) })
         .collect();
-    format!("zk-toon-challenger {}, with the fee payer's key in {FEE_PAYER_KEY}", flags.join(" "))
+    format!("zk-toon-challenger {}, with the fee payer's key in {FEE_PAYER_KEY}, and the peer token in {PEER_TOKEN}", flags.join(" "))
 }
 
 impl Options {
-    /// Reads the flags in `args` (without the program name) and the fee payer's key, the value of
-    /// [`FEE_PAYER_KEY`]. An error names the flag or variable at fault.
-    pub fn parse(args: &[String], fee_payer_key: Option<String>) -> Result<Options, String> {
+    /// Reads the flags in `args` (without the program name), the fee payer's key, the value of
+    /// [`FEE_PAYER_KEY`], and the peer token, the value of [`PEER_TOKEN`]. An error names the flag or
+    /// variable at fault. `--peer` may be repeated.
+    pub fn parse(args: &[String], fee_payer_key: Option<String>, peer_token: Option<String>) -> Result<Options, String> {
         let mut flags: Vec<(&str, &str)> = Vec::new();
         let mut rest = args.iter();
         while let Some(flag) = rest.next() {
@@ -96,6 +117,7 @@ impl Options {
             let value = rest.next().ok_or_else(|| format!("{flag} needs a value"))?;
             flags.push((flag, value));
         }
+        let all = |flag: &str| flags.iter().filter(|(f, _)| *f == flag).map(|(_, v)| v.to_string()).collect::<Vec<_>>();
         let get = |flag: &str| flags.iter().rev().find(|(f, _)| *f == flag).map(|(_, v)| v.to_string());
         let need = |flag: &str| get(flag).ok_or_else(|| format!("{flag} is required; usage: {}", usage()));
         let number = |flag: &str, default: u64| -> Result<u64, String> {
@@ -108,6 +130,14 @@ impl Options {
         let private_key = fee_payer_key.ok_or_else(|| format!("{FEE_PAYER_KEY} must hold the fee payer's private key"))?;
         if SecKey::from_base58(&private_key).is_err() {
             return Err(format!("{FEE_PAYER_KEY} is not a base58 private key"));
+        }
+        let peers = all("--peer");
+        if !peers.is_empty() && get("--listen").is_none() {
+            return Err("--peer needs --listen: the copy it catches up is the one --listen holds".into());
+        }
+        let peer_token = peer_token.filter(|t| !t.is_empty());
+        if !peers.is_empty() && peer_token.is_none() {
+            return Err(format!("--peer needs {PEER_TOKEN}, the token the peers' reads take"));
         }
         Ok(Options {
             settings: Settings {
@@ -125,6 +155,8 @@ impl Options {
             listen: get("--listen")
                 .map(|a| a.parse().map_err(|_| format!("--listen is an address like 127.0.0.1:8080, not {a:?}")))
                 .transpose()?,
+            peers,
+            peer_token: peer_token.map(Secret),
             journal: need("--journal")?.into(),
             o1js: need("--o1js")?.into(),
             keys: get("--keys").map(PathBuf::from),
@@ -157,9 +189,17 @@ pub fn run(options: Options) -> Result<(), String> {
     let builder = SharedBuilder { builder: Rc::new(RefCell::new(builder)), unreachable: Rc::default() };
     let state_key = read_state_key(&*graphql, &options.settings.vault)
         .map_err(|e| format!("reading the vault's state key: {e:?}"))?;
+    let mut peers = None;
     if let Some(addr) = options.listen {
         let receiver = Receiver::open(&options.evidence, options.settings.vault.clone(), &state_key)?;
-        Listener::start(addr, receiver, |line| println!("{line}")).map_err(|e| format!("--listen {addr}: {e}"))?;
+        let receiver = Arc::new(Mutex::new(receiver));
+        let token = options.peer_token.as_ref().map(|t| t.0.clone());
+        Listener::start_shared(addr, receiver.clone(), token.clone(), |line| println!("{line}"))
+            .map_err(|e| format!("--listen {addr}: {e}"))?;
+        if let Some(token) = token.filter(|_| !options.peers.is_empty()) {
+            let (urls, socks5, timeout) = (options.peers.clone(), options.endpoints.socks5.as_deref(), options.endpoints.timeout);
+            peers = Some(Peers::new(urls, token, socks5, timeout, receiver)?);
+        }
     }
     let verifier = ForStateKey { state_key, inner: BuilderVerifier(builder.clone()) };
     let evidence = Rc::new(FileEvidence::new(&options.evidence, verifier));
@@ -167,7 +207,13 @@ pub fn run(options: Options) -> Result<(), String> {
         .map_err(|e| format!("{e:?}"))?;
     let journal = FileJournal::open(&options.journal).map_err(|e| format!("{e:?}"))?;
     let mut challenger = Challenger::new(chain, evidence, journal, options.config.clone());
-    let why = serve(&mut challenger, || builder.unreachable.take(), || sleep(options.interval), |line| println!("{line}"));
+    let why = serve(
+        &mut challenger,
+        || peers.as_ref().map_or_else(Vec::new, Peers::catch_up),
+        || builder.unreachable.take(),
+        || sleep(options.interval),
+        |line| println!("{line}"),
+    );
     Err(format!("transaction builder unreachable, exiting: {why}"))
 }
 
