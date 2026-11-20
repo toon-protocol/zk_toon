@@ -61,6 +61,10 @@ installed.
 
 The notice is a promise made off chain. The vault doesn't enforce it.
 
+The stop slot is Mina's `slot_tx_end`, the slot from which no transaction lands until the new chain starts. ADR 0015
+decides what a fork does to the vault's values, adds the vault's durations in post-fork time to the notice, and gives
+escapes pending at the fork a full window after the re-keyed vault resumes. The steps are in `docs/hard-fork.md`.
+
 ## The upgrade key
 
 It is held as a 2-of-3 threshold key (ADR 0012, "The upgrade key is a 2-of-3 FROST key"). The page at

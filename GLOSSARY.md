@@ -44,9 +44,33 @@ _Avoid_: Liveness check, key ceremony
 
 **Fork notice**:
 The operator's promise, made off chain at the vault's zkApp URI at least 14 days before a fork's stop
-slot, to publish the post-fork verification key with its source tag and a reproducible build. The vault
-doesn't enforce it (ADR 0006).
+slot, to publish the vault's re-key with its source tag and a reproducible build, and the vault's
+durations in post-fork time. The vault doesn't enforce it (ADR 0006, ADR 0015).
 _Avoid_: Upgrade notice, migration window
+
+**Stop slot**:
+The slot from which a forking network lands no transaction until its new chain starts (Mina's
+`slot_tx_end`). The fork notice and the pre-fork check count back from it. The slot keeps counting
+through the halt that follows (ADR 0015).
+_Avoid_: Fork slot, halt slot, chain end
+
+**Vault generation**:
+The vaults built with one set of policy values: one slot length, the slot counts it gives, and one
+minimum withdrawal. A vault keeps its generation's slot counts for life, across every fork; the vault
+deployed after a fork starts a new generation (ADR 0015).
+_Avoid_: Vault version, epoch
+
+**Re-key**:
+The verification key a vault from before a fork gets after it: built for the fork's proof system with
+the vault's own slot counts and the fork's fee, and installed by the share holders. A vault is re-keyed
+only while it holds a balance (ADR 0015).
+_Avoid_: Upgrade, migration, redeploy
+
+**Resume**:
+The first call a re-keyed vault takes after its install. Anyone may make it, once, and no escape
+finalizes until a full challenge window after it, so challengers get a whole window for the escapes
+pending across the fork (ADR 0015).
+_Avoid_: Unpause, restart
 
 **Keeper**:
 Whoever calls the vault's reduce, which anyone may. The zk edge operator is the natural keeper
