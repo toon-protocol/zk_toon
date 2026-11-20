@@ -27,8 +27,8 @@ import {
 import * as policy from './policy.js';
 import { verifyClearance } from './clearance.js';
 import { type NoteTree, NoteWitness, depositLeaf, emptyNoteRoot } from './note-tree.js';
-import { RequestProof, type RequestPublic } from './request.js';
-import { WithdrawalKind, WithdrawalProof, type WithdrawalPublic } from './withdrawal.js';
+import { type RequestProof, type RequestPublic, requestBuild } from './request.js';
+import { WithdrawalKind, type WithdrawalProof, type WithdrawalPublic, withdrawalBuild } from './withdrawal.js';
 import { tagToBigint } from './primitives.js';
 
 /** How many recent note-tree roots the vault remembers. */
@@ -47,6 +47,11 @@ export const REDUCE_BATCH_SIZE = 4;
 export const CLOSE_WINDOW_SLOTS = policy.REQUEST_MAX_AGE_SLOTS;
 /** Notes a sweep walks per call, at most. */
 export const SWEEP_BATCH_SIZE = 16;
+/**
+ * The number of the hard fork this build is for (ADR 0015). The build of a fork that re-keys the vault raises it, and
+ * its vaults must `resume` before they finalize.
+ */
+export const VAULT_FORK = 0n;
 /** The nullifier set holds up to 2^(height − 1) nullifiers. */
 export const NULLIFIER_SET_HEIGHT = 32;
 
@@ -99,12 +104,17 @@ export class PendingEscape extends Struct({
   /**
    * The concession a raise from `evidence` claiming `claimed` lifts this escape to: `min(claimed, b,
    * balance)` (ADR 0004), where `b` is the evidence's tier. A subsidised proof's `b` counts as zero, so it
-   * never raises (ADR 0001). The request circuit bounds the tier to 64 bits.
+   * never raises (ADR 0001). The request circuit bounds the tier to 64 bits. A result that would leave a
+   * payout above zero and below the account creation fee concedes the whole `amount` instead, so a pending
+   * escape's payout is zero or at least the fee (ADR 0013).
    */
   raisedConcession(evidence: RequestPublic, claimed: UInt64): UInt64 {
     const tier = Provable.if(evidence.subsidised, UInt64, UInt64.zero, UInt64.Unsafe.fromField(evidence.tier));
     const min = (a: UInt64, b: UInt64) => Provable.if(a.lessThan(b), UInt64, a, b);
-    return min(min(claimed, tier), this.amount);
+    const raised = min(min(claimed, tier), this.amount);
+    const left = this.amount.sub(raised);
+    const stranded = left.greaterThan(UInt64.zero).and(left.lessThan(UInt64.from(policy.ACCOUNT_CREATION_FEE)));
+    return Provable.if(stranded, UInt64, this.amount, raised);
   }
 }
 
@@ -228,8 +238,8 @@ function requireSlotBetween(contract: SmartContract, lower: UInt64, upper: UInt6
 const LAST_SLOT = UInt64.from(UInt32.MAXINT().toBigint());
 
 /**
- * Precondition on a payee: its account exists, so a payout to it opens no account and cannot fail for want
- * of the fee. A failing reduce would stall every action queued behind it (ADR 0002).
+ * Precondition on the treasury: its account exists. Other payees' accounts need not (ADR 0013): a payout
+ * opens a destination's account and pays the creation fee out of itself.
  */
 function requireAccountExists(address: PublicKey) {
   AccountUpdate.create(address).account.isNew.requireEquals(Bool(false));
@@ -265,9 +275,29 @@ export class RootRing extends Struct({ roots: Provable.Array(Field, ROOT_RING_LE
 }
 
 const { BatchReducer } = Experimental;
-export const batchReducer = new BatchReducer({ actionType: VaultAction, batchSize: REDUCE_BATCH_SIZE });
-export class VaultBatch extends batchReducer.Batch {}
-export class VaultBatchProof extends batchReducer.BatchProof {}
+
+/** The vault's state fields, as `declareState` takes them. */
+const VAULT_STATE_FIELDS = {
+  actionState: Field,
+  actionStack: Field,
+  noteRoot: Field,
+  nextLeafIndex: Field,
+  rootRing: RootRing,
+  creationTime: UInt64,
+  depositSizes: DepositSizes,
+  noteLifetime: UInt64,
+  challengeWindow: UInt64,
+  nullifierRoot: Field,
+  stateKey: PublicKey,
+  treasury: PublicKey,
+  pendingEscapesRoot: Field,
+  sweepCursor: Field,
+  expiredTotal: UInt64,
+  claimedTotal: UInt64,
+  sweptTotal: UInt64,
+  forkResumed: Field,
+  resumedAt: UInt64,
+};
 
 /** The vault's state fields, in the order `declareState` lays them out on the account. */
 export class VaultState extends Struct({
@@ -288,9 +318,11 @@ export class VaultState extends Struct({
   expiredTotal: UInt64,
   claimedTotal: UInt64,
   sweptTotal: UInt64,
+  forkResumed: Field,
+  resumedAt: UInt64,
 }) {
   /** What `init` writes for a vault created at slot `created`: the one source `deploy` and the registry's `register` share. */
-  static initial(created: UInt64): VaultState {
+  static initial(created: UInt64, gen: policy.Generation = policy.CURRENT_GENERATION, fork: bigint = VAULT_FORK): VaultState {
     return new VaultState({
       actionState: BatchReducer.initialActionState,
       actionStack: BatchReducer.initialActionStack,
@@ -299,8 +331,8 @@ export class VaultState extends Struct({
       rootRing: RootRing.empty(),
       creationTime: created,
       depositSizes: DepositSizes.fromPolicy(),
-      noteLifetime: UInt64.from(policy.NOTE_LIFETIME_SLOTS),
-      challengeWindow: UInt64.from(policy.CHALLENGE_WINDOW_SLOTS),
+      noteLifetime: UInt64.from(gen.noteLifetimeSlots),
+      challengeWindow: UInt64.from(gen.challengeWindowSlots),
       nullifierRoot: new NullifierSet().root,
       stateKey: PublicKey.empty(),
       treasury: PublicKey.empty(),
@@ -309,6 +341,8 @@ export class VaultState extends Struct({
       expiredTotal: UInt64.zero,
       claimedTotal: UInt64.zero,
       sweptTotal: UInt64.zero,
+      forkResumed: Field(fork),
+      resumedAt: created,
     });
   }
 }
@@ -333,423 +367,491 @@ export const lockedPermissions = () => ({
   setDelegate: Permissions.signature(),
 });
 
-export class Vault extends SmartContract {
-  // State fields in use: 2 (batch reducer) + 1 + 1 + (8 + 1) + 1 + 3 + 1 + 1 + 1 + 2 + 2 + 1 + 4 = 29 of Mesa's 32.
-  actionState = State<Field>();
-  actionStack = State<Field>();
-  noteRoot = State<Field>();
-  nextLeafIndex = State<Field>();
-  rootRing = State<RootRing>();
-  creationTime = State<UInt64>();
-  depositSizes = State<DepositSizes>();
-  noteLifetime = State<UInt64>();
-  challengeWindow = State<UInt64>();
-  /** The root of the nullifier set. */
-  nullifierRoot = State<Field>();
-  /** The key the zk edge signs state and clearances under; empty until `setup`. */
-  stateKey = State<PublicKey>();
-  /** The zk edge operator's address: paid what a closed note's balance leaves of its deposit. */
-  treasury = State<PublicKey>();
-  /** The root of the pending escapes. */
-  pendingEscapesRoot = State<Field>();
-  /** The index of the next note a sweep walks: every note below it has expired. */
-  sweepCursor = State<Field>();
-  /** The sizes of the notes below the sweep cursor. */
-  expiredTotal = State<UInt64>();
-  /**
-   * The sizes of the notes the reduce has paid out or holds for a pending escape: each close and each
-   * recorded escape adds its note's size, and each defeat takes it back. A finalize leaves it alone.
-   */
-  claimedTotal = State<UInt64>();
-  /** What sweeps have paid the treasury. */
-  sweptTotal = State<UInt64>();
+/**
+ * What one vault generation compiles: the vault, its batch reducer and the two circuits whose proofs it verifies, each with
+ * `gen`'s constants (ADR 0015). Built once per generation. The current generation's is this module's `Vault` and the rest;
+ * building it again gives its keys and code hash exactly.
+ */
+export function vaultBuild(gen: policy.Generation) {
+  const key = policy.generationKey(gen);
+  const built = builds.get(key);
+  if (built) return built;
+  const made = buildVault(gen);
+  builds.set(key, made);
+  return made;
+}
+const builds = new Map<string, ReturnType<typeof buildVault>>();
 
-  events = { escape: EscapeUpdate };
+function buildVault(gen: policy.Generation) {
+  const { program: RequestProgram, Proof: RequestProof } = requestBuild(gen);
+  const { program: WithdrawalProgram, Proof: WithdrawalProof } = withdrawalBuild(gen);
+  const batchReducer = new BatchReducer({ actionType: VaultAction, batchSize: REDUCE_BATCH_SIZE });
+  class VaultBatch extends batchReducer.Batch {}
+  class VaultBatchProof extends batchReducer.BatchProof {}
 
-  /**
-   * Deploys with the account's permissions fixed (ADR 0006) and its zkApp URI set, once: the URI names where
-   * fork notices appear. The vault has no pause.
-   *
-   * `slot` is the slot to aim at: the creation slot `init` records, and the first of the two slots the deploy
-   * can land in. Omitted, `init` takes the network's current slot.
-   */
-  async deploy({
-    zkappUri,
-    slot,
-    ...args
-  }: NonNullable<Parameters<SmartContract['deploy']>[0]> & { zkappUri: string; slot?: UInt64 }) {
-    // `init()` takes no arguments, so the slot waits here for the length of this deploy and no longer.
-    this.aimedSlot = slot;
-    try {
-      await super.deploy(args);
-    } finally {
-      this.aimedSlot = undefined;
-    }
-    this.account.zkappUri.set(zkappUri);
-    this.account.permissions.set(lockedPermissions());
-  }
+  class Vault extends SmartContract {
+    // State fields in use: 2 (batch reducer) + 1 + 1 + (8 + 1) + 1 + 3 + 1 + 1 + 1 + 2 + 2 + 1 + 4 = 29 of Mesa's 32.
+    actionState = State<Field>();
+    actionStack = State<Field>();
+    noteRoot = State<Field>();
+    nextLeafIndex = State<Field>();
+    rootRing = State<RootRing>();
+    creationTime = State<UInt64>();
+    depositSizes = State<DepositSizes>();
+    noteLifetime = State<UInt64>();
+    challengeWindow = State<UInt64>();
+    /** The root of the nullifier set. */
+    nullifierRoot = State<Field>();
+    /** The key the zk edge signs state and clearances under; empty until `setup`. */
+    stateKey = State<PublicKey>();
+    /** The zk edge operator's address: paid what a closed note's balance leaves of its deposit. */
+    treasury = State<PublicKey>();
+    /** The root of the pending escapes. */
+    pendingEscapesRoot = State<Field>();
+    /** The index of the next note a sweep walks: every note below it has expired. */
+    sweepCursor = State<Field>();
+    /** The sizes of the notes below the sweep cursor. */
+    expiredTotal = State<UInt64>();
+    /**
+     * The sizes of the notes the reduce has paid out or holds for a pending escape: each close and each
+     * recorded escape adds its note's size, and each defeat takes it back. A finalize leaves it alone.
+     */
+    claimedTotal = State<UInt64>();
+    /** What sweeps have paid the treasury. */
+    sweptTotal = State<UInt64>();
+    /** The fork the vault last resumed under: `init` records the build's, `resume` the build's after a re-key. */
+    forkResumed = State<Field>();
+    /** The slot the vault resumed at, or was created at: no escape finalizes before this plus the challenge window. */
+    resumedAt = State<UInt64>();
 
-  /** The slot the running `deploy` aims at, for `init` to read; not state, so not part of the key. */
-  private aimedSlot?: UInt64;
+    events = { escape: EscapeUpdate };
 
-  /**
-   * Pins the creation slot to the aimed slot, else the network's (within a slot of the including block's), and
-   * records the policy.
-   */
-  init() {
-    super.init();
-    const created = Provable.witness(UInt64, () =>
-      this.aimedSlot ?? UInt64.from(Mina.getNetworkState().globalSlotSinceGenesis.toBigint()),
-    );
-    requireSlotBetween(this, created, created.add(1));
-    const s = VaultState.initial(created);
-    this.creationTime.set(s.creationTime);
-    this.depositSizes.set(s.depositSizes);
-    this.noteLifetime.set(s.noteLifetime);
-    this.challengeWindow.set(s.challengeWindow);
-    this.actionState.set(s.actionState);
-    this.actionStack.set(s.actionStack);
-    this.noteRoot.set(s.noteRoot);
-    this.nextLeafIndex.set(s.nextLeafIndex);
-    this.rootRing.set(s.rootRing);
-    this.nullifierRoot.set(s.nullifierRoot);
-    this.pendingEscapesRoot.set(s.pendingEscapesRoot);
-    this.sweepCursor.set(s.sweepCursor);
-    this.expiredTotal.set(s.expiredTotal);
-    this.claimedTotal.set(s.claimedTotal);
-    this.sweptTotal.set(s.sweptTotal);
-  }
-
-  /**
-   * One-time: records the state key and the treasury. The vault account must have signed them
-   * (`setupFields`), it is refused once a state key is set, and the treasury's account must exist.
-   */
-  async setup(stateKey: PublicKey, treasury: PublicKey, signature: Signature) {
-    this.stateKey.getAndRequireEquals().isEmpty().assertTrue('already set up');
-    stateKey.isEmpty().assertFalse('no state key');
-    signature.verify(this.address, setupFields(this.address, stateKey, treasury)).assertTrue('not signed by the vault');
-    requireAccountExists(treasury);
-    this.stateKey.set(stateKey);
-    this.treasury.set(treasury);
-  }
-
-  async deposit(commitment: Field, size: UInt64, depositTime: UInt64) {
-    this.depositSizes.getAndRequireEquals().has(size).assertTrue('not a deposit size');
-    requireSlotBetween(this, depositTime, depositTime.add(1));
-    const payer = AccountUpdate.createSigned(this.sender.getAndRequireSignature());
-    payer.send({ to: this, amount: size });
-    batchReducer.dispatch(VaultAction.deposit(commitment, size, depositTime));
-  }
-
-  /**
-   * Leaving by agreement. Checks a mutual-close withdrawal proof and the zk edge's clearance of its
-   * nullifier to its destination, then dispatches a close. Pays nothing: the reduce pays.
-   */
-  async mutualClose(proof: WithdrawalProof, clearance: Signature, nullifiers: NullifierSet) {
-    proof.verify();
-    const pub = proof.publicInput;
-    pub.kind.assertEquals(WithdrawalKind.mutualClose, 'not a mutual close');
-
-    const stateKey = this.stateKey.getAndRequireEquals();
-    stateKey.isEmpty().assertFalse('setup has not run');
-    pub.vault.equals(stateKey).assertTrue('not the state key');
-    new RootRing(this.rootRing.getAndRequireEquals()).contains(pub.root).assertTrue('root not in the ring');
-    // `pub.vault` is the stored state key, and unlike an unset one a valid point, so a close before
-    // setup fails on the assertion above rather than inside the signature check.
-    verifyClearance(clearance, { stateKey: pub.vault, nullifier: pub.nullifier, destination: pub.destination })
-      .assertTrue('bad clearance');
-
-    const action = VaultAction.mutualClose(pub);
-    requireSlotBetween(this, action.time, action.time.add(UInt64.from(CLOSE_WINDOW_SLOTS)));
-    // A payout to an account that does not exist would fail the reduce, and stall every action queued behind it.
-    requireAccountExists(pub.destination);
-
-    nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
-    nullifiers.assertNotIncluded(pub.nullifier, 'nullifier spent');
-    batchReducer.dispatch(action);
-  }
-
-  /**
-   * Leaving without the zk edge. Checks an escape proof, landing between its `requestTime` and its
-   * `validUntil`, whose current and next nullifiers are both unspent, then dispatches an escape. The
-   * reduce consumes both nullifiers, records the escape and starts its challenge window. Pays nothing.
-   */
-  async escape(proof: WithdrawalProof, nullifiers: NullifierSet) {
-    proof.verify();
-    const pub = proof.publicInput;
-    pub.kind.assertEquals(WithdrawalKind.escape, 'not an escape');
-
-    const stateKey = this.stateKey.getAndRequireEquals();
-    stateKey.isEmpty().assertFalse('setup has not run');
-    pub.vault.equals(stateKey).assertTrue('not the state key');
-    new RootRing(this.rootRing.getAndRequireEquals()).contains(pub.root).assertTrue('root not in the ring');
-
-    const action = VaultAction.escape(pub);
-    requireSlotBetween(this, action.time, action.validUntil);
-    // Finalizing pays the destination, so it must exist, as for a close.
-    requireAccountExists(pub.destination);
-
-    nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
-    nullifiers.assertNotIncluded(pub.nullifier, 'nullifier spent');
-    nullifiers.assertNotIncluded(pub.nextNullifier, 'nullifier spent');
-    batchReducer.dispatch(action);
-  }
-
-  /**
-   * Permissionless, once the current slot reaches the escape's deadline. Checks that `escape` is pending,
-   * then dispatches a finalize; the reduce pays it.
-   */
-  async finalize(escape: PendingEscape, escapes: PendingEscapes) {
-    escapes.root.assertEquals(this.pendingEscapesRoot.getAndRequireEquals(), 'not the vault pending escapes');
-    escapes.getOption(escape.nullifier).orElse(0n).assertEquals(escape.hash(), 'no such pending escape');
-    requireSlotBetween(this, escape.deadline, LAST_SLOT);
-    batchReducer.dispatch(VaultAction.finalize(escape));
-  }
-
-  /**
-   * Permissionless, before the escape's deadline. Cancels the pending `escape` with `evidence`, a request
-   * proof at its next nullifier: the note's successor state opened an allowance, so the escape was from
-   * a stale state. A subsidised proof defeats too (ADR 0001). The reduce finishes the escape without
-   * paying; the deposit stays in the vault, and the note goes on from the state the zk edge signs after
-   * that successor, since the escape consumed both its own and the successor's nullifier.
-   */
-  async defeat(escape: PendingEscape, evidence: RequestProof, escapes: PendingEscapes) {
-    this.checkEvidence(evidence);
-    evidence.publicInput.nullifier.assertEquals(escape.nextNullifier, "not the escape's next nullifier");
-    this.checkChallengeable(escape, escapes);
-    batchReducer.dispatch(VaultAction.defeat(escape));
-  }
-
-  /**
-   * Permissionless, before the escape's deadline. Lifts the pending `escape`'s concession to
-   * `min(claimed, b, balance)` with `evidence`, a request proof of tier `b` at its current nullifier
-   * (ADR 0004: the challenger claims the allowance's recorded charge, or `b` if it never closed). Refused
-   * unless that is more than the concession already is; a subsidised proof never raises (ADR 0001). The
-   * reduce replaces the record.
-   */
-  async raise(escape: PendingEscape, evidence: RequestProof, claimed: UInt64, escapes: PendingEscapes) {
-    this.checkEvidence(evidence);
-    evidence.publicInput.nullifier.assertEquals(escape.nullifier, "not the escape's nullifier");
-    this.checkChallengeable(escape, escapes);
-    const action = VaultAction.raise(escape, evidence.publicInput, claimed);
-    action.conceded.assertGreaterThan(escape.conceded, 'raise would not increase the concession');
-    batchReducer.dispatch(action);
-  }
-
-  /**
-   * Permissionless. Walks the next `count` notes (at most a batch) from the sweep cursor, each of which
-   * must have expired by the current slot, adds their sizes to the expired total, and dispatches a sweep of
-   * that total; the reduce pays the treasury what the expired notes left (ADR 0005). Refused while
-   * nothing has expired. A note counts only once a close proven before its expiry can no longer land,
-   * at `expiry + CLOSE_WINDOW_SLOTS`; an escape lands before its note's expiry. So every withdrawal of a
-   * counted note was dispatched before the sweep, and the reduce applies it first.
-   *
-   * `notes` holds a batch: the walked notes in index order, padded with anything (`SweptNote.batch` builds one).
-   * `now` is at most the current slot. Deposit slots may run up to a slot out of index order; a note
-   * expiring later than the one after it holds that one back until it expires too.
-   */
-  async sweepExpired(count: UInt32, notes: Unconstrained<SweptNote[]>, now: UInt64) {
-    this.treasury.getAndRequireEquals().isEmpty().assertFalse('setup has not run');
-    requireSlotBetween(this, now, LAST_SLOT);
-    const root = this.noteRoot.getAndRequireEquals();
-    let cursor = this.sweepCursor.getAndRequireEquals();
-    let expired = this.expiredTotal.getAndRequireEquals();
-    const lapse = UInt64.from(policy.NOTE_LIFETIME_SLOTS + CLOSE_WINDOW_SLOTS);
-
-    for (let i = 0; i < SWEEP_BATCH_SIZE; i++) {
-      const walks = count.greaterThan(UInt32.from(i));
-      const note = Provable.witness(SweptNote, () => notes.get()[i]);
-      const leaf = depositLeaf(cursor, { commitment: note.commitment, size: note.size.value, depositTime: note.depositTime.value });
-      const isNext = note.path.calculateIndex().equals(cursor).and(note.path.calculateRoot(leaf).equals(root));
-      walks.not().or(isNext).assertTrue('not the note at the sweep cursor');
-      // A note not walked may hold anything: it adds nothing, and must not overflow either.
-      const depositTime = Provable.if(walks, UInt64, note.depositTime, UInt64.zero);
-      walks.not().or(depositTime.add(lapse).lessThanOrEqual(now)).assertTrue('note not expired');
-      expired = expired.add(Provable.if(walks, UInt64, note.size, UInt64.zero));
-      cursor = Provable.if(walks, cursor.add(1), cursor);
+    /**
+     * Deploys with the account's permissions fixed (ADR 0006) and its zkApp URI set, once: the URI names where
+     * fork notices appear. The vault has no pause.
+     *
+     * `slot` is the slot to aim at: the creation slot `init` records, and the first of the two slots the deploy
+     * can land in. Omitted, `init` takes the network's current slot.
+     */
+    async deploy({
+      zkappUri,
+      slot,
+      ...args
+    }: NonNullable<Parameters<SmartContract['deploy']>[0]> & { zkappUri: string; slot?: UInt64 }) {
+      // `init()` takes no arguments, so the slot waits here for the length of this deploy and no longer.
+      this.aimedSlot = slot;
+      try {
+        await super.deploy(args);
+      } finally {
+        this.aimedSlot = undefined;
+      }
+      this.account.zkappUri.set(zkappUri);
+      this.account.permissions.set(lockedPermissions());
     }
 
-    expired.assertGreaterThan(UInt64.zero, 'nothing has expired');
-    this.sweepCursor.set(cursor);
-    this.expiredTotal.set(expired);
-    batchReducer.dispatch(VaultAction.sweep(expired));
-  }
+    /** The fork this build is for. A test build overrides it, since LocalBlockchain can't raise the transaction version. */
+    static fork = VAULT_FORK;
+    /** The fork `init` records, `fork` unless set. A test build sets it behind `fork` to stand for a vault a re-key left unresumed. */
+    static initFork?: bigint;
+    static forkOf(contract: Vault) {
+      return contract.constructor as typeof Vault;
+    }
 
-  /**
-   * A valid request proof under the vault's state key. Its root need not be in the ring: a challenger's
-   * evidence may be older than the ring, and only the note's holder can prove at its nullifiers.
-   */
-  private checkEvidence(evidence: RequestProof) {
-    evidence.verify();
-    const stateKey = this.stateKey.getAndRequireEquals();
-    stateKey.isEmpty().assertFalse('setup has not run');
-    evidence.publicInput.vault.equals(stateKey).assertTrue('not the state key');
-  }
+    /** The slot the running `deploy` aims at, for `init` to read; not state, so not part of the key. */
+    private aimedSlot?: UInt64;
 
-  /** `escape` is pending as named, and the current slot is before its deadline. */
-  private checkChallengeable(escape: PendingEscape, escapes: PendingEscapes) {
-    escapes.root.assertEquals(this.pendingEscapesRoot.getAndRequireEquals(), 'not the vault pending escapes');
-    escapes.getOption(escape.nullifier).orElse(0n).assertEquals(escape.hash(), 'no such pending escape');
-    // A recorded deadline is a full window after a reduce's slot, so never zero.
-    requireSlotBetween(this, UInt64.zero, escape.deadline.sub(1));
-  }
+    /**
+     * Pins the creation slot to the aimed slot, else the network's (within a slot of the including block's), and
+     * records the policy.
+     */
+    init() {
+      super.init();
+      const created = Provable.witness(UInt64, () =>
+        this.aimedSlot ?? UInt64.from(Mina.getNetworkState().globalSlotSinceGenesis.toBigint()),
+      );
+      requireSlotBetween(this, created, created.add(1));
+      const s = VaultState.initial(created, gen, Vault.forkOf(this).initFork ?? Vault.forkOf(this).fork);
+      this.creationTime.set(s.creationTime);
+      this.depositSizes.set(s.depositSizes);
+      this.noteLifetime.set(s.noteLifetime);
+      this.challengeWindow.set(s.challengeWindow);
+      this.actionState.set(s.actionState);
+      this.actionStack.set(s.actionStack);
+      this.noteRoot.set(s.noteRoot);
+      this.nextLeafIndex.set(s.nextLeafIndex);
+      this.rootRing.set(s.rootRing);
+      this.nullifierRoot.set(s.nullifierRoot);
+      this.pendingEscapesRoot.set(s.pendingEscapesRoot);
+      this.sweepCursor.set(s.sweepCursor);
+      this.expiredTotal.set(s.expiredTotal);
+      this.claimedTotal.set(s.claimedTotal);
+      this.sweptTotal.set(s.sweptTotal);
+      this.forkResumed.set(s.forkResumed);
+      this.resumedAt.set(s.resumedAt);
+    }
 
-  /**
-   * Permissionless. Folds up to a batch of pending actions:
-   * - a deposit becomes the next note;
-   * - a mutual close consumes its nullifier and pays `amount` to its destination and `size − amount` to
-   *   the treasury;
-   * - an escape consumes its current and next nullifiers and is recorded as pending, with a deadline a
-   *   full challenge window after this reduce lands;
-   * - a finalize finishes its pending escape and pays `amount − conceded` to the destination and the
-   *   rest of `size` to the treasury;
-   * - a defeat finishes its pending escape without paying;
-   * - a raise replaces its pending escape with the raised record;
-   * - a sweep pays the treasury `expired − claimed − swept`, or nothing if that is not positive, where
-   *   `expired` is the sweep's and `claimed` and `swept` stand as of the actions before it (ADR 0005).
-   * A close or escape with a nullifier already spent, in the set or earlier in the batch, and a finalize,
-   * defeat or raise of an escape no longer pending as named, are skipped without paying and without failing.
-   * So of a raise, a defeat and a finalize of one escape in one batch, only the first applies.
-   * Each change to a pending escape is emitted as an `escape` event ({@link EscapeUpdate}).
-   *
-   * `now` pins the current slot to within a slot after it.
-   */
-  async reduce(
-    batch: VaultBatch, proof: VaultBatchProof, witnesses: Unconstrained<NoteWitness[]>, given: NullifierSet,
-    givenEscapes: PendingEscapes, now: UInt64
-  ) {
-    // o1js may run a method more than once over the same argument; inserting into the caller's copy
-    // would corrupt the next run.
-    const nullifiers = given.clone();
-    const escapes = givenEscapes.clone();
-    escapes.root.assertEquals(this.pendingEscapesRoot.getAndRequireEquals(), 'not the vault pending escapes');
-    requireSlotBetween(this, now, now.add(1));
-    // The current slot is at most `now + 1`, so the window is never shorter than its full length.
-    const deadline = now.add(1).add(this.challengeWindow.getAndRequireEquals());
-    let root = this.noteRoot.getAndRequireEquals();
-    let next = this.nextLeafIndex.getAndRequireEquals();
-    const ring = new RootRing(this.rootRing.getAndRequireEquals());
-    nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
-    const treasury = this.treasury.getAndRequireEquals();
-    let claimed = this.claimedTotal.getAndRequireEquals();
-    let swept = this.sweptTotal.getAndRequireEquals();
-    let changed = Bool(false);
+    /**
+     * One-time: records the state key and the treasury. The vault account must have signed them
+     * (`setupFields`), it is refused once a state key is set, and the treasury's account must exist.
+     */
+    async setup(stateKey: PublicKey, treasury: PublicKey, signature: Signature) {
+      this.stateKey.getAndRequireEquals().isEmpty().assertTrue('already set up');
+      stateKey.isEmpty().assertFalse('no state key');
+      signature.verify(this.address, setupFields(this.address, stateKey, treasury)).assertTrue('not signed by the vault');
+      requireAccountExists(treasury);
+      this.stateKey.set(stateKey);
+      this.treasury.set(treasury);
+    }
 
-    batchReducer.processBatch({ batch, proof }, (action, isDummy, i) => {
-      const isDeposit = isDummy.not().and(action.kind.equals(ActionKind.deposit));
-      const isClose = isDummy.not().and(action.kind.equals(ActionKind.mutualClose));
-      const isEscape = isDummy.not().and(action.kind.equals(ActionKind.escape));
-      const isFinalize = isDummy.not().and(action.kind.equals(ActionKind.finalize));
-      const isDefeat = isDummy.not().and(action.kind.equals(ActionKind.defeat));
-      const isRaise = isDummy.not().and(action.kind.equals(ActionKind.raise));
-      const isSweep = isDummy.not().and(action.kind.equals(ActionKind.sweep));
+    async deposit(commitment: Field, size: UInt64, depositTime: UInt64) {
+      this.depositSizes.getAndRequireEquals().has(size).assertTrue('not a deposit size');
+      requireSlotBetween(this, depositTime, depositTime.add(1));
+      const payer = AccountUpdate.createSigned(this.sender.getAndRequireSignature());
+      payer.send({ to: this, amount: size });
+      batchReducer.dispatch(VaultAction.deposit(commitment, size, depositTime));
+    }
 
-      const witness = Provable.witness(NoteWitness, () => witnesses.get()[i]);
-      // The slot at `next` must be empty under the current root.
-      witness.calculateIndex().assertEquals(next);
-      const noteLeaf = depositLeaf(next, {
-        commitment: action.commitment, size: action.size.value, depositTime: action.time.value,
+    /**
+     * Leaving by agreement. Checks a mutual-close withdrawal proof and the zk edge's clearance of its
+     * nullifier to its destination, then dispatches a close. Pays nothing: the reduce pays.
+     */
+    async mutualClose(proof: WithdrawalProof, clearance: Signature, nullifiers: NullifierSet) {
+      proof.verify();
+      const pub = proof.publicInput;
+      pub.kind.assertEquals(WithdrawalKind.mutualClose, 'not a mutual close');
+
+      const stateKey = this.stateKey.getAndRequireEquals();
+      stateKey.isEmpty().assertFalse('setup has not run');
+      pub.vault.equals(stateKey).assertTrue('not the state key');
+      new RootRing(this.rootRing.getAndRequireEquals()).contains(pub.root).assertTrue('root not in the ring');
+      // `pub.vault` is the stored state key, and unlike an unset one a valid point, so a close before
+      // setup fails on the assertion above rather than inside the signature check.
+      verifyClearance(clearance, { stateKey: pub.vault, nullifier: pub.nullifier, destination: pub.destination })
+        .assertTrue('bad clearance');
+
+      const action = VaultAction.mutualClose(pub);
+      requireSlotBetween(this, action.time, action.time.add(UInt64.from(gen.requestMaxAgeSlots)));
+      // The reduce pays `amount`, less the creation fee if that opens the destination's account (ADR 0013).
+      // Dispatch can't tell a new destination from an existing one, so every close must cover the fee.
+      action.amount.greaterThanOrEqual(UInt64.from(policy.ACCOUNT_CREATION_FEE)).assertTrue('payout below the account creation fee');
+
+      nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
+      nullifiers.assertNotIncluded(pub.nullifier, 'nullifier spent');
+      batchReducer.dispatch(action);
+    }
+
+    /**
+     * Leaving without the zk edge. Checks an escape proof, landing between its `requestTime` and its
+     * `validUntil`, whose current and next nullifiers are both unspent, then dispatches an escape. The
+     * reduce consumes both nullifiers, records the escape and starts its challenge window. Pays nothing.
+     */
+    async escape(proof: WithdrawalProof, nullifiers: NullifierSet) {
+      proof.verify();
+      const pub = proof.publicInput;
+      pub.kind.assertEquals(WithdrawalKind.escape, 'not an escape');
+
+      const stateKey = this.stateKey.getAndRequireEquals();
+      stateKey.isEmpty().assertFalse('setup has not run');
+      pub.vault.equals(stateKey).assertTrue('not the state key');
+      new RootRing(this.rootRing.getAndRequireEquals()).contains(pub.root).assertTrue('root not in the ring');
+
+      const action = VaultAction.escape(pub);
+      requireSlotBetween(this, action.time, action.validUntil);
+      // Finalizing pays `amount − conceded`, which must cover the creation fee, as for a close (ADR 0013).
+      action.amount.sub(action.conceded).greaterThanOrEqual(UInt64.from(policy.ACCOUNT_CREATION_FEE))
+        .assertTrue('payout below the account creation fee');
+
+      nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
+      nullifiers.assertNotIncluded(pub.nullifier, 'nullifier spent');
+      nullifiers.assertNotIncluded(pub.nextNullifier, 'nullifier spent');
+      batchReducer.dispatch(action);
+    }
+
+    /**
+     * Permissionless, once the current slot reaches the escape's deadline and a challenge window after the vault's
+     * resume, and only in a vault resumed under this build's fork (ADR 0015). Checks that `escape` is pending, then
+     * dispatches a finalize; the reduce pays it.
+     */
+    async finalize(escape: PendingEscape, escapes: PendingEscapes) {
+      escapes.root.assertEquals(this.pendingEscapesRoot.getAndRequireEquals(), 'not the vault pending escapes');
+      escapes.getOption(escape.nullifier).orElse(0n).assertEquals(escape.hash(), 'no such pending escape');
+      this.forkResumed.getAndRequireEquals().assertEquals(Field(Vault.forkOf(this).fork), 'the vault has not resumed');
+      const quiet = this.resumedAt.getAndRequireEquals().add(this.challengeWindow.getAndRequireEquals());
+      requireSlotBetween(this, Provable.if(quiet.greaterThan(escape.deadline), UInt64, quiet, escape.deadline), LAST_SLOT);
+      batchReducer.dispatch(VaultAction.finalize(escape));
+    }
+
+    /**
+     * Permissionless, once, after a re-key left the vault behind this build's fork: records the fork and the slot it
+     * lands at, which `finalize` waits a challenge window from. The slot recorded is the later of the two the
+     * transaction can land in, so the window is never short.
+     */
+    async resume() {
+      const build = Field(Vault.forkOf(this).fork);
+      // A vault is never ahead of its build, and assertLessThan can't compile against a build of fork 0.
+      this.forkResumed.getAndRequireEquals().equals(build).assertFalse('the vault is not behind this fork');
+      const landing = Provable.witness(UInt64, () => UInt64.from(Mina.getNetworkState().globalSlotSinceGenesis.toBigint()));
+      requireSlotBetween(this, landing, landing.add(1));
+      this.forkResumed.set(build);
+      this.resumedAt.set(landing.add(1));
+    }
+
+    /**
+     * Permissionless, before the escape's deadline. Cancels the pending `escape` with `evidence`, a request
+     * proof at its next nullifier: the note's successor state opened an allowance, so the escape was from
+     * a stale state. A subsidised proof defeats too (ADR 0001). The reduce finishes the escape without
+     * paying; the deposit stays in the vault, and the note goes on from the state the zk edge signs after
+     * that successor, since the escape consumed both its own and the successor's nullifier.
+     */
+    async defeat(escape: PendingEscape, evidence: RequestProof, escapes: PendingEscapes) {
+      this.checkEvidence(evidence);
+      evidence.publicInput.nullifier.assertEquals(escape.nextNullifier, "not the escape's next nullifier");
+      this.checkChallengeable(escape, escapes);
+      batchReducer.dispatch(VaultAction.defeat(escape));
+    }
+
+    /**
+     * Permissionless, before the escape's deadline. Lifts the pending `escape`'s concession to
+     * `min(claimed, b, balance)` with `evidence`, a request proof of tier `b` at its current nullifier
+     * (ADR 0004: the challenger claims the allowance's recorded charge, or `b` if it never closed). Refused
+     * unless that is more than the concession already is; a subsidised proof never raises (ADR 0001). The
+     * reduce replaces the record.
+     */
+    async raise(escape: PendingEscape, evidence: RequestProof, claimed: UInt64, escapes: PendingEscapes) {
+      this.checkEvidence(evidence);
+      evidence.publicInput.nullifier.assertEquals(escape.nullifier, "not the escape's nullifier");
+      this.checkChallengeable(escape, escapes);
+      const action = VaultAction.raise(escape, evidence.publicInput, claimed);
+      action.conceded.assertGreaterThan(escape.conceded, 'raise would not increase the concession');
+      batchReducer.dispatch(action);
+    }
+
+    /**
+     * Permissionless. Walks the next `count` notes (at most a batch) from the sweep cursor, each of which
+     * must have expired by the current slot, adds their sizes to the expired total, and dispatches a sweep of
+     * that total; the reduce pays the treasury what the expired notes left (ADR 0005). Refused while
+     * nothing has expired. A note counts only once a close proven before its expiry can no longer land,
+     * at `expiry + CLOSE_WINDOW_SLOTS`; an escape lands before its note's expiry. So every withdrawal of a
+     * counted note was dispatched before the sweep, and the reduce applies it first.
+     *
+     * `notes` holds a batch: the walked notes in index order, padded with anything (`SweptNote.batch` builds one).
+     * `now` is at most the current slot. Deposit slots may run up to a slot out of index order; a note
+     * expiring later than the one after it holds that one back until it expires too.
+     */
+    async sweepExpired(count: UInt32, notes: Unconstrained<SweptNote[]>, now: UInt64) {
+      this.treasury.getAndRequireEquals().isEmpty().assertFalse('setup has not run');
+      requireSlotBetween(this, now, LAST_SLOT);
+      const root = this.noteRoot.getAndRequireEquals();
+      let cursor = this.sweepCursor.getAndRequireEquals();
+      let expired = this.expiredTotal.getAndRequireEquals();
+      const lapse = UInt64.from(gen.noteLifetimeSlots + gen.requestMaxAgeSlots);
+
+      for (let i = 0; i < SWEEP_BATCH_SIZE; i++) {
+        const walks = count.greaterThan(UInt32.from(i));
+        const note = Provable.witness(SweptNote, () => notes.get()[i]);
+        const leaf = depositLeaf(cursor, { commitment: note.commitment, size: note.size.value, depositTime: note.depositTime.value });
+        const isNext = note.path.calculateIndex().equals(cursor).and(note.path.calculateRoot(leaf).equals(root));
+        walks.not().or(isNext).assertTrue('not the note at the sweep cursor');
+        // A note not walked may hold anything: it adds nothing, and must not overflow either.
+        const depositTime = Provable.if(walks, UInt64, note.depositTime, UInt64.zero);
+        walks.not().or(depositTime.add(lapse).lessThanOrEqual(now)).assertTrue('note not expired');
+        expired = expired.add(Provable.if(walks, UInt64, note.size, UInt64.zero));
+        cursor = Provable.if(walks, cursor.add(1), cursor);
+      }
+
+      expired.assertGreaterThan(UInt64.zero, 'nothing has expired');
+      this.sweepCursor.set(cursor);
+      this.expiredTotal.set(expired);
+      batchReducer.dispatch(VaultAction.sweep(expired));
+    }
+
+    /**
+     * A valid request proof under the vault's state key. Its root need not be in the ring: a challenger's
+     * evidence may be older than the ring, and only the note's holder can prove at its nullifiers.
+     */
+    private checkEvidence(evidence: RequestProof) {
+      evidence.verify();
+      const stateKey = this.stateKey.getAndRequireEquals();
+      stateKey.isEmpty().assertFalse('setup has not run');
+      evidence.publicInput.vault.equals(stateKey).assertTrue('not the state key');
+    }
+
+    /** `escape` is pending as named, and the current slot is before its deadline. */
+    private checkChallengeable(escape: PendingEscape, escapes: PendingEscapes) {
+      escapes.root.assertEquals(this.pendingEscapesRoot.getAndRequireEquals(), 'not the vault pending escapes');
+      escapes.getOption(escape.nullifier).orElse(0n).assertEquals(escape.hash(), 'no such pending escape');
+      // A recorded deadline is a full window after a reduce's slot, so never zero.
+      requireSlotBetween(this, UInt64.zero, escape.deadline.sub(1));
+    }
+
+    /**
+     * Permissionless. Folds up to a batch of pending actions:
+     * - a deposit becomes the next note;
+     * - a mutual close consumes its nullifier and pays `amount` to its destination and `size − amount` to
+     *   the treasury;
+     * - an escape consumes its current and next nullifiers and is recorded as pending, with a deadline a
+     *   full challenge window after this reduce lands;
+     * - a finalize finishes its pending escape and pays `amount − conceded` to the destination and the
+     *   rest of `size` to the treasury;
+     * - a defeat finishes its pending escape without paying;
+     * - a raise replaces its pending escape with the raised record;
+     * - a sweep pays the treasury `expired − claimed − swept`, or nothing if that is not positive, where
+     *   `expired` is the sweep's and `claimed` and `swept` stand as of the actions before it (ADR 0005).
+     * A close or escape with a nullifier already spent, in the set or earlier in the batch, and a finalize,
+     * defeat or raise of an escape no longer pending as named, are skipped without paying and without failing.
+     * So of a raise, a defeat and a finalize of one escape in one batch, only the first applies.
+     * Each change to a pending escape is emitted as an `escape` event ({@link EscapeUpdate}).
+     *
+     * `now` pins the current slot to within a slot after it.
+     */
+    async reduce(
+      batch: VaultBatch, proof: VaultBatchProof, witnesses: Unconstrained<NoteWitness[]>, given: NullifierSet,
+      givenEscapes: PendingEscapes, now: UInt64
+    ) {
+      // o1js may run a method more than once over the same argument; inserting into the caller's copy
+      // would corrupt the next run.
+      const nullifiers = given.clone();
+      const escapes = givenEscapes.clone();
+      escapes.root.assertEquals(this.pendingEscapesRoot.getAndRequireEquals(), 'not the vault pending escapes');
+      requireSlotBetween(this, now, now.add(1));
+      // The current slot is at most `now + 1`, so the window is never shorter than its full length.
+      const deadline = now.add(1).add(this.challengeWindow.getAndRequireEquals());
+      let root = this.noteRoot.getAndRequireEquals();
+      let next = this.nextLeafIndex.getAndRequireEquals();
+      const ring = new RootRing(this.rootRing.getAndRequireEquals());
+      nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
+      const treasury = this.treasury.getAndRequireEquals();
+      let claimed = this.claimedTotal.getAndRequireEquals();
+      let swept = this.sweptTotal.getAndRequireEquals();
+      let changed = Bool(false);
+
+      batchReducer.processBatch({ batch, proof }, (action, isDummy, i) => {
+        const isDeposit = isDummy.not().and(action.kind.equals(ActionKind.deposit));
+        const isClose = isDummy.not().and(action.kind.equals(ActionKind.mutualClose));
+        const isEscape = isDummy.not().and(action.kind.equals(ActionKind.escape));
+        const isFinalize = isDummy.not().and(action.kind.equals(ActionKind.finalize));
+        const isDefeat = isDummy.not().and(action.kind.equals(ActionKind.defeat));
+        const isRaise = isDummy.not().and(action.kind.equals(ActionKind.raise));
+        const isSweep = isDummy.not().and(action.kind.equals(ActionKind.sweep));
+
+        const witness = Provable.witness(NoteWitness, () => witnesses.get()[i]);
+        // The slot at `next` must be empty under the current root.
+        witness.calculateIndex().assertEquals(next);
+        const noteLeaf = depositLeaf(next, {
+          commitment: action.commitment, size: action.size.value, depositTime: action.time.value,
+        });
+        witness.calculateRoot(Field(0)).assertEquals(root);
+        root = Provable.if(isDeposit, witness.calculateRoot(noteLeaf), root);
+        next = Provable.if(isDeposit, next.add(1), next);
+        changed = changed.or(isDeposit);
+
+        // Kinds without a nullifier look up 1: the sets cannot look up 0, since no key is below it.
+        const spends = isClose.or(isEscape);
+        const current = Provable.if(spends, action.nullifier, Field(1));
+        const following = Provable.if(isEscape, action.nextNullifier, Field(1));
+        const currentFresh = nullifiers.isIncluded(current).not();
+        const nextFresh = nullifiers.isIncluded(following).not();
+        const closes = isClose.and(currentFresh);
+        const recorded = isEscape.and(currentFresh).and(nextFresh);
+        nullifiers.setIf(closes.or(recorded), current, Field(1));
+        nullifiers.setIf(recorded, following, Field(1));
+
+        // An escape records its pending escape. A finalize or a defeat finishes the one it names, and a raise
+        // replaces it with the raised record, each only if that escape is still pending as named: a finalize
+        // or a defeat names the record itself, a raise names it by hash.
+        const record = action.pendingEscape(Provable.if(isEscape, UInt64, deadline, action.time));
+        const recordHash = record.hash();
+        const key = Provable.if(isEscape.or(isFinalize).or(isDefeat).or(isRaise), action.nullifier, Field(1));
+        const named = Provable.if(isRaise, action.commitment, recordHash);
+        const stands = escapes.getOption(key).orElse(0n).equals(named);
+        const finalizes = isFinalize.and(stands);
+        const writes = recorded.or(isRaise.and(stands));
+        const defeats = isDefeat.and(stands);
+        const updates = writes.or(finalizes).or(defeats);
+        escapes.setIf(updates, key, Provable.if(writes, recordHash, Field(0)));
+        this.emitEventIf(updates, 'escape', new EscapeUpdate({ pending: writes, record }));
+
+        // A close or a recorded escape claims its note's size, and a defeat gives it back; a finalize pays
+        // what its escape already claimed.
+        claimed = claimed.add(Provable.if(closes.or(recorded), UInt64, action.size, UInt64.zero));
+        claimed = claimed.sub(Provable.if(defeats, UInt64, action.size, UInt64.zero));
+
+        // A sweep pays what the expired notes left: the expired total less what is claimed and already swept.
+        const owed = claimed.add(swept);
+        const left = Provable.if(action.size.greaterThan(owed), UInt64, action.size, owed).sub(owed);
+        const sweeps = Provable.if(isSweep, UInt64, left, UInt64.zero);
+        swept = swept.add(sweeps);
+
+        // A close pays its balance and a finalize its balance less the concession, each the rest of the size
+        // to the treasury; a sweep pays the treasury alone; other kinds pay nothing.
+        const pays = closes.or(finalizes);
+        const payout = Provable.if(isFinalize, UInt64, record.payout(), action.amount);
+        this.payIf(pays, action.destination, payout);
+        this.payIf(pays.or(isSweep), treasury, Provable.if(isSweep, UInt64, sweeps, action.size.sub(payout)));
       });
-      witness.calculateRoot(Field(0)).assertEquals(root);
-      root = Provable.if(isDeposit, witness.calculateRoot(noteLeaf), root);
-      next = Provable.if(isDeposit, next.add(1), next);
-      changed = changed.or(isDeposit);
 
-      // Kinds without a nullifier look up 1: the sets cannot look up 0, since no key is below it.
-      const spends = isClose.or(isEscape);
-      const current = Provable.if(spends, action.nullifier, Field(1));
-      const following = Provable.if(isEscape, action.nextNullifier, Field(1));
-      const currentFresh = nullifiers.isIncluded(current).not();
-      const nextFresh = nullifiers.isIncluded(following).not();
-      const closes = isClose.and(currentFresh);
-      const recorded = isEscape.and(currentFresh).and(nextFresh);
-      nullifiers.setIf(closes.or(recorded), current, Field(1));
-      nullifiers.setIf(recorded, following, Field(1));
+      this.noteRoot.set(root);
+      this.nextLeafIndex.set(next);
+      this.rootRing.set(new RootRing(Provable.if(changed, RootRing, ring.push(root), ring)));
+      this.nullifierRoot.set(nullifiers.root);
+      this.pendingEscapesRoot.set(escapes.root);
+      this.claimedTotal.set(claimed);
+      this.sweptTotal.set(swept);
+    }
 
-      // An escape records its pending escape. A finalize or a defeat finishes the one it names, and a raise
-      // replaces it with the raised record, each only if that escape is still pending as named: a finalize
-      // or a defeat names the record itself, a raise names it by hash.
-      const record = action.pendingEscape(Provable.if(isEscape, UInt64, deadline, action.time));
-      const recordHash = record.hash();
-      const key = Provable.if(isEscape.or(isFinalize).or(isDefeat).or(isRaise), action.nullifier, Field(1));
-      const named = Provable.if(isRaise, action.commitment, recordHash);
-      const stands = escapes.getOption(key).orElse(0n).equals(named);
-      const finalizes = isFinalize.and(stands);
-      const writes = recorded.or(isRaise.and(stands));
-      const defeats = isDefeat.and(stands);
-      const updates = writes.or(finalizes).or(defeats);
-      escapes.setIf(updates, key, Provable.if(writes, recordHash, Field(0)));
-      this.emitEventIf(updates, 'escape', new EscapeUpdate({ pending: writes, record }));
-
-      // A close or a recorded escape claims its note's size, and a defeat gives it back; a finalize pays
-      // what its escape already claimed.
-      claimed = claimed.add(Provable.if(closes.or(recorded), UInt64, action.size, UInt64.zero));
-      claimed = claimed.sub(Provable.if(defeats, UInt64, action.size, UInt64.zero));
-
-      // A sweep pays what the expired notes left: the expired total less what is claimed and already swept.
-      const owed = claimed.add(swept);
-      const left = Provable.if(action.size.greaterThan(owed), UInt64, action.size, owed).sub(owed);
-      const sweeps = Provable.if(isSweep, UInt64, left, UInt64.zero);
-      swept = swept.add(sweeps);
-
-      // A close pays its balance and a finalize its balance less the concession, each the rest of the size
-      // to the treasury; a sweep pays the treasury alone; other kinds pay nothing.
-      const pays = closes.or(finalizes);
-      const payout = Provable.if(isFinalize, UInt64, record.payout(), action.amount);
-      this.payIf(pays, action.destination, payout);
-      this.payIf(pays.or(isSweep), treasury, Provable.if(isSweep, UInt64, sweeps, action.size.sub(payout)));
-    });
-
-    this.noteRoot.set(root);
-    this.nextLeafIndex.set(next);
-    this.rootRing.set(new RootRing(Provable.if(changed, RootRing, ring.push(root), ring)));
-    this.nullifierRoot.set(nullifiers.root);
-    this.pendingEscapesRoot.set(escapes.root);
-    this.claimedTotal.set(claimed);
-    this.sweptTotal.set(swept);
+    /** A circuit sends a fixed number of updates, so a skipped or zero payout is a zero send to the vault itself. Every payout may open its destination's account. */
+    private payIf(condition: Bool, to: PublicKey, amount: UInt64) {
+      const pay = condition.and(amount.equals(UInt64.zero).not());
+      const receiver = this.send({
+        to: Provable.if(pay, PublicKey, to, this.address),
+        amount: Provable.if(pay, UInt64, amount, UInt64.zero),
+      });
+      // A payout to a new account opens it and the chain takes the creation fee out of the payout (ADR 0013).
+      receiver.body.implicitAccountCreationFee = Bool(true);
+    }
   }
 
-  /** A circuit sends a fixed number of updates, so a skipped or zero payout is a zero send to the vault itself. */
-  private payIf(condition: Bool, to: PublicKey, amount: UInt64) {
-    const pay = condition.and(amount.equals(UInt64.zero).not());
-    this.send({
-      to: Provable.if(pay, PublicKey, to, this.address),
-      amount: Provable.if(pay, UInt64, amount, UInt64.zero),
-    });
-  }
+  // declareMethods' argument type is looser than the types it accepts.
+  declareMethods(Vault, {
+    setup: [PublicKey, PublicKey, Signature],
+    deposit: [Field, UInt64, UInt64],
+    mutualClose: [WithdrawalProof, Signature, NullifierSet],
+    escape: [WithdrawalProof, NullifierSet],
+    finalize: [PendingEscape, PendingEscapes],
+    resume: [],
+    defeat: [PendingEscape, RequestProof, PendingEscapes],
+    raise: [PendingEscape, RequestProof, UInt64, PendingEscapes],
+    sweepExpired: [UInt32, Unconstrained.provable, UInt64],
+    reduce: [VaultBatch, VaultBatchProof, Unconstrained.provable, NullifierSet, PendingEscapes, UInt64],
+  } as Record<string, any[]>);
+
+  declareState(Vault, VAULT_STATE_FIELDS);
+
+  batchReducer.setContractClass(Vault);
+
+  return { Vault, batchReducer, VaultBatch, VaultBatchProof, RequestProof, WithdrawalProof, RequestProgram, WithdrawalProgram };
 }
 
-// declareMethods' argument type is looser than the types it accepts.
-declareMethods(Vault, {
-  setup: [PublicKey, PublicKey, Signature],
-  deposit: [Field, UInt64, UInt64],
-  mutualClose: [WithdrawalProof, Signature, NullifierSet],
-  escape: [WithdrawalProof, NullifierSet],
-  finalize: [PendingEscape, PendingEscapes],
-  defeat: [PendingEscape, RequestProof, PendingEscapes],
-  raise: [PendingEscape, RequestProof, UInt64, PendingEscapes],
-  sweepExpired: [UInt32, Unconstrained.provable, UInt64],
-  reduce: [VaultBatch, VaultBatchProof, Unconstrained.provable, NullifierSet, PendingEscapes, UInt64],
-} as Record<string, any[]>);
+const current = vaultBuild(policy.CURRENT_GENERATION);
+/** The current generation's vault: the one new vaults are deployed with. */
+export const Vault = current.Vault;
+export type Vault = InstanceType<typeof Vault>;
+export const batchReducer = current.batchReducer;
+export const VaultBatch = current.VaultBatch;
+export type VaultBatch = InstanceType<typeof VaultBatch>;
+export const VaultBatchProof = current.VaultBatchProof;
+export type VaultBatchProof = InstanceType<typeof VaultBatchProof>;
 
-declareState(Vault, {
-  actionState: Field,
-  actionStack: Field,
-  noteRoot: Field,
-  nextLeafIndex: Field,
-  rootRing: RootRing,
-  creationTime: UInt64,
-  depositSizes: DepositSizes,
-  noteLifetime: UInt64,
-  challengeWindow: UInt64,
-  nullifierRoot: Field,
-  stateKey: PublicKey,
-  treasury: PublicKey,
-  pendingEscapesRoot: Field,
-  sweepCursor: Field,
-  expiredTotal: UInt64,
-  claimedTotal: UInt64,
-  sweptTotal: UInt64,
-});
-
-batchReducer.setContractClass(Vault);
+/**
+ * A build of the current generation's vault for a test: `fork` is the fork it is built for, and `initFork` the one `init`
+ * records, `fork` unless set. LocalBlockchain can't raise the transaction version, so this stands for a re-keyed vault
+ * (`initFork` behind `fork`). Never published: the vault's key is `Vault`'s.
+ */
+export function vaultForkBuild(fork: bigint, initFork?: bigint): typeof Vault {
+  class Build extends Vault {
+    static fork = fork;
+    static initFork = initFork;
+  }
+  declareState(Build, VAULT_STATE_FIELDS);
+  return Build;
+}

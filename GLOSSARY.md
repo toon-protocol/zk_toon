@@ -44,9 +44,33 @@ _Avoid_: Liveness check, key ceremony
 
 **Fork notice**:
 The operator's promise, made off chain at the vault's zkApp URI at least 14 days before a fork's stop
-slot, to publish the post-fork verification key with its source tag and a reproducible build. The vault
-doesn't enforce it (ADR 0006).
+slot, to publish the vault's re-key with its source tag and a reproducible build, and the vault's
+durations in post-fork time. The vault doesn't enforce it (ADR 0006, ADR 0015).
 _Avoid_: Upgrade notice, migration window
+
+**Stop slot**:
+The slot from which a forking network lands no transaction until its new chain starts (Mina's
+`slot_tx_end`). The fork notice and the pre-fork check count back from it. The slot keeps counting
+through the halt that follows (ADR 0015).
+_Avoid_: Fork slot, halt slot, chain end
+
+**Vault generation**:
+The vaults built with one set of policy values: one slot length, the slot counts it gives, and one
+minimum withdrawal. A vault keeps its generation's slot counts for life, across every fork; the vault
+deployed after a fork starts a new generation (ADR 0015).
+_Avoid_: Vault version, epoch
+
+**Re-key**:
+The verification key a vault from before a fork gets after it: built for the fork's proof system with
+the vault's own slot counts and the fork's fee, and installed by the share holders. A vault is re-keyed
+only while it holds a balance (ADR 0015).
+_Avoid_: Upgrade, migration, redeploy
+
+**Resume**:
+The first call a re-keyed vault takes after its install. Anyone may make it, once, and no escape
+finalizes until a full challenge window after it, so challengers get a whole window for the escapes
+pending across the fork (ADR 0015).
+_Avoid_: Unpause, restart
 
 **Keeper**:
 Whoever calls the vault's reduce, which anyone may. The zk edge operator is the natural keeper
@@ -177,7 +201,8 @@ _Avoid_: Forced exit, unilateral close, emergency withdrawal
 
 **Concession**:
 What an escape gives up of its balance to the treasury: named by the payer, at most the balance,
-and liftable by a raise to at most one allowance's tier.
+and liftable by a raise to at most one allowance's tier, or to the whole balance where less would
+leave a payout under the account creation fee (ADR 0013).
 _Avoid_: Penalty, fee, Δ (in prose)
 
 **Challenge window**:
@@ -195,8 +220,9 @@ _Avoid_: Cancel (unqualified), slash, veto
 **Raise**:
 Lifting an escape's concession, within its challenge window, to `min(claimed, b, balance)` with a
 request proof of tier `b` at its current nullifier, where `claimed` is the allowance's recorded charge
-or `b` if it never closed. Refused unless it increases the concession, and never from a subsidised
-proof.
+or `b` if it never closed. If that would leave a payout above zero but under the account creation
+fee, the concession is the whole balance instead (ADR 0013). Refused unless it increases the
+concession, and never from a subsidised proof.
 _Avoid_: Penalty, top-up, dispute
 
 **Challenger**:
@@ -227,9 +253,9 @@ _Avoid_: Expiry pointer, watermark
 
 **Treasury**:
 The zk edge operator's address, which receives what a closed or expired note's balance leaves of its
-deposit. Like a close's or an escape's destination, its account must already exist: setup, a close
-and an escape refuse a missing one, because a payout to it would fail the reduce, and a failed
-reduce blocks every action queued behind it (ADR 0002).
+deposit. Its account must already exist: setup refuses a missing one, because a payout to it would
+fail the reduce, and a failed reduce blocks every action queued behind it (ADR 0002). A withdrawal's
+destination needs no account: its payout opens one, less the account creation fee (ADR 0013).
 _Avoid_: Subsidy budget, fee address
 
 ### Building transactions

@@ -6,13 +6,15 @@
 // Secrets (a note's secret, its state's blinding, a re-randomising blinding, the fee payer's private
 // key) arrive only in a request. The builder keeps them in memory for that request, never logs them,
 // never writes them to disk, and scrubs them from any failure message it answers with.
-import { AccountUpdate, Bool, Field, Mina, PrivateKey, PublicKey, Scalar, Signature, UInt64, fetchAccount, verify } from 'o1js';
+import { AccountUpdate, Bool, Permissions, Field, Mina, PrivateKey, PublicKey, Scalar, Signature, UInt32, UInt64, VerificationKey, ZkProgram, fetchAccount, verify } from 'o1js';
+import Client from 'mina-signer';
 import { commit, rerandomise } from './balance.js';
 import { authTag, commitSecret, genesisAnchor, nextAnchor, nullifier } from './primitives.js';
 import { RequestPrivate, RequestProgram, RequestProof, RequestPublic, subsidyPeriodHolds } from './request.js';
-import { expiryOf } from './policy.js';
-import { PendingEscape, PendingEscapes, VAULT_URI, Vault, batchReducer, setupFields } from './vault.js';
+import { CURRENT_GENERATION, type Generation, expiryOf, generationOfCodeHash } from './policy.js';
+import { PendingEscape, PendingEscapes, VAULT_URI, Vault, batchReducer, setupFields, vaultBuild } from './vault.js';
 import { VaultKeeper, chainSlot, escapeEvents, pendingEscapesView, vaultView } from './vault-view.js';
+import { type Registry, deployRegistry, registerVault } from './vault-registry.js';
 import type { VaultMirror } from './vault-mirror.js';
 import { WithdrawalKind, WithdrawalPrivate, WithdrawalProgram, WithdrawalPublic } from './withdrawal.js';
 
@@ -33,6 +35,11 @@ export interface BuilderOptions {
   /** Mina GraphQL and archive endpoints, when not local. */
   mina?: string;
   archive?: string;
+  /**
+   * The published keys' `generations`. With them, a remote vault's generation is found by its code hash and the builder uses
+   * that generation's values, and refuses a vault whose code hash is in none. Without them every vault is the current generation's.
+   */
+  generations?: Record<string, { vault: { codeHash: string } }>;
 }
 
 type Params = Record<string, unknown>;
@@ -131,6 +138,19 @@ function indexOf(view: VaultMirror, n: Note): bigint {
   }
 }
 
+/** The network a signature is for: the domain the full commitment is signed under. */
+type Network = 'testnet' | 'mainnet';
+function network(v: unknown): Network {
+  if (v !== 'testnet' && v !== 'mainnet') throw bad('network: expected "testnet" or "mainnet"');
+  return v;
+}
+
+function verificationKey(v: unknown, name: string) {
+  const p = obj(v, name);
+  if (typeof p.data !== 'string') throw bad(`${name}.data: expected a string`);
+  return new VerificationKey({ data: p.data, hash: field(p.hash, `${name}.hash`) });
+}
+
 const fieldStrings = (fields: Field[]) => fields.map((f) => f.toString());
 
 function feePayer(v: unknown, secrets: string[]) {
@@ -138,6 +158,24 @@ function feePayer(v: unknown, secrets: string[]) {
   const key = privateKey(p.privateKey, 'feePayer.privateKey', secrets);
   return { key, sender: key.toPublicKey(), fee: UInt64.from(u64(p.fee ?? '0', 'feePayer.fee')) };
 }
+
+/** The fee payer of a transaction someone else signs: its address and fee. */
+function feePayerAddress(v: unknown) {
+  const p = obj(v, 'feePayer');
+  return { sender: publicKey(p.publicKey, 'feePayer.publicKey'), fee: UInt64.from(u64(p.fee ?? '0', 'feePayer.fee')) };
+}
+
+/** The full commitment of a transaction, as a command's JSON stands, under `net`. */
+function fullCommitment(zkappCommand: Params, net: Network): bigint {
+  try {
+    return new Client({ network: net }).getZkappCommandCommitmentsFromJSON(zkappCommand as never).fullCommitment;
+  } catch {
+    throw bad('zkappCommand: not a zkApp command');
+  }
+}
+
+/** A tiny program, compiled to give `local.compileKey` a key o1js made. */
+const KeyProgram = ZkProgram({ name: 'KeyProgram', methods: { noop: { privateInputs: [], async method() {} } } });
 
 /** Runs `build`; anything it throws that is not already a failure is a proving failure. */
 async function proving<T>(build: () => Promise<T>): Promise<T> {
@@ -164,39 +202,76 @@ export async function createBuilder(options: BuilderOptions) {
   }
   const keeper = new VaultKeeper();
   let reducerCompiled = false;
-  WithdrawalProgram.setProofsEnabled(options.proofs);
-  RequestProgram.setProofsEnabled(options.proofs);
-  let requestVk: Awaited<ReturnType<typeof RequestProgram.compile>>['verificationKey'] | undefined;
-  let withdrawalCompiled = false;
-  let vaultCompiled = false;
+  /** What one vault generation's proving needs: its programs and vault, and what of them is compiled. */
+  const generations = new Map<string, ReturnType<typeof vaultBuild> & {
+    requestVk?: Awaited<ReturnType<ReturnType<typeof vaultBuild>['RequestProgram']['compile']>>['verificationKey'];
+    withdrawalCompiled: boolean;
+    vaultCompiled: boolean;
+  }>();
+  const generationOfVault = new WeakMap<object, Generation>();
+  function forGeneration(gen: Generation) {
+    let g = generations.get(gen.id);
+    if (!g) {
+      g = { ...vaultBuild(gen), withdrawalCompiled: false, vaultCompiled: false };
+      g.WithdrawalProgram.setProofsEnabled(options.proofs);
+      g.RequestProgram.setProofsEnabled(options.proofs);
+      generations.set(gen.id, g);
+    }
+    return g;
+  }
+  forGeneration(CURRENT_GENERATION);
+  /** The generation `vault` was loaded with. */
+  const generationFor = (vault: object) => generationOfVault.get(vault) ?? CURRENT_GENERATION;
+  let registry: Registry | undefined;
 
   /** Compiles what proving needs, once: a request or withdrawal proof, and a vault transaction when the chain checks proofs. */
-  async function compile(o: { request?: boolean; withdrawal?: boolean; vault?: boolean }) {
-    if (o.request && options.proofs && !requestVk) requestVk = (await RequestProgram.compile()).verificationKey;
-    if (o.withdrawal && options.proofs && !withdrawalCompiled) {
-      await WithdrawalProgram.compile();
-      withdrawalCompiled = true;
+  async function compile(gen: Generation, o: { request?: boolean; withdrawal?: boolean; vault?: boolean }) {
+    const g = forGeneration(gen);
+    if (o.request && options.proofs && !g.requestVk) g.requestVk = (await g.RequestProgram.compile()).verificationKey;
+    if (o.withdrawal && options.proofs && !g.withdrawalCompiled) {
+      await g.WithdrawalProgram.compile();
+      g.withdrawalCompiled = true;
     }
-    if (o.vault && Mina.getProofsEnabled() && !vaultCompiled) {
-      await batchReducer.compile();
-      if (!withdrawalCompiled) await WithdrawalProgram.compile();
+    if (o.vault && Mina.getProofsEnabled() && !g.vaultCompiled) {
+      await g.batchReducer.compile();
+      if (!g.withdrawalCompiled) await g.WithdrawalProgram.compile();
       // The vault's defeat and raise verify request proofs.
-      if (!requestVk) requestVk = (await RequestProgram.compile()).verificationKey;
-      await Vault.compile();
-      vaultCompiled = withdrawalCompiled = reducerCompiled = true;
+      if (!g.requestVk) g.requestVk = (await g.RequestProgram.compile()).verificationKey;
+      await g.Vault.compile();
+      g.vaultCompiled = g.withdrawalCompiled = true;
+      if (gen.id === CURRENT_GENERATION.id) reducerCompiled = true;
     }
   }
 
-  /** The vault at `address`, with its accounts fetched when the chain is remote. */
+  /** Fetches the accounts a transaction reads, when the chain is remote. */
+  async function fetchAccounts(keys: PublicKey[]) {
+    if (options.local) return;
+    for (const publicKey of keys) {
+      const { error } = await fetchAccount({ publicKey });
+      if (error) throw new Failure('chainUnavailable', `could not fetch account ${publicKey.toBase58()}: ${error.statusText}`);
+    }
+  }
+
+  /**
+   * The vault at `address`, with its accounts fetched when the chain is remote, as its generation's class: the generation
+   * is found by the vault's code hash, and a hash in none is refused.
+   */
   async function loadVault(address: unknown, others: PublicKey[] = []) {
-    const vault = new Vault(publicKey(address, 'vault'));
-    if (!options.local) {
-      for (const publicKey of [vault.address, ...others]) {
-        const { error } = await fetchAccount({ publicKey });
-        if (error) throw new Failure('chainUnavailable', `could not fetch account ${publicKey.toBase58()}: ${error.statusText}`);
+    const at = publicKey(address, 'vault');
+    await fetchAccounts([at, ...others]);
+    let gen = CURRENT_GENERATION;
+    if (options.generations) {
+      const codeHash = Mina.getAccount(at).zkapp?.verificationKey?.hash.toString() ?? 'none';
+      try {
+        gen = generationOfCodeHash(codeHash, options.generations);
+      } catch (e) {
+        throw bad(`vault: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    batchReducer.setContractInstance(vault);
+    const g = forGeneration(gen);
+    const vault = new g.Vault(at);
+    generationOfVault.set(vault, gen);
+    g.batchReducer.setContractInstance(vault);
     return vault;
   }
 
@@ -230,14 +305,14 @@ export async function createBuilder(options: BuilderOptions) {
     const at = field(p.escape, 'escape');
     let evidence: RequestProof;
     try {
-      evidence = await RequestProof.fromJSON(obj(p.evidence, 'evidence') as never);
+      evidence = await forGeneration(generationFor(vault)).RequestProof.fromJSON(obj(p.evidence, 'evidence') as never);
     } catch {
       throw bad('evidence: not a request proof');
     }
     const { escapes, records } = await pendingEscapes(vault);
     const escape = records.get(at.toBigInt());
     if (!escape) throw bad('escape: the vault holds no pending escape at this nullifier');
-    const zkappCommand = await transaction(payer, () => call(vault, escape, evidence, escapes.clone()));
+    const zkappCommand = await transaction(vault, payer, () => call(vault, escape, evidence, escapes.clone()));
     return { zkappCommand, hash: await Mina.Transaction.hash(zkappCommand) };
   }
 
@@ -257,28 +332,73 @@ export async function createBuilder(options: BuilderOptions) {
       validUntil: Field(escape?.validUntil ?? 0n), requestTime: Field(requestTime), conceded: Field(escape?.conceded ?? 0n),
     });
     const priv = new WithdrawalPrivate({
-      secret: n.secret, index: Field(index), depositTime: Field(n.depositTime), expiry: Field(expiryOf(n.depositTime)),
+      secret: n.secret, index: Field(index), depositTime: Field(n.depositTime), expiry: Field(expiryOf(n.depositTime, generationFor(vault))),
       path: mirror.tree.witness(index), blinding: s.blinding, anchor: s.anchor, isGenesis: s.isGenesis,
       signature: s.signature, prevNullifier: s.prevNullifier, prevAnchor: s.prevAnchor,
     });
+    const { WithdrawalProgram } = forGeneration(generationFor(vault));
     const method = kind === WithdrawalKind.escape ? WithdrawalProgram.escape : WithdrawalProgram.mutualClose;
     const proof = await proving(async () => {
-      await compile({ withdrawal: true });
+      await compile(generationFor(vault), { withdrawal: true });
       return (await method(pub, priv)).proof;
     });
     return { proof, mirror, publicInputFields: fieldStrings(WithdrawalPublic.toFields(pub)) };
   }
 
   /** A signed, proved transaction from `feePayer`, as Mina GraphQL's `sendZkapp` takes it. */
-  async function transaction(payer: ReturnType<typeof feePayer>, body: () => Promise<void>) {
+  async function transaction(vault: object, payer: ReturnType<typeof feePayer>, body: () => Promise<void>) {
     const tx = await proving(async () => {
-      await compile({ vault: true });
+      await compile(generationFor(vault), { vault: true });
       const tx = await Mina.transaction({ sender: payer.sender, fee: payer.fee }, body);
       await tx.prove();
       return tx;
     });
     tx.sign([payer.key]);
     return JSON.parse(tx.toJSON());
+  }
+
+  /**
+   * An unsigned transaction with one account update, authorised by `account`'s signature over the full
+   * commitment and no nonce increment (ADR 0006: replay protection comes from the fee payer's nonce).
+   * Answers its JSON and its full commitment under `p.network`, which the upgrade key signs.
+   */
+  async function prepare(p: Params, account: PublicKey, change: (update: AccountUpdate) => void) {
+    const payer = feePayerAddress(p.feePayer);
+    const net = network(p.network);
+    await fetchAccounts([account, payer.sender]);
+    const tx = await proving(() =>
+      Mina.transaction({ sender: payer.sender, fee: payer.fee }, async () => {
+        const update = AccountUpdate.createSigned(account);
+        update.body.useFullCommitment = Bool(true);
+        update.body.incrementNonce = Bool(false);
+        update.body.preconditions.account.nonce.isSome = Bool(false);
+        update.body.preconditions.account.nonce.value.lower = UInt32.zero;
+        update.body.preconditions.account.nonce.value.upper = UInt32.MAXINT();
+        change(update);
+      })
+    );
+    const zkappCommand = JSON.parse(tx.toJSON());
+    return { zkappCommand, fullCommitment: fullCommitment(zkappCommand, net).toString() };
+  }
+
+  /**
+   * The signed command: `p.signature` (the upgrade key's, over the full commitment) goes on the one
+   * account update that wants a signature, and the fee payer signs. The builder never holds a key share.
+   */
+  function attach(p: Params, secrets: string[]) {
+    const payer = privateKey(obj(p.feePayer, 'feePayer').privateKey, 'feePayer.privateKey', secrets);
+    const net = network(p.network);
+    const upgrade = signature(p.signature, 'signature');
+    const zkappCommand = structuredClone(obj(p.zkappCommand, 'zkappCommand')) as any;
+    if (zkappCommand.feePayer?.body?.publicKey !== payer.toPublicKey().toBase58()) throw bad("feePayer: not the transaction's fee payer");
+    const updates = ((zkappCommand.accountUpdates ?? []) as any[]).filter((u) => u.body?.authorizationKind?.isSigned);
+    if (updates.length !== 1) throw bad('zkappCommand: expected exactly one account update to be signed');
+    if (updates[0].body.useFullCommitment !== true) throw bad('zkappCommand: the signed update does not use the full commitment');
+    if (updates[0].body.incrementNonce !== false) throw bad('zkappCommand: the signed update increments its nonce');
+    const own = new Client({ network: net }).signFields([fullCommitment(zkappCommand, net)], payer.toBase58()).signature;
+    zkappCommand.feePayer.authorization = own;
+    updates[0].authorization = { proof: null, signature: upgrade.toBase58() };
+    return { zkappCommand };
   }
 
   const ops: Record<string, Op> = {
@@ -288,7 +408,7 @@ export async function createBuilder(options: BuilderOptions) {
       const commitment = field(p.commitment, 'commitment');
       const size = UInt64.from(u64(p.size, 'size'));
       const depositTime = UInt64.from(u64(p.depositTime, 'depositTime'));
-      const zkappCommand = await transaction(payer, async () => {
+      const zkappCommand = await transaction(vault, payer, async () => {
         await vault.deposit(commitment, size, depositTime);
       });
       return { zkappCommand };
@@ -298,7 +418,7 @@ export async function createBuilder(options: BuilderOptions) {
       const vault = await loadVault(p.vault, [payer.sender]);
       const clearance = signature(p.clearance, 'clearance');
       const { proof, mirror, publicInputFields } = await withdrawal(WithdrawalKind.mutualClose, p, vault, secrets);
-      const zkappCommand = await transaction(payer, async () => {
+      const zkappCommand = await transaction(vault, payer, async () => {
         await vault.mutualClose(proof, clearance, mirror.nullifiers.clone());
       });
       return { zkappCommand, publicInputFields };
@@ -308,7 +428,7 @@ export async function createBuilder(options: BuilderOptions) {
       const vault = await loadVault(p.vault, [payer.sender]);
       const escape = { conceded: u64(p.conceded, 'conceded'), validUntil: u64(p.validUntil, 'validUntil') };
       const { proof, mirror, publicInputFields } = await withdrawal(WithdrawalKind.escape, p, vault, secrets, escape);
-      const zkappCommand = await transaction(payer, async () => {
+      const zkappCommand = await transaction(vault, payer, async () => {
         await vault.escape(proof, mirror.nullifiers.clone());
       });
       return { zkappCommand, publicInputFields };
@@ -325,6 +445,17 @@ export async function createBuilder(options: BuilderOptions) {
       await vault.raise(escape, evidence, claimed, escapes);
     });
   };
+
+  ops.prepareDelegation = (p) => {
+    const delegate = publicKey(p.delegate, 'delegate');
+    return prepare(p, publicKey(p.vault, 'vault'), (update) => update.account.delegate.set(delegate));
+  };
+  ops.attachDelegation = async (p, secrets) => attach(p, secrets);
+  ops.prepareKeyInstall = (p) => {
+    const key = verificationKey(p.verificationKey, 'verificationKey');
+    return prepare(p, publicKey(p.account, 'account'), (update) => update.account.verificationKey.set(key));
+  };
+  ops.attachKeyInstall = async (p, secrets) => attach(p, secrets);
 
   /** The unsubsidised request proof, with the vault's state key as the zk edge. */
   ops.requestProof = async (p, secrets) => {
@@ -351,14 +482,14 @@ export async function createBuilder(options: BuilderOptions) {
     });
     const priv = new RequestPrivate({
       secret: n.secret, index: Field(index), size: Field(n.size), depositTime: Field(n.depositTime),
-      expiry: Field(expiryOf(n.depositTime)), path: mirror.tree.witness(index), balance: Field(s.balance),
+      expiry: Field(expiryOf(n.depositTime, generationFor(vault))), path: mirror.tree.witness(index), balance: Field(s.balance),
       blinding: s.blinding, rerandomBlinding: rerandom, anchor: s.anchor, isGenesis: s.isGenesis, signature: s.signature,
       prevNullifier: s.prevNullifier, prevAnchor: s.prevAnchor, edge: context.edge, sessionKeyX: context.sessionKeyX,
       sessionKeyIsOdd: context.sessionKeyIsOdd, requestExpiry: context.expiry,
     });
     const proof = await proving(async () => {
-      await compile({ request: true });
-      return (await RequestProgram.unsubsidised(pub, priv)).proof;
+      await compile(generationFor(vault), { request: true });
+      return (await forGeneration(generationFor(vault)).RequestProgram.unsubsidised(pub, priv)).proof;
     });
     return { publicInputFields: fieldStrings(RequestPublic.toFields(pub)), proof: proof.toJSON() };
   };
@@ -376,9 +507,9 @@ export async function createBuilder(options: BuilderOptions) {
     }
     const vaultCreation = p.vaultCreation === undefined ? undefined : u64(p.vaultCreation, 'vaultCreation');
     if (!options.proofs) throw bad('verifyRequestProof needs --proofs=on');
-    await compile({ request: true });
+    await compile(CURRENT_GENERATION, { request: true });
     const periodHolds = vaultCreation === undefined || subsidyPeriodHolds(proof.publicInput, vaultCreation);
-    return { valid: periodHolds && (await verify(proof, requestVk!)) };
+    return { valid: periodHolds && (await verify(proof, forGeneration(CURRENT_GENERATION).requestVk!)) };
   };
 
   /** Hashes of the commands `local.graphql` has landed. */
@@ -410,6 +541,40 @@ export async function createBuilder(options: BuilderOptions) {
       await setup.sign([deployer.key]).send();
       keeper.track(vault.address);
       return { vault: vault.address.toBase58() };
+    },
+    /** A vault at the address of `privateKey` (a test key), deployed through a registry as ADR 0011 has it. */
+    async 'local.deployRegisteredVault'(p, secrets) {
+      const key = privateKey(p.privateKey, 'privateKey', secrets);
+      const [deployer] = local!.testAccounts;
+      registry ??= await deployRegistry(deployer);
+      const vault = await registerVault(registry, deployer, { vaultKey: key });
+      keeper.track(vault.address);
+      return { vault: vault.address.toBase58() };
+    },
+    /** A stand-in account at the address of `privateKey` (a test key) whose `setVerificationKey` is `signature`. */
+    async 'local.deployStandIn'(p, secrets) {
+      const key = privateKey(p.privateKey, 'privateKey', secrets);
+      const [deployer] = local!.testAccounts;
+      const tx = await Mina.transaction(deployer, async () => {
+        AccountUpdate.fundNewAccount(deployer);
+        const update = AccountUpdate.createSigned(key.toPublicKey());
+        update.account.permissions.set({ ...Permissions.default(), setVerificationKey: Permissions.VerificationKey.signature() });
+      });
+      await tx.sign([deployer.key, key]).send();
+      return { account: key.toPublicKey().toBase58() };
+    },
+    /** A verification key o1js compiled: a small program's. */
+    async 'local.compileKey'() {
+      const { verificationKey: key } = await KeyProgram.compile();
+      return { verificationKey: { data: key.data, hash: key.hash.toString() } };
+    },
+    async 'local.delegate'(p) {
+      const delegate = Mina.getAccount(publicKey(p.account, 'account')).delegate;
+      return { delegate: delegate?.toBase58() ?? null };
+    },
+    async 'local.verificationKey'(p) {
+      const key = Mina.getAccount(publicKey(p.account, 'account')).zkapp?.verificationKey;
+      return { verificationKey: key ? { data: key.data, hash: key.hash.toString() } : null };
     },
     async 'local.submit'(p) {
       try {

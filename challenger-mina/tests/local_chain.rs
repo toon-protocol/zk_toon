@@ -215,6 +215,37 @@ fn a_defeat_and_a_raise_through_the_adapter_are_accepted_by_the_vault() {
     }
 }
 
+#[test]
+fn a_raise_that_would_strand_less_than_the_creation_fee_concedes_the_whole_balance() {
+    let o1js = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../o1js"));
+    let builder: Shared = Rc::new(RefCell::new(
+        TxBuilder::spawn(node_command(&o1js, &["--local", "--proofs=off"])).expect("start the transaction builder"),
+    ));
+    let mut b = builder.borrow_mut();
+    let c = chain(&mut b);
+
+    // An escape of 1.5 MINA conceding nothing, from a state that opened a top-tier allowance: raising to
+    // the tier would leave 0.5 MINA, under the fee, so the vault concedes the whole balance (ADR 0013).
+    let note = deposit_note(&mut b, &c, 9009);
+    let (signed, at) = state(&c, &note, 1, 3 * MINA / 2);
+    escape(&mut b, &c, &note, signed.clone(), 0);
+    b.local().reduce(&c.vault).unwrap();
+    let evidence = Recorded::default();
+    record_request(&mut b, &c, &note, signed, TIERS[2], &evidence);
+    drop(b);
+
+    let graphql = LocalGraphql { builder: builder.clone(), recorded: RefCell::default() };
+    let settings = Settings { vault: c.vault.clone(), fee_payer: c.payer.clone(), poll: Duration::from_millis(50) };
+    let mut port = MinaChain::new(settings, &graphql, SharedTxs(builder.clone()), &evidence).unwrap();
+
+    port.submit_raise(&nullifier_of_field(at), 3 * MINA / 2).unwrap();
+    builder.borrow_mut().local().reduce(&c.vault).unwrap();
+
+    let escapes = port.escapes().unwrap();
+    assert_eq!(escapes.len(), 1);
+    assert_eq!((escapes[0].conceded, escapes[0].balance), (3 * MINA / 2, 3 * MINA / 2));
+}
+
 /// Writes what the adapter last read: the vault after the defeat and the raise's reduce, before it.
 fn record_fixture(graphql: &LocalGraphql, vault: &CompressedPubKey) {
     let recorded = graphql.recorded.borrow();

@@ -5,6 +5,7 @@
 import { Bool, Field, PublicKey, Scalar, Signature, Struct, ZkProgram } from 'o1js';
 import { NoteWitness } from './note-tree.js';
 import { U64_BITS, checkNoteState } from './note-state.js';
+import { CURRENT_GENERATION, type Generation, generationKey } from './policy.js';
 import { nextAnchor, nullifier } from './primitives.js';
 
 /** The withdrawal kinds, a public input. 0 is invalid. */
@@ -59,11 +60,11 @@ export class WithdrawalPrivate extends Struct({
 }) {}
 
 /** The checks of every withdrawal kind; `kind` is the method's own. */
-export function checkWithdrawal(kind: WithdrawalKind, pub: WithdrawalPublic, priv: WithdrawalPrivate) {
+export function checkWithdrawal(kind: WithdrawalKind, pub: WithdrawalPublic, priv: WithdrawalPrivate, gen: Generation = CURRENT_GENERATION) {
   pub.kind.assertEquals(kind);
 
   // `amount` is the state's balance and `size` the note's deposit size.
-  checkNoteState(pub, { ...priv, size: pub.size, balance: pub.amount });
+  checkNoteState(pub, { ...priv, size: pub.size, balance: pub.amount }, gen);
 
   // amount ≤ size.
   pub.size.toBits(U64_BITS);
@@ -86,29 +87,43 @@ export function checkWithdrawal(kind: WithdrawalKind, pub: WithdrawalPublic, pri
   }
 }
 
-export const WithdrawalProgram = ZkProgram({
-  name: 'zk-toon-withdrawal',
-  publicInput: WithdrawalPublic,
-  methods: {
-    mutualClose: {
-      privateInputs: [WithdrawalPrivate],
-      async method(pub: WithdrawalPublic, priv: WithdrawalPrivate) {
-        checkWithdrawal(WithdrawalKind.mutualClose, pub, priv);
+function buildWithdrawal(gen: Generation) {
+  const program = ZkProgram({
+    name: gen.id === CURRENT_GENERATION.id ? 'zk-toon-withdrawal' : `zk-toon-withdrawal-${gen.id}`,
+    publicInput: WithdrawalPublic,
+    methods: {
+      mutualClose: {
+        privateInputs: [WithdrawalPrivate],
+        async method(pub: WithdrawalPublic, priv: WithdrawalPrivate) {
+          checkWithdrawal(WithdrawalKind.mutualClose, pub, priv, gen);
+        },
+      },
+      escape: {
+        privateInputs: [WithdrawalPrivate],
+        async method(pub: WithdrawalPublic, priv: WithdrawalPrivate) {
+          checkWithdrawal(WithdrawalKind.escape, pub, priv, gen);
+        },
+      },
+      ownership: {
+        privateInputs: [WithdrawalPrivate],
+        async method(pub: WithdrawalPublic, priv: WithdrawalPrivate) {
+          checkWithdrawal(WithdrawalKind.ownership, pub, priv, gen);
+        },
       },
     },
-    escape: {
-      privateInputs: [WithdrawalPrivate],
-      async method(pub: WithdrawalPublic, priv: WithdrawalPrivate) {
-        checkWithdrawal(WithdrawalKind.escape, pub, priv);
-      },
-    },
-    ownership: {
-      privateInputs: [WithdrawalPrivate],
-      async method(pub: WithdrawalPublic, priv: WithdrawalPrivate) {
-        checkWithdrawal(WithdrawalKind.ownership, pub, priv);
-      },
-    },
-  },
-});
+  });
+  class Proof extends ZkProgram.Proof(program) {}
+  return { program, Proof };
+}
 
-export class WithdrawalProof extends ZkProgram.Proof(WithdrawalProgram) {}
+const withdrawalBuilds = new Map<string, ReturnType<typeof buildWithdrawal>>();
+/** The withdrawal program and proof class of vault generation `gen`, built once and named as `requestBuild` names its own. */
+export function withdrawalBuild(gen: Generation) {
+  const key = generationKey(gen);
+  if (!withdrawalBuilds.has(key)) withdrawalBuilds.set(key, buildWithdrawal(gen));
+  return withdrawalBuilds.get(key)!;
+}
+
+export const WithdrawalProgram = withdrawalBuild(CURRENT_GENERATION).program;
+export const WithdrawalProof = withdrawalBuild(CURRENT_GENERATION).Proof;
+export type WithdrawalProof = InstanceType<typeof WithdrawalProof>;

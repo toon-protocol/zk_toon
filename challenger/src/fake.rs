@@ -94,7 +94,8 @@ impl VaultChainPort for FakeChain {
         if to <= e.conceded || to > e.balance {
             return Err(PortError::Refused("raise out of range".into()));
         }
-        e.conceded = to;
+        // As the vault records it: a claim that strands less than the creation fee concedes the balance.
+        e.conceded = zk_note::policy::raised_concession(to, u64::MAX, e.balance);
         s.log.push((*id, Action::Raise { to }));
         s.now += s.slots_per_submission;
         Ok(())

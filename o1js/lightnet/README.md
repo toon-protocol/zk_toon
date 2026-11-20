@@ -106,6 +106,11 @@ connector's fixture set (`docs/verification-keys.md`). The run shows what a proo
 - The run's deploy doesn't aim yet: it names no slot, so `init` reads the tip's slot, and it lands only if the
   next block is in the following slot. The run retries it, which took 2, 3 and 4 attempts in three runs.
 
+`upgrade-key.lightnet.ts` (#123) registers a vault and makes a stand-in account, then has the transaction builder
+prepare the vault's delegation and a key install on the stand-in, signs each full commitment 2-of-3 in Rust
+(`upgrade-key`'s `threshold_sign` example, built on first use) and sends the attached commands. It is not run by the
+gate or CI, so a human runs it before merging a change to those operations.
+
 ## Aiming a vault deploy at a slot
 
 A vault deploy can aim. `Vault.deploy({ zkappUri, slot })` makes `init` record `slot` as `creationTime` and

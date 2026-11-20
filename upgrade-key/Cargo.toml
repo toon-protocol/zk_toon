@@ -29,3 +29,9 @@ ark-ec = "0.5"
 frost-core = { version = "3.0.0", features = ["internals"] }
 rand_chacha = "0.3"
 upgrade-key = { path = ".", features = ["test-utils"] }
+anyhow = "1"
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+[[example]]
+name = "threshold_sign"
+required-features = ["test-utils"]
