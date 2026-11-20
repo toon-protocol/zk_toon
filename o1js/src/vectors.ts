@@ -172,6 +172,7 @@ export function buildVectors() {
     requestMaxLeadSlots: policy.REQUEST_MAX_LEAD_SLOTS.toString(),
     tiers: policy.TIERS.map(String),
     depositSizes: policy.DEPOSIT_SIZES.map(String),
+    accountCreationFee: policy.ACCOUNT_CREATION_FEE.toString(),
     // The vault generations (ADR 0015): the Rust table must agree on every value.
     currentGeneration: policy.CURRENT_GENERATION_ID,
     generations: policy.GENERATIONS.map((g) => ({

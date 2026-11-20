@@ -19,7 +19,7 @@ import { NoteTree } from './note-tree.js';
 import type { PublishedKey } from './keys.js';
 import * as policy from './policy.js';
 import {
-  ActionKind, CLOSE_WINDOW_SLOTS, DepositSizes, EscapeUpdate, NullifierSet, PendingEscapes, RootRing, VaultAction, VaultState,
+  ActionKind, CLOSE_WINDOW_SLOTS, DepositSizes, EscapeUpdate, NullifierSet, PendingEscapes, RootRing, VAULT_FORK, VaultAction, VaultState,
 } from './vault.js';
 
 /** Every permission's value in ADR 0006's table, in o1js's JSON. `setVerificationKey` adds the transaction version. */
@@ -67,8 +67,6 @@ export type VaultSnapshot = {
   actionState: string;
   appState: string[];
   treasuryExists: boolean;
-  /** Who the actions name as a payee and has no account. */
-  payeesWithoutAccount: string[];
   actions: string[][][];
   /** The fields of each `escape` event, in any order. */
   escapeEvents: string[][];
@@ -132,8 +130,6 @@ export async function readVault(address: PublicKey, registry: PublicKey, reader:
     reader.slot(), reader.actions(address), reader.events(address),
     treasury.isEmpty().toBoolean() ? undefined : reader.account(treasury),
   ]);
-  const payees = namedPayees(actions);
-  const found = await Promise.all(payees.map((p) => reader.account(p)));
   return {
     address: address.toBase58(),
     registry: {
@@ -151,7 +147,6 @@ export async function readVault(address: PublicKey, registry: PublicKey, reader:
     actionState: account.zkapp.actionState[0]!.toString(),
     appState: appState.map((f) => f.toString()),
     treasuryExists: treasuryAccount !== undefined,
-    payeesWithoutAccount: payees.filter((_, i) => !found[i]).map((p) => p.toBase58()),
     actions,
     escapeEvents: events,
   };
@@ -161,18 +156,6 @@ const keyOf = (account: Types.Account): PublishedKey | null => {
   const vk = account.zkapp?.verificationKey;
   return vk ? { data: vk.data, hash: vk.hash.toString() } : null;
 };
-
-/** Everyone a close, an escape or what follows one names, once each. Actions that don't parse are `judgeVault`'s to refuse. */
-function namedPayees(actions: string[][][]): PublicKey[] {
-  try {
-    const named = actions.flat().map((l) => VaultAction.fromFields(l.map((f) => Field(f))))
-      .filter((a) => !a.kind.equals(ActionKind.deposit).toBoolean() && !a.kind.equals(ActionKind.sweep).toBoolean())
-      .map((a) => a.destination);
-    return [...new Map(named.map((p) => [p.toBase58(), p])).values()];
-  } catch {
-    return [];
-  }
-}
 
 /** Asks one question of `address`: can it be trusted as a vault of `key`, listed by `registry`? A failed read refuses. */
 export async function checkVault(
@@ -215,11 +198,11 @@ function judge(s: VaultSnapshot, { key, registryKey }: VaultPins): VaultVerdict 
   same('noteLifetime', state.noteLifetime, policy.NOTE_LIFETIME_SLOTS);
   same('challengeWindow', state.challengeWindow, policy.CHALLENGE_WINDOW_SLOTS);
   if (state.creationTime.toBigInt() > BigInt(s.slot)) refuse('creationTime', `${state.creationTime} is after the current slot ${s.slot}`);
+  same('forkResumed', state.forkResumed, VAULT_FORK);
+  if (state.resumedAt.toBigInt() > BigInt(s.slot)) refuse('resumedAt', `${state.resumedAt} is after the current slot ${s.slot}`);
   if (state.stateKey.isEmpty().toBoolean()) refuse('setup', 'no state key: setup has not run');
   if (state.treasury.isEmpty().toBoolean()) refuse('setup', 'no treasury: setup has not run');
   else if (!s.treasuryExists) refuse('setup', 'the treasury has no account, so a reduce paying it would fail');
-  // A payout to no account fails the reduce, and stalls every action behind it. The vault's methods require the account.
-  for (const p of s.payeesWithoutAccount) refuse('payee', `${p} is named by an action and has no account`);
 
   const history = replayHistory(s, state, refuse);
   if (refusals.length > 0 || !history) return { pass: false, refusals };
@@ -514,6 +497,9 @@ function decodeAction(fields: string[]): VaultAction {
   if (!policy.isDepositSize(size!)) throw Error(`an action names ${size}, not a deposit size`);
   // The reduce's circuit is one for all kinds, so these fail its range checks whatever the kind.
   if (conceded! > amount! || amount! > size!) throw Error('an action has amounts out of order');
+  // A payout opens its destination's account less the creation fee, so one below the fee fails the reduce (ADR 0013).
+  if (kind === ActionKind.mutualClose && amount! < policy.ACCOUNT_CREATION_FEE) throw Error('a close pays less than the account creation fee');
+  if (kind === ActionKind.escape && amount! - conceded! < policy.ACCOUNT_CREATION_FEE) throw Error('an escape pays less than the account creation fee');
   // A nullifier is a hash, so 0 can only be forged.
   if (kind !== ActionKind.deposit && a.nullifier.equals(0).toBoolean()) throw Error('an action has nullifier 0');
   if (kind === ActionKind.escape && a.nextNullifier.equals(0).toBoolean()) throw Error('an escape has next nullifier 0');

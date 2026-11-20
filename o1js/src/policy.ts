@@ -91,6 +91,9 @@ export const TIERS: readonly bigint[] = [MINA / 100n, MINA / 10n, MINA];
 /** Accepted deposit sizes, ascending. */
 export const DEPOSIT_SIZES: readonly bigint[] = [10n * MINA, 100n * MINA, 1000n * MINA];
 
+/** What the chain takes from a payout that opens its destination's account (1 MINA). Every withdrawal must pay at least it (ADR 0013). */
+export const ACCOUNT_CREATION_FEE = MINA;
+
 export const isTier = (b: bigint) => TIERS.includes(b);
 export const isDepositSize = (size: bigint) => DEPOSIT_SIZES.includes(size);
 export const isSmallestTier = (b: bigint) => b === TIERS[0];

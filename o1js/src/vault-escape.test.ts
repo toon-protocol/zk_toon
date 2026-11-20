@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { PROOFS_ON } from './proofs-on.js';
-import { AccountUpdate, Bool, Field, Mina, Permissions, PrivateKey, UInt32, UInt64, VerificationKey, verify } from 'o1js';
+import { AccountUpdate, Bool, Field, Mina, Permissions, PrivateKey, PublicKey, UInt32, UInt64, VerificationKey, verify } from 'o1js';
 import * as policy from './policy.js';
 import { PendingEscape, VAULT_URI, batchReducer } from './vault.js';
 import { balanceOf, now, vaultHarness } from './vault-harness.js';
@@ -24,7 +24,7 @@ beforeAll(async () => {
 });
 
 /** A reduced note of a signed state with `balance`, escaped to `destination` conceding `conceded`. */
-async function escaped(h: Harness, o: { balance?: bigint; conceded?: bigint; destination?: typeof alice } = {}) {
+async function escaped(h: Harness, o: { balance?: bigint; conceded?: bigint; destination?: PublicKey } = {}) {
   const note = await h.deposit(SMALL);
   await h.reduce();
   const proof = await h.withdrawalProof(note, {
@@ -70,6 +70,28 @@ describe('vault escape and finalize', () => {
     // A finalized escape is no longer pending: a second finalize is refused.
     const spent = new PendingEscape({ ...pending });
     await expect(h.finalizeTx(spent)).rejects.toThrow(/no such pending escape/);
+  });
+
+  it('refuses an escape whose payout is below the account creation fee, with a reason', async () => {
+    const note = await h.deposit(SMALL);
+    await h.reduce();
+    for (const [balance, conceded] of [[3n * MINA, 3n * MINA], [3n * MINA, 3n * MINA - MINA / 2n], [MINA / 2n, 0n]] as const) {
+      const proof = await h.withdrawalProof(note, { kind: ESCAPE, signed: true, balance, conceded, destination: bob });
+      await expect(h.escape(proof)).rejects.toThrow(/payout below the account creation fee/);
+    }
+  });
+
+  it('opens a destination with no account with balance − conceded − fee when finalized', async () => {
+    const fresh = PrivateKey.random().toPublicKey();
+    const [balance, conceded] = [3n * MINA, MINA / 2n];
+    const { proof } = await escaped(h, { balance, conceded, destination: fresh });
+    await h.reduce();
+    const t = balanceOf(h.treasury);
+    advance(h.mirror.pendingEscape(proof.publicInput.nullifier)!.deadline.toBigInt() - now());
+    await h.finalize(proof.publicInput.nullifier, bob);
+    await h.reduce();
+    expect(balanceOf(fresh)).toBe(balance - conceded - policy.ACCOUNT_CREATION_FEE);
+    expect(balanceOf(h.treasury)).toBe(t + SMALL - (balance - conceded));
   });
 
   it('pays a genesis note conceding nothing in full to the destination', async () => {

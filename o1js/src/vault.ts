@@ -47,6 +47,11 @@ export const REDUCE_BATCH_SIZE = 4;
 export const CLOSE_WINDOW_SLOTS = policy.REQUEST_MAX_AGE_SLOTS;
 /** Notes a sweep walks per call, at most. */
 export const SWEEP_BATCH_SIZE = 16;
+/**
+ * The number of the hard fork this build is for (ADR 0015). The build of a fork that re-keys the vault raises it, and
+ * its vaults must `resume` before they finalize.
+ */
+export const VAULT_FORK = 0n;
 /** The nullifier set holds up to 2^(height − 1) nullifiers. */
 export const NULLIFIER_SET_HEIGHT = 32;
 
@@ -99,12 +104,17 @@ export class PendingEscape extends Struct({
   /**
    * The concession a raise from `evidence` claiming `claimed` lifts this escape to: `min(claimed, b,
    * balance)` (ADR 0004), where `b` is the evidence's tier. A subsidised proof's `b` counts as zero, so it
-   * never raises (ADR 0001). The request circuit bounds the tier to 64 bits.
+   * never raises (ADR 0001). The request circuit bounds the tier to 64 bits. A result that would leave a
+   * payout above zero and below the account creation fee concedes the whole `amount` instead, so a pending
+   * escape's payout is zero or at least the fee (ADR 0013).
    */
   raisedConcession(evidence: RequestPublic, claimed: UInt64): UInt64 {
     const tier = Provable.if(evidence.subsidised, UInt64, UInt64.zero, UInt64.Unsafe.fromField(evidence.tier));
     const min = (a: UInt64, b: UInt64) => Provable.if(a.lessThan(b), UInt64, a, b);
-    return min(min(claimed, tier), this.amount);
+    const raised = min(min(claimed, tier), this.amount);
+    const left = this.amount.sub(raised);
+    const stranded = left.greaterThan(UInt64.zero).and(left.lessThan(UInt64.from(policy.ACCOUNT_CREATION_FEE)));
+    return Provable.if(stranded, UInt64, this.amount, raised);
   }
 }
 
@@ -228,8 +238,8 @@ function requireSlotBetween(contract: SmartContract, lower: UInt64, upper: UInt6
 const LAST_SLOT = UInt64.from(UInt32.MAXINT().toBigint());
 
 /**
- * Precondition on a payee: its account exists, so a payout to it opens no account and cannot fail for want
- * of the fee. A failing reduce would stall every action queued behind it (ADR 0002).
+ * Precondition on the treasury: its account exists. Other payees' accounts need not (ADR 0013): a payout
+ * opens a destination's account and pays the creation fee out of itself.
  */
 function requireAccountExists(address: PublicKey) {
   AccountUpdate.create(address).account.isNew.requireEquals(Bool(false));
@@ -266,6 +276,29 @@ export class RootRing extends Struct({ roots: Provable.Array(Field, ROOT_RING_LE
 
 const { BatchReducer } = Experimental;
 
+/** The vault's state fields, as `declareState` takes them. */
+const VAULT_STATE_FIELDS = {
+  actionState: Field,
+  actionStack: Field,
+  noteRoot: Field,
+  nextLeafIndex: Field,
+  rootRing: RootRing,
+  creationTime: UInt64,
+  depositSizes: DepositSizes,
+  noteLifetime: UInt64,
+  challengeWindow: UInt64,
+  nullifierRoot: Field,
+  stateKey: PublicKey,
+  treasury: PublicKey,
+  pendingEscapesRoot: Field,
+  sweepCursor: Field,
+  expiredTotal: UInt64,
+  claimedTotal: UInt64,
+  sweptTotal: UInt64,
+  forkResumed: Field,
+  resumedAt: UInt64,
+};
+
 /** The vault's state fields, in the order `declareState` lays them out on the account. */
 export class VaultState extends Struct({
   actionState: Field,
@@ -285,9 +318,11 @@ export class VaultState extends Struct({
   expiredTotal: UInt64,
   claimedTotal: UInt64,
   sweptTotal: UInt64,
+  forkResumed: Field,
+  resumedAt: UInt64,
 }) {
   /** What `init` writes for a vault created at slot `created`: the one source `deploy` and the registry's `register` share. */
-  static initial(created: UInt64, gen: policy.Generation = policy.CURRENT_GENERATION): VaultState {
+  static initial(created: UInt64, gen: policy.Generation = policy.CURRENT_GENERATION, fork: bigint = VAULT_FORK): VaultState {
     return new VaultState({
       actionState: BatchReducer.initialActionState,
       actionStack: BatchReducer.initialActionStack,
@@ -306,6 +341,8 @@ export class VaultState extends Struct({
       expiredTotal: UInt64.zero,
       claimedTotal: UInt64.zero,
       sweptTotal: UInt64.zero,
+      forkResumed: Field(fork),
+      resumedAt: created,
     });
   }
 }
@@ -382,6 +419,10 @@ function buildVault(gen: policy.Generation) {
     claimedTotal = State<UInt64>();
     /** What sweeps have paid the treasury. */
     sweptTotal = State<UInt64>();
+    /** The fork the vault last resumed under: `init` records the build's, `resume` the build's after a re-key. */
+    forkResumed = State<Field>();
+    /** The slot the vault resumed at, or was created at: no escape finalizes before this plus the challenge window. */
+    resumedAt = State<UInt64>();
 
     events = { escape: EscapeUpdate };
 
@@ -408,6 +449,14 @@ function buildVault(gen: policy.Generation) {
       this.account.permissions.set(lockedPermissions());
     }
 
+    /** The fork this build is for. A test build overrides it, since LocalBlockchain can't raise the transaction version. */
+    static fork = VAULT_FORK;
+    /** The fork `init` records, `fork` unless set. A test build sets it behind `fork` to stand for a vault a re-key left unresumed. */
+    static initFork?: bigint;
+    static forkOf(contract: Vault) {
+      return contract.constructor as typeof Vault;
+    }
+
     /** The slot the running `deploy` aims at, for `init` to read; not state, so not part of the key. */
     private aimedSlot?: UInt64;
 
@@ -421,7 +470,7 @@ function buildVault(gen: policy.Generation) {
         this.aimedSlot ?? UInt64.from(Mina.getNetworkState().globalSlotSinceGenesis.toBigint()),
       );
       requireSlotBetween(this, created, created.add(1));
-      const s = VaultState.initial(created, gen);
+      const s = VaultState.initial(created, gen, Vault.forkOf(this).initFork ?? Vault.forkOf(this).fork);
       this.creationTime.set(s.creationTime);
       this.depositSizes.set(s.depositSizes);
       this.noteLifetime.set(s.noteLifetime);
@@ -437,6 +486,8 @@ function buildVault(gen: policy.Generation) {
       this.expiredTotal.set(s.expiredTotal);
       this.claimedTotal.set(s.claimedTotal);
       this.sweptTotal.set(s.sweptTotal);
+      this.forkResumed.set(s.forkResumed);
+      this.resumedAt.set(s.resumedAt);
     }
 
     /**
@@ -480,8 +531,9 @@ function buildVault(gen: policy.Generation) {
 
       const action = VaultAction.mutualClose(pub);
       requireSlotBetween(this, action.time, action.time.add(UInt64.from(gen.requestMaxAgeSlots)));
-      // A payout to an account that does not exist would fail the reduce, and stall every action queued behind it.
-      requireAccountExists(pub.destination);
+      // The reduce pays `amount`, less the creation fee if that opens the destination's account (ADR 0013).
+      // Dispatch can't tell a new destination from an existing one, so every close must cover the fee.
+      action.amount.greaterThanOrEqual(UInt64.from(policy.ACCOUNT_CREATION_FEE)).assertTrue('payout below the account creation fee');
 
       nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
       nullifiers.assertNotIncluded(pub.nullifier, 'nullifier spent');
@@ -505,8 +557,9 @@ function buildVault(gen: policy.Generation) {
 
       const action = VaultAction.escape(pub);
       requireSlotBetween(this, action.time, action.validUntil);
-      // Finalizing pays the destination, so it must exist, as for a close.
-      requireAccountExists(pub.destination);
+      // Finalizing pays `amount − conceded`, which must cover the creation fee, as for a close (ADR 0013).
+      action.amount.sub(action.conceded).greaterThanOrEqual(UInt64.from(policy.ACCOUNT_CREATION_FEE))
+        .assertTrue('payout below the account creation fee');
 
       nullifiers.root.assertEquals(this.nullifierRoot.getAndRequireEquals(), 'not the vault nullifier set');
       nullifiers.assertNotIncluded(pub.nullifier, 'nullifier spent');
@@ -515,14 +568,32 @@ function buildVault(gen: policy.Generation) {
     }
 
     /**
-     * Permissionless, once the current slot reaches the escape's deadline. Checks that `escape` is pending,
-     * then dispatches a finalize; the reduce pays it.
+     * Permissionless, once the current slot reaches the escape's deadline and a challenge window after the vault's
+     * resume, and only in a vault resumed under this build's fork (ADR 0015). Checks that `escape` is pending, then
+     * dispatches a finalize; the reduce pays it.
      */
     async finalize(escape: PendingEscape, escapes: PendingEscapes) {
       escapes.root.assertEquals(this.pendingEscapesRoot.getAndRequireEquals(), 'not the vault pending escapes');
       escapes.getOption(escape.nullifier).orElse(0n).assertEquals(escape.hash(), 'no such pending escape');
-      requireSlotBetween(this, escape.deadline, LAST_SLOT);
+      this.forkResumed.getAndRequireEquals().assertEquals(Field(Vault.forkOf(this).fork), 'the vault has not resumed');
+      const quiet = this.resumedAt.getAndRequireEquals().add(this.challengeWindow.getAndRequireEquals());
+      requireSlotBetween(this, Provable.if(quiet.greaterThan(escape.deadline), UInt64, quiet, escape.deadline), LAST_SLOT);
       batchReducer.dispatch(VaultAction.finalize(escape));
+    }
+
+    /**
+     * Permissionless, once, after a re-key left the vault behind this build's fork: records the fork and the slot it
+     * lands at, which `finalize` waits a challenge window from. The slot recorded is the later of the two the
+     * transaction can land in, so the window is never short.
+     */
+    async resume() {
+      const build = Field(Vault.forkOf(this).fork);
+      // A vault is never ahead of its build, and assertLessThan can't compile against a build of fork 0.
+      this.forkResumed.getAndRequireEquals().equals(build).assertFalse('the vault is not behind this fork');
+      const landing = Provable.witness(UInt64, () => UInt64.from(Mina.getNetworkState().globalSlotSinceGenesis.toBigint()));
+      requireSlotBetween(this, landing, landing.add(1));
+      this.forkResumed.set(build);
+      this.resumedAt.set(landing.add(1));
     }
 
     /**
@@ -728,13 +799,15 @@ function buildVault(gen: policy.Generation) {
       this.sweptTotal.set(swept);
     }
 
-    /** A circuit sends a fixed number of updates, so a skipped or zero payout is a zero send to the vault itself. */
+    /** A circuit sends a fixed number of updates, so a skipped or zero payout is a zero send to the vault itself. Every payout may open its destination's account. */
     private payIf(condition: Bool, to: PublicKey, amount: UInt64) {
       const pay = condition.and(amount.equals(UInt64.zero).not());
-      this.send({
+      const receiver = this.send({
         to: Provable.if(pay, PublicKey, to, this.address),
         amount: Provable.if(pay, UInt64, amount, UInt64.zero),
       });
+      // A payout to a new account opens it and the chain takes the creation fee out of the payout (ADR 0013).
+      receiver.body.implicitAccountCreationFee = Bool(true);
     }
   }
 
@@ -745,31 +818,14 @@ function buildVault(gen: policy.Generation) {
     mutualClose: [WithdrawalProof, Signature, NullifierSet],
     escape: [WithdrawalProof, NullifierSet],
     finalize: [PendingEscape, PendingEscapes],
+    resume: [],
     defeat: [PendingEscape, RequestProof, PendingEscapes],
     raise: [PendingEscape, RequestProof, UInt64, PendingEscapes],
     sweepExpired: [UInt32, Unconstrained.provable, UInt64],
     reduce: [VaultBatch, VaultBatchProof, Unconstrained.provable, NullifierSet, PendingEscapes, UInt64],
   } as Record<string, any[]>);
 
-  declareState(Vault, {
-    actionState: Field,
-    actionStack: Field,
-    noteRoot: Field,
-    nextLeafIndex: Field,
-    rootRing: RootRing,
-    creationTime: UInt64,
-    depositSizes: DepositSizes,
-    noteLifetime: UInt64,
-    challengeWindow: UInt64,
-    nullifierRoot: Field,
-    stateKey: PublicKey,
-    treasury: PublicKey,
-    pendingEscapesRoot: Field,
-    sweepCursor: Field,
-    expiredTotal: UInt64,
-    claimedTotal: UInt64,
-    sweptTotal: UInt64,
-  });
+  declareState(Vault, VAULT_STATE_FIELDS);
 
   batchReducer.setContractClass(Vault);
 
@@ -785,3 +841,17 @@ export const VaultBatch = current.VaultBatch;
 export type VaultBatch = InstanceType<typeof VaultBatch>;
 export const VaultBatchProof = current.VaultBatchProof;
 export type VaultBatchProof = InstanceType<typeof VaultBatchProof>;
+
+/**
+ * A build of the current generation's vault for a test: `fork` is the fork it is built for, and `initFork` the one `init`
+ * records, `fork` unless set. LocalBlockchain can't raise the transaction version, so this stands for a re-keyed vault
+ * (`initFork` behind `fork`). Never published: the vault's key is `Vault`'s.
+ */
+export function vaultForkBuild(fork: bigint, initFork?: bigint): typeof Vault {
+  class Build extends Vault {
+    static fork = fork;
+    static initFork = initFork;
+  }
+  declareState(Build, VAULT_STATE_FIELDS);
+  return Build;
+}

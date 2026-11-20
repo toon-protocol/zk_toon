@@ -20,3 +20,8 @@ claim `b` from a payer who owed less.
   who escapes, and escaping would cost a full allowance even when little was used.
 - **Prove the charge with the highest session voucher:** not adopted. The vault can't check a
   session voucher, so it would help only an audit and not the raise.
+
+## Amended by ADR 0013
+
+The raised concession is `min(claimed, b, balance)` unless that would leave a payout above zero and
+below the account creation fee; then it is the whole balance (ADR 0013).

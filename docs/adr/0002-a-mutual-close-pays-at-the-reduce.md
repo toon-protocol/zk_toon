@@ -34,6 +34,5 @@ fixed-width action with a `kind`, and one reduce handles them all.
   account updates per transaction, not only by proving cost.
 - Someone has to call the reduce before a close is paid. The zk edge operator is the natural caller.
 - A payout to an account that does not exist fails the reduce, and a failing reduce stalls every action
-  queued behind it. So setup requires the treasury's account to exist, and a close (and an escape,
-  whose finalize pays the same way) requires its destination's account to exist, all as account
-  preconditions.
+  queued behind it. So setup requires the treasury's account to exist. (A close's and an escape's
+  destination was also required to exist; ADR 0013 supersedes that, and the payout opens the account.)

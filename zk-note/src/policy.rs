@@ -116,6 +116,19 @@ pub const TIERS: [u64; 3] = [MINA / 100, MINA / 10, MINA];
 /// Accepted deposit sizes, ascending.
 pub const DEPOSIT_SIZES: [u64; 3] = [10 * MINA, 100 * MINA, 1000 * MINA];
 
+/// What the chain takes from a payout that opens its destination's account (1 MINA). Every withdrawal
+/// must pay at least it (ADR 0013).
+pub const ACCOUNT_CREATION_FEE: u64 = MINA;
+
+/// The concession a raise lifts an escape of `balance` to, from `claimed` and the evidence's `tier`:
+/// `min(claimed, tier, balance)`, or the whole balance if that would leave a payout above zero and below
+/// the account creation fee (ADR 0013). The same rule as `PendingEscape.raisedConcession`.
+pub fn raised_concession(claimed: u64, tier: u64, balance: u64) -> u64 {
+    let raised = claimed.min(tier).min(balance);
+    let left = balance - raised;
+    if left > 0 && left < ACCOUNT_CREATION_FEE { balance } else { raised }
+}
+
 pub fn is_tier(b: u64) -> bool {
     TIERS.contains(&b)
 }
@@ -148,4 +161,25 @@ pub fn is_old_enough_for_subsidy(deposit_time: u64, now: u64) -> bool {
 pub fn is_request_time_fresh(request_time: u64, current_slot: u64) -> bool {
     request_time.saturating_add(REQUEST_MAX_AGE_SLOTS) >= current_slot
         && request_time <= current_slot.saturating_add(REQUEST_MAX_LEAD_SLOTS)
+}
+
+#[cfg(test)]
+mod raise_tests {
+    use super::*;
+
+    #[test]
+    fn raise_rounds_a_stranded_payout_up_to_the_whole_balance() {
+        let balance = 10 * MINA;
+        // Leaves less than the fee: concede everything.
+        assert_eq!(raised_concession(balance - 1, MINA * 20, balance), balance);
+        assert_eq!(raised_concession(balance - MINA + 1, MINA * 20, balance), balance);
+        // Leaves exactly the fee, or more: unchanged.
+        assert_eq!(raised_concession(balance - MINA, MINA * 20, balance), balance - MINA);
+        assert_eq!(raised_concession(MINA, MINA, balance), MINA);
+        // Leaves nothing: unchanged.
+        assert_eq!(raised_concession(balance, MINA * 20, balance), balance);
+        // The tier bounds the claim before rounding.
+        assert_eq!(raised_concession(balance, balance - 1, balance), balance);
+        assert_eq!(raised_concession(balance, MINA, balance), MINA);
+    }
 }

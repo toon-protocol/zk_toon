@@ -53,6 +53,7 @@
       "100000000000",
       "1000000000000"
     ],
+    "accountCreationFee": "1000000000",
     "currentGeneration": "mesa",
     "generations": [
       {

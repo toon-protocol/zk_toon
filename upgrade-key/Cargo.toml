@@ -1,0 +1,31 @@
+[package]
+name = "upgrade-key"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "The upgrade key: a 2-of-3 FROST key over Pallas whose signatures the pinned mina-signer accepts (ADR 0012)"
+
+[dependencies]
+ark-ff = "0.5"
+# frost-bluepallas and its message type, pinned to the commit that adds Veridise's audit fixes. They build on proof-systems
+# tag 0.3.0, not this workspace's revision (ab84160): the two never unify, and values cross as field elements and bytes.
+frost-bluepallas = { git = "https://github.com/Raspberry-Devs/mina-multi-sig", rev = "e9b5ffc8118ab871e3b7e4d86f2bc6c7e48375c2" }
+mina-tx = { git = "https://github.com/Raspberry-Devs/mina-multi-sig", rev = "e9b5ffc8118ab871e3b7e4d86f2bc6c7e48375c2", features = ["frost-bluepallas-compat"] }
+# This workspace's side of the bridge.
+mina-hasher = { git = "https://github.com/o1-labs/proof-systems", rev = "ab84160fa2c22290a8506a7742ac1378879fc386", default-features = false }
+mina-signer = { git = "https://github.com/o1-labs/proof-systems", rev = "ab84160fa2c22290a8506a7742ac1378879fc386", default-features = false }
+# The same package as mina-signer's hasher at tag 0.3.0, which mina-tx's message type is built from.
+frost-mina-hasher = { package = "mina-hasher", git = "https://github.com/o1-labs/proof-systems", tag = "0.3.0" }
+frost-mina-curves = { package = "mina-curves", git = "https://github.com/o1-labs/proof-systems", tag = "0.3.0" }
+rand_core = "0.6"
+serde_json = "1"
+
+[features]
+# The trusted-dealer split, which holds the whole key once. Never on the default path.
+test-utils = []
+
+[dev-dependencies]
+ark-ec = "0.5"
+frost-core = { version = "3.0.0", features = ["internals"] }
+rand_chacha = "0.3"
+upgrade-key = { path = ".", features = ["test-utils"] }
