@@ -34,7 +34,7 @@ Read from Mina's source and published fork configs (MinaProtocol/mina: `runtime_
 | Subsidy period and minimum subsidy age, 6,720 slots each | the request circuit; periods count from `creationTime` | kept | 7 days |
 | Request max age, which is also the close window, 7 slots | the vault's close check and the sweep; the zk edge's freshness check | kept | 10 minutes, rounded up |
 | Request max lead, 1 slot | the zk edge's freshness check | not used: the zk edge no longer serves the vault | 1 minute, rounded up |
-| Account creation fee, 1 MINA | the chain; once #106 lands, the minimum withdrawal in the circuits | the fork's | the fork's |
+| Account creation fee, 1 MINA | the chain; the minimum withdrawal in the circuits | the fork's | the fork's |
 
 ## Decision
 
@@ -67,7 +67,7 @@ lifetime and a close window after its last deposit.
 new account fails and stalls the reduce. If the fee rises, a payout already dispatched between the old and the new
 fee is paid to the treasury instead: the reduce can't tell whether its destination is new, and leaving it pending would
 freeze it for good. That is #106's rule that a payout is zero or at least the fee. A new dispatch needs the new
-minimum. Until #106 lands, every destination must already exist and the fee doesn't reach the vault.
+minimum.
 
 **Escapes pending at a fork get a full challenge window after the vault resumes.** From the stop slot until the new key
 is installed, no vault method runs: nothing lands during the halt, and every method after it needs a proof under the

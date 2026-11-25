@@ -101,7 +101,7 @@ describe('vault mutual close', () => {
     await h.reduce();
     for (const balance of [0n, 1n, policy.ACCOUNT_CREATION_FEE - 1n]) {
       const proof = await h.withdrawalProof(note, { signed: true, balance, destination: bob });
-      await expect(h.close(proof)).rejects.toThrow(/payout below the account creation fee/);
+      await expect(h.close(proof)).rejects.toThrow(/payout below the minimum withdrawal/);
     }
   });
 

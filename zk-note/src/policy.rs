@@ -22,10 +22,14 @@ pub struct Generation {
     /// How far a request's `requestTime` may be ahead of the zk edge's current slot: a minute, rounded up.
     /// Fixed by the connector.
     pub request_max_lead_slots: u64,
+    /// The least a close or an escape may pay, and the least a payout may be unless it is zero: the account creation
+    /// fee when the generation was built, or the fork's after a re-key. Separate from the slot counts (ADR 0015).
+    pub min_withdrawal: u64,
 }
 
-/// The generation whose slots last `slot_seconds`: every slot count follows from it (ADR 0007).
-pub const fn generation_of(id: &'static str, slot_seconds: u64) -> Generation {
+/// The generation whose slots last `slot_seconds`: every slot count follows from it (ADR 0007). Its minimum withdrawal
+/// is `min_withdrawal`, the fork's account creation fee.
+pub const fn generation_of(id: &'static str, slot_seconds: u64, min_withdrawal: u64) -> Generation {
     let slots_per_day = 86_400 / slot_seconds;
     Generation {
         id,
@@ -37,12 +41,18 @@ pub const fn generation_of(id: &'static str, slot_seconds: u64) -> Generation {
         challenge_window_slots: 2 * slots_per_day,
         request_max_age_slots: 600_u64.div_ceil(slot_seconds),
         request_max_lead_slots: 60_u64.div_ceil(slot_seconds),
+        min_withdrawal,
     }
 }
 
+const MINA: u64 = 1_000_000_000;
+/// What the chain takes from a payout that opens its destination's account (1 MINA). Every withdrawal
+/// must pay at least it (ADR 0013).
+pub const ACCOUNT_CREATION_FEE: u64 = MINA;
+
 /// The live vault generations, oldest first. Today's slot length (Mesa's) is the only one. A fork adds a row
 /// (`docs/hard-fork.md`).
-pub const GENERATIONS: [Generation; 1] = [generation_of("mesa", 90)];
+pub const GENERATIONS: [Generation; 1] = [generation_of("mesa", 90, ACCOUNT_CREATION_FEE)];
 /// The id of the generation new vaults are deployed with and the registry fixes.
 pub const CURRENT_GENERATION_ID: &str = "mesa";
 /// The current generation: the row named by [`CURRENT_GENERATION_ID`]. The build fails if there is none.
@@ -110,23 +120,29 @@ pub const REQUEST_MAX_AGE_SLOTS: u64 = CURRENT_GENERATION.request_max_age_slots;
 /// Fixed by the connector.
 pub const REQUEST_MAX_LEAD_SLOTS: u64 = CURRENT_GENERATION.request_max_lead_slots;
 
-const MINA: u64 = 1_000_000_000;
 /// Request tiers `b`, ascending. The first is the smallest, the only one a subsidised allowance may use.
 pub const TIERS: [u64; 3] = [MINA / 100, MINA / 10, MINA];
 /// Accepted deposit sizes, ascending.
 pub const DEPOSIT_SIZES: [u64; 3] = [10 * MINA, 100 * MINA, 1000 * MINA];
 
-/// What the chain takes from a payout that opens its destination's account (1 MINA). Every withdrawal
-/// must pay at least it (ADR 0013).
-pub const ACCOUNT_CREATION_FEE: u64 = MINA;
-
 /// The concession a raise lifts an escape of `balance` to, from `claimed` and the evidence's `tier`:
 /// `min(claimed, tier, balance)`, or the whole balance if that would leave a payout above zero and below
 /// the account creation fee (ADR 0013). The same rule as `PendingEscape.raisedConcession`.
 pub fn raised_concession(claimed: u64, tier: u64, balance: u64) -> u64 {
+    raised_concession_under(ACCOUNT_CREATION_FEE, claimed, tier, balance)
+}
+
+/// [`raised_concession`] for a generation whose minimum withdrawal is `min_withdrawal`.
+pub fn raised_concession_under(min_withdrawal: u64, claimed: u64, tier: u64, balance: u64) -> u64 {
     let raised = claimed.min(tier).min(balance);
     let left = balance - raised;
-    if left > 0 && left < ACCOUNT_CREATION_FEE { balance } else { raised }
+    if left > 0 && left < min_withdrawal { balance } else { raised }
+}
+
+/// What the reduce pays a close's or an escape's destination, for a `payout` dispatched under any minimum: the payout if it
+/// is zero or at least the generation's `min_withdrawal`, else nothing, the whole amount going to the treasury (ADR 0015).
+pub fn payout_to_destination(min_withdrawal: u64, payout: u64) -> u64 {
+    if payout > 0 && payout < min_withdrawal { 0 } else { payout }
 }
 
 pub fn is_tier(b: u64) -> bool {
@@ -181,5 +197,20 @@ mod raise_tests {
         // The tier bounds the claim before rounding.
         assert_eq!(raised_concession(balance, balance - 1, balance), balance);
         assert_eq!(raised_concession(balance, MINA, balance), MINA);
+    }
+
+    #[test]
+    fn a_raised_minimum_rounds_up_and_redirects_what_it_covers() {
+        let (balance, raised) = (10 * MINA, 2 * MINA);
+        // The same rule at the generation's minimum.
+        assert_eq!(raised_concession_under(raised, balance - MINA, balance, balance), balance);
+        assert_eq!(raised_concession_under(raised, balance - raised, balance, balance), balance - raised);
+        assert_eq!(raised_concession_under(ACCOUNT_CREATION_FEE, balance - MINA, balance, balance), balance - MINA);
+        // A payout between the old and the new minimum goes to the treasury; zero and at-or-above are unchanged.
+        assert_eq!(payout_to_destination(raised, MINA + MINA / 2), 0);
+        assert_eq!(payout_to_destination(raised, 0), 0);
+        assert_eq!(payout_to_destination(raised, raised), raised);
+        assert_eq!(payout_to_destination(raised, 3 * MINA), 3 * MINA);
+        assert_eq!(payout_to_destination(ACCOUNT_CREATION_FEE, MINA + MINA / 2), MINA + MINA / 2);
     }
 }

@@ -65,7 +65,8 @@
         "subsidyPeriodSlots": "6720",
         "challengeWindowSlots": "1920",
         "requestMaxAgeSlots": "7",
-        "requestMaxLeadSlots": "1"
+        "requestMaxLeadSlots": "1",
+        "minWithdrawal": "1000000000"
       }
     ]
   },
