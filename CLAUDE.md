@@ -23,6 +23,9 @@ add tests or scripts that exercise it on a node. This applies to factory runs to
 
 ## The AFK factory
 
+**The factory is off while the repo is parked (#148).** `agent:implement` is disabled in
+GitHub Actions. Don't queue issues or re-enable it unless the owner unparks the repo.
+
 `ready-for-agent` is the factory's queue (`docs/agents/triage-labels.md`). When an issue
 carries it and its blockers are closed, `.github/workflows/agent-implement.yml` runs
 `.sandcastle/agent-implement-issue.ts`, which runs `/mattpocock-skills:implement`, then
