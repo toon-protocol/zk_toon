@@ -24,6 +24,9 @@ git clone https://github.com/toon-protocol/zk_toon
 
 </div>
 
+> [!NOTE]
+> **Parked since 2026-11-25.** No payer wallet exists yet, so work has stopped until payments that hide the payer are needed. The code, the design and the decisions stay as they are. [#148](https://github.com/toon-protocol/zk_toon/issues/148) lists what exists, what is out of date, and how to resume.
+
 ---
 
 ## Three steps
