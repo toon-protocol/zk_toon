@@ -188,7 +188,7 @@ fn the_listener_replies_with_the_length_and_logs_a_line_for_a_refusal() {
     let lines = Arc::new(Mutex::new(Vec::<String>::new()));
     let sink = lines.clone();
     let listener =
-        Listener::start("127.0.0.1:0".parse().unwrap(), open(&path).unwrap(), move |l| sink.lock().unwrap().push(l.into()))
+        Listener::start("127.0.0.1:0".parse().unwrap(), open(&path).unwrap(), None, move |l| sink.lock().unwrap().push(l.into()))
             .unwrap();
     let addr = listener.local_addr();
 
@@ -212,7 +212,7 @@ fn the_listener_replies_with_the_length_and_logs_a_line_for_a_refusal() {
 fn each_forged_push_gets_its_reply_over_http() {
     let d = dir("http-forged");
     let path = d.join("copy");
-    let listener = Listener::start("127.0.0.1:0".parse().unwrap(), open(&path).unwrap(), |_| {}).unwrap();
+    let listener = Listener::start("127.0.0.1:0".parse().unwrap(), open(&path).unwrap(), None, |_| {}).unwrap();
     let addr = listener.local_addr();
     assert_eq!(post(addr, &good(&FileCopy::empty(), 1).encode()).0, 200);
     let before = (std::fs::read(&path).unwrap(), std::fs::read(d.join("copy.sig")).unwrap());
@@ -238,7 +238,7 @@ fn each_forged_push_gets_its_reply_over_http() {
 #[test]
 fn a_push_without_a_byte_count_is_refused() {
     let d = dir("http-length");
-    let listener = Listener::start("127.0.0.1:0".parse().unwrap(), open(&d.join("copy")).unwrap(), |_| {}).unwrap();
+    let listener = Listener::start("127.0.0.1:0".parse().unwrap(), open(&d.join("copy")).unwrap(), None, |_| {}).unwrap();
     for headers in ["Content-Length: lots", "Transfer-Encoding: chunked"] {
         let mut s = TcpStream::connect(listener.local_addr()).unwrap();
         write!(s, "POST /evidence HTTP/1.1\r\n{headers}\r\nConnection: close\r\n\r\n").unwrap();

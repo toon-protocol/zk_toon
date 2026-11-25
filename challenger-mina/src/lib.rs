@@ -28,5 +28,5 @@ pub use chain::{MinaChain, RequestProofs, Settings, TxSource};
 pub use graphql::{Endpoint, Graphql};
 pub use http::{Endpoints, HttpGraphql};
 pub use nullifier::{field_of_nullifier, nullifier_of_field};
-pub use receiver::{Listener, Receiver, Reply};
+pub use receiver::{Listener, Peers, Receiver, Reply};
 pub use relay::Relay;

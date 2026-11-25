@@ -26,7 +26,7 @@ fn key() -> Option<String> {
 
 #[test]
 fn the_required_flags_and_the_defaults() {
-    let o = Options::parse(&args(&[]), key()).unwrap();
+    let o = Options::parse(&args(&[]), key(), None).unwrap();
     assert_eq!(o.settings.vault, vault_key());
     assert_eq!(o.settings.fee_payer.private_key, fee_payer().private_key);
     assert_eq!(o.settings.fee_payer.fee, 100_000_000);
@@ -49,7 +49,7 @@ fn the_optional_flags() {
         "--socks5", "127.0.0.1:9050", "--fee", "5", "--min-lead", "7", "--interval", "3", "--poll", "2", "--timeout", "9",
         "--keys", "/opt/zk_toon/verification-keys.json",
     ];
-    let o = Options::parse(&args(&extra), key()).unwrap();
+    let o = Options::parse(&args(&extra), key(), None).unwrap();
     assert_eq!(o.endpoints.socks5.as_deref(), Some("127.0.0.1:9050"));
     assert_eq!(o.settings.fee_payer.fee, 5);
     assert_eq!(o.config.min_lead, 7);
@@ -61,15 +61,15 @@ fn the_optional_flags() {
 
 #[test]
 fn listen_takes_an_address() {
-    let o = Options::parse(&args(&["--listen", "127.0.0.1:8080"]), key()).unwrap();
+    let o = Options::parse(&args(&["--listen", "127.0.0.1:8080"]), key(), None).unwrap();
     assert_eq!(o.listen, Some("127.0.0.1:8080".parse().unwrap()));
-    assert!(Options::parse(&args(&["--listen", "everywhere"]), key()).unwrap_err().contains("--listen"));
+    assert!(Options::parse(&args(&["--listen", "everywhere"]), key(), None).unwrap_err().contains("--listen"));
 }
 
 #[test]
 fn the_builder_gets_fifteen_minutes_an_answer_unless_told_otherwise() {
-    assert_eq!(Options::parse(&args(&[]), key()).unwrap().builder_timeout, Duration::from_secs(900));
-    assert_eq!(Options::parse(&args(&["--builder-timeout", "5"]), key()).unwrap().builder_timeout, Duration::from_secs(5));
+    assert_eq!(Options::parse(&args(&[]), key(), None).unwrap().builder_timeout, Duration::from_secs(900));
+    assert_eq!(Options::parse(&args(&["--builder-timeout", "5"]), key(), None).unwrap().builder_timeout, Duration::from_secs(5));
 }
 
 #[test]
@@ -79,12 +79,12 @@ fn every_flag_is_in_the_usage_and_the_docs() {
         assert!(usage().contains(flag.name), "{} is missing from the usage", flag.name);
         assert!(docs.contains(&format!("`{}`", flag.name)), "{} is missing from docs/challenger-mina.md", flag.name);
     }
-    assert!(Options::parse(&args(&["--nonsense", "1"]), key()).unwrap_err().contains(&usage()));
+    assert!(Options::parse(&args(&["--nonsense", "1"]), key(), None).unwrap_err().contains(&usage()));
 }
 
 #[test]
 fn bad_options_are_refused_by_name() {
-    let refused = |a: Vec<String>, k: Option<String>| Options::parse(&a, k).unwrap_err();
+    let refused = |a: Vec<String>, k: Option<String>| Options::parse(&a, k, None).unwrap_err();
     let without = |flag: &str| {
         let a = args(&[]);
         let at = a.iter().position(|s| s == flag).unwrap();
@@ -103,12 +103,28 @@ fn bad_options_are_refused_by_name() {
 
 #[test]
 fn the_fee_payers_key_comes_only_from_the_environment() {
-    assert!(Options::parse(&args(&[]), None).unwrap_err().contains("ZK_TOON_FEE_PAYER_KEY"));
-    assert!(Options::parse(&args(&[]), Some("not a key".into())).unwrap_err().contains("ZK_TOON_FEE_PAYER_KEY"));
+    assert!(Options::parse(&args(&[]), None, None).unwrap_err().contains("ZK_TOON_FEE_PAYER_KEY"));
+    assert!(Options::parse(&args(&[]), Some("not a key".into()), None).unwrap_err().contains("ZK_TOON_FEE_PAYER_KEY"));
     // No flag carries it, so it never shows in a process listing.
     let key = fee_payer().private_key;
-    assert!(Options::parse(&args(&["--fee-payer-key", &key]), None).is_err());
+    assert!(Options::parse(&args(&["--fee-payer-key", &key]), None, None).is_err());
     // And it never prints.
-    let o = Options::parse(&args(&[]), Some(key.clone())).unwrap();
+    let o = Options::parse(&args(&[]), Some(key.clone()), None).unwrap();
     assert!(!format!("{o:?}").contains(&key));
+}
+
+#[test]
+fn peers_are_repeatable_and_need_a_listener_and_the_token() {
+    let token = Some("s3cret-token".to_string());
+    let peers = ["--listen", "127.0.0.1:8080", "--peer", "http://a:1", "--peer", "http://b:2"];
+    let o = Options::parse(&args(&peers), key(), token.clone()).unwrap();
+    assert_eq!(o.peers, vec!["http://a:1".to_string(), "http://b:2".to_string()]);
+    assert_eq!(Options::parse(&args(&[]), key(), None).unwrap().peers, Vec::<String>::new());
+    // Without the token nothing can be read from them, and without `--listen` there is no copy to grow.
+    assert!(Options::parse(&args(&peers), key(), None).unwrap_err().contains("ZK_TOON_PEER_TOKEN"));
+    assert!(Options::parse(&args(&peers), key(), Some(String::new())).unwrap_err().contains("ZK_TOON_PEER_TOKEN"));
+    assert!(Options::parse(&args(&["--peer", "http://a:1"]), key(), token.clone()).unwrap_err().contains("--listen"));
+    // The token never prints, and no flag carries it.
+    assert!(!format!("{o:?}").contains("s3cret-token"));
+    assert!(Options::parse(&args(&["--peer-token", "x"]), key(), None).is_err());
 }

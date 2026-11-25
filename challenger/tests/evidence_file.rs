@@ -11,6 +11,8 @@ use zk_toon_challenger::*;
 const ID: u64 = 11;
 const NEXT: u64 = 12;
 const CFG: Config = Config { min_lead: 1 };
+/// Two slots from the deadline: a raise to the tier no longer waits for the copy to catch up.
+const NOW: Slot = 99_998;
 
 fn nullifier(n: u64) -> Nullifier {
     zk_evidence::field_to_bytes(Field::from(n))
@@ -79,7 +81,7 @@ impl Drop for TempFile {
 
 fn decide_over(file: &TempFile, verifies: bool, e: &Escape) -> Decision {
     let port = FileEvidence::new(&file.0, Verifier(verifies, Rc::default()));
-    decide(e, &port, 0, &CFG).unwrap()
+    decide(e, &port, NOW, &CFG).unwrap()
 }
 
 #[test]
@@ -161,11 +163,11 @@ fn records_appended_after_the_port_opened_are_seen() {
     let calls = Rc::new(Cell::new(0));
     let port = FileEvidence::new(&f.0, Verifier(true, calls.clone()));
     let e = escape(2, 100 * BIG);
-    assert_eq!(decide(&e, &port, 0, &CFG).unwrap(), Decision::Raise { to: 10 });
+    assert_eq!(decide(&e, &port, NOW, &CFG).unwrap(), Decision::Raise { to: 10 });
     f.append(&close(ID, 6, b"a"));
-    assert_eq!(decide(&e, &port, 0, &CFG).unwrap(), Decision::Raise { to: 6 });
+    assert_eq!(decide(&e, &port, NOW, &CFG).unwrap(), Decision::Raise { to: 6 });
     f.append(&grant(NEXT, 10, false, b"c"));
-    assert_eq!(decide(&e, &port, 0, &CFG).unwrap(), Decision::Defeat);
+    assert_eq!(decide(&e, &port, NOW, &CFG).unwrap(), Decision::Defeat);
     // Each proof is verified once, however many times it is read.
     assert_eq!(calls.get(), 2);
 }
@@ -178,9 +180,9 @@ fn a_torn_tail_is_ignored_until_it_is_completed() {
     file.write_all(&whole[..whole.len() - 3]).unwrap();
     let port = FileEvidence::new(&f.0, Verifier(true, Rc::default()));
     let e = escape(2, 100 * BIG);
-    assert_eq!(decide(&e, &port, 0, &CFG).unwrap(), Decision::Raise { to: 10 });
+    assert_eq!(decide(&e, &port, NOW, &CFG).unwrap(), Decision::Raise { to: 10 });
     file.write_all(&whole[whole.len() - 3..]).unwrap();
-    assert_eq!(decide(&e, &port, 0, &CFG).unwrap(), Decision::Raise { to: 6 });
+    assert_eq!(decide(&e, &port, NOW, &CFG).unwrap(), Decision::Raise { to: 6 });
 }
 
 #[test]
